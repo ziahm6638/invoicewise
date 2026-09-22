@@ -9,16 +9,16 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
+} from "@invoicewise/ui/card";
 import {
   Form,
   FormControl,
   FormField,
   FormItem,
   FormMessage,
-} from "@midday/ui/form";
-import { Input } from "@midday/ui/input";
-import { SubmitButton } from "@midday/ui/submit-button";
+} from "@invoicewise/ui/form";
+import { Input } from "@invoicewise/ui/input";
+import { SubmitButton } from "@invoicewise/ui/submit-button";
 import { z } from "zod";
 
 const formSchema = z.object({
@@ -46,8 +46,8 @@ export function CompanyName() {
           <CardHeader>
             <CardTitle>Company name</CardTitle>
             <CardDescription>
-              This is your company's visible name within Midday. For example,
-              the name of your company or department.
+              This is your company's visible name within InvoiceWise. For
+              example, the name of your company or department.
             </CardDescription>
           </CardHeader>
 

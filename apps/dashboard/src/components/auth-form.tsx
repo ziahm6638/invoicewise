@@ -1,9 +1,9 @@
 "use client";
 
 import { authClient } from "@/lib/auth-client";
-import { Button } from "@midday/ui/button";
-import { Input } from "@midday/ui/input";
-import { Label } from "@midday/ui/label";
+import { Button } from "@invoicewise/ui/button";
+import { Input } from "@invoicewise/ui/input";
+import { Label } from "@invoicewise/ui/label";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { type FormEvent, useState } from "react";

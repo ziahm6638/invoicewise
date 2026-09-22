@@ -1,5 +1,5 @@
 {
-  "name": "@midday/documents",
+  "name": "@invoicewise/documents",
   "version": "1.0.0",
   "private": true,
   "main": "src/index.ts",
@@ -22,7 +22,7 @@
     "@ai-sdk/mistral": "^2.0.12",
     "@langchain/community": "0.3.46",
     "@langchain/core": "0.3.58",
-    "@midday/utils": "workspace:*",
+    "@invoicewise/utils": "workspace:*",
     "@mistralai/mistralai": "^1.9.18",
     "ai": "5.0.28",
     "canvas": "^3.1.2",

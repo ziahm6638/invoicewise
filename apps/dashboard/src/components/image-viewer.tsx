@@ -1,8 +1,8 @@
 "use client";
 
-import { cn } from "@midday/ui/cn";
-import { Icons } from "@midday/ui/icons";
-import { Skeleton } from "@midday/ui/skeleton";
+import { cn } from "@invoicewise/ui/cn";
+import { Icons } from "@invoicewise/ui/icons";
+import { Skeleton } from "@invoicewise/ui/skeleton";
 import { useState } from "react";
 
 function ErrorImage() {

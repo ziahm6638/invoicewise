@@ -1,16 +1,16 @@
 "use client";
 
-import { Avatar } from "@midday/ui/avatar";
-import { AvatarImageNext } from "@midday/ui/avatar";
-import { Button } from "@midday/ui/button";
+import { Avatar } from "@invoicewise/ui/avatar";
+import { AvatarImageNext } from "@invoicewise/ui/avatar";
+import { Button } from "@invoicewise/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@midday/ui/dialog";
-import { Icons } from "@midday/ui/icons";
+} from "@invoicewise/ui/dialog";
+import { Icons } from "@invoicewise/ui/icons";
 import dynamic from "next/dynamic";
 import { useRef, useState } from "react";
 import { type Story, StoryCard } from "./story-card";

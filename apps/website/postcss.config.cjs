@@ -1,1 +1,1 @@
-module.exports = require("@midday/ui/postcss");
+module.exports = require("@invoicewise/ui/postcss");

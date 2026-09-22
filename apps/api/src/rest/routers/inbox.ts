@@ -14,7 +14,7 @@ import {
 import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
 import { z } from "@hono/zod-openapi";
-import { deleteInbox, updateInbox } from "@midday/db/queries";
+import { deleteInbox, updateInbox } from "@invoicewise/db/queries";
 import { HTTPException } from "hono/http-exception";
 import { withRequiredScope } from "../middleware";
 

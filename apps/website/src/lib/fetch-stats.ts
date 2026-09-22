@@ -1,6 +1,6 @@
 "use server";
 
-import type { Database } from "@midday/supabase/types";
+import type { Database } from "@invoicewise/supabase/types";
 import { createServerClient } from "@supabase/ssr";
 
 export async function fetchStats() {

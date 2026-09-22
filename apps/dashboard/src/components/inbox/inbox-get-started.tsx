@@ -2,13 +2,13 @@
 
 import { ConnectGmail } from "@/components/inbox/connect-gmail";
 import { useUserQuery } from "@/hooks/use-user";
-import { getInboxEmail } from "@midday/inbox";
+import { getInboxEmail } from "@invoicewise/inbox";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "@midday/ui/accordion";
+} from "@invoicewise/ui/accordion";
 import { useRouter } from "next/navigation";
 import { CopyInput } from "../copy-input";
 import { UploadZone } from "./inbox-upload-zone";

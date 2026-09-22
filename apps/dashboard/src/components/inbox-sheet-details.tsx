@@ -7,10 +7,14 @@ import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
 import { formatDate, getInitials } from "@/utils/format";
 import { getWebsiteLogo } from "@/utils/logos";
-import { Avatar, AvatarFallback, AvatarImageNext } from "@midday/ui/avatar";
-import { Separator } from "@midday/ui/separator";
-import { SheetHeader } from "@midday/ui/sheet";
-import { Skeleton } from "@midday/ui/skeleton";
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImageNext,
+} from "@invoicewise/ui/avatar";
+import { Separator } from "@invoicewise/ui/separator";
+import { SheetHeader } from "@invoicewise/ui/sheet";
+import { Skeleton } from "@invoicewise/ui/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { JudgmentResults } from "./inbox/judgment-results";
 

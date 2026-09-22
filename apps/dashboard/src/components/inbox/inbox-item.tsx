@@ -7,7 +7,7 @@ import { useInboxParams } from "@/hooks/use-inbox-params";
 import { useUserQuery } from "@/hooks/use-user";
 import { formatDate } from "@/utils/format";
 import type { RouterOutputs } from "@api/trpc/routers/_app";
-import { cn } from "@midday/ui/cn";
+import { cn } from "@invoicewise/ui/cn";
 import { forwardRef } from "react";
 import { InboxStatus } from "./inbox-status";
 

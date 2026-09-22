@@ -2,7 +2,7 @@
 
 import { InboxSheetDetails } from "@/components/inbox-sheet-details";
 import { useInboxParams } from "@/hooks/use-inbox-params";
-import { Sheet, SheetContent } from "@midday/ui/sheet";
+import { Sheet, SheetContent } from "@invoicewise/ui/sheet";
 import React from "react";
 
 export function InboxDetailsSheet() {

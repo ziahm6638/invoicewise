@@ -5,15 +5,15 @@ import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "@midday/ui/accordion";
-import { cn } from "@midday/ui/cn";
+} from "@invoicewise/ui/accordion";
+import { cn } from "@invoicewise/ui/cn";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
-} from "@midday/ui/context-menu";
-import { Icons } from "@midday/ui/icons";
+} from "@invoicewise/ui/context-menu";
+import { Icons } from "@invoicewise/ui/icons";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { usePathname } from "next/navigation";

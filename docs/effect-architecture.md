@@ -64,7 +64,7 @@ and schema-validation failures are translated once at the infrastructure
 boundary into a domain error such as `InvoiceReadError`; domain code does not
 throw strings.
 
-The Drizzle client remains in `@midday/db`. Its Effect layer uses
+The Drizzle client remains in `@invoicewise/db`. Its Effect layer uses
 `Layer.scoped` and closes all pools when the API scope ends. The local storage
 client is stateless and is acquired through a config-backed `Layer.effect`.
 The inherited singleton database used by unconverted Hono and tRPC routes is

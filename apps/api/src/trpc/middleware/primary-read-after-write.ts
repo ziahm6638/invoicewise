@@ -1,6 +1,6 @@
 import type { Session } from "@api/utils/auth";
-import { replicationCache } from "@midday/cache/replication-cache";
-import type { Database, DatabaseWithPrimary } from "@midday/db/client";
+import { replicationCache } from "@invoicewise/cache/replication-cache";
+import type { Database, DatabaseWithPrimary } from "@invoicewise/db/client";
 
 // Database middleware that handles replication lag based on mutation operations
 // For mutations: always use primary DB

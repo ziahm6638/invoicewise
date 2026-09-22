@@ -1,14 +1,14 @@
-import { closeDatabase, db } from "@midday/db/client";
+import { closeDatabase, db } from "@invoicewise/db/client";
 import {
   createInbox,
   updateInboxWithProcessedData,
   upsertApiKey,
-} from "@midday/db/queries";
-import { teams, users } from "@midday/db/schema";
+} from "@invoicewise/db/queries";
+import { teams, users } from "@invoicewise/db/schema";
 import {
   emitWebhookEvent,
   verifyWebhookSignature,
-} from "@midday/jobs/webhooks";
+} from "@invoicewise/jobs/webhooks";
 import { inArray } from "drizzle-orm";
 
 const apiUrl = process.env.INVOICEWISE_API_URL ?? "http://localhost:3003";

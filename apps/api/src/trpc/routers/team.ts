@@ -28,9 +28,9 @@ import {
   leaveTeam,
   updateTeamById,
   updateTeamMember,
-} from "@midday/db/queries";
-import { enqueueWorkflow, workflowKey } from "@midday/jobs";
-import type { InviteTeamMembersPayload } from "@midday/jobs/schema";
+} from "@invoicewise/db/queries";
+import { enqueueWorkflow, workflowKey } from "@invoicewise/jobs";
+import type { InviteTeamMembersPayload } from "@invoicewise/jobs/schema";
 import { TRPCError } from "@trpc/server";
 
 export const teamRouter = createTRPCRouter({

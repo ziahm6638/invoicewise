@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { WorkflowJob } from "@midday/db/queries";
+import type { WorkflowJob } from "@invoicewise/db/queries";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import {
   WorkflowRepository,

@@ -1,4 +1,4 @@
-import { Editor } from "@midday/ui/editor";
+import { Editor } from "@invoicewise/ui/editor";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {

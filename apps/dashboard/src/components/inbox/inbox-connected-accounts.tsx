@@ -3,24 +3,24 @@
 import { useSyncStatus } from "@/hooks/use-sync-status";
 import { useTRPC } from "@/trpc/client";
 import type { RouterOutputs } from "@api/trpc/routers/_app";
-import { Avatar, AvatarFallback } from "@midday/ui/avatar";
-import { Badge } from "@midday/ui/badge";
-import { Button } from "@midday/ui/button";
+import { Avatar, AvatarFallback } from "@invoicewise/ui/avatar";
+import { Badge } from "@invoicewise/ui/badge";
+import { Button } from "@invoicewise/ui/button";
 import {
   Card,
   CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
-import { Icons } from "@midday/ui/icons";
+} from "@invoicewise/ui/card";
+import { Icons } from "@invoicewise/ui/icons";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@midday/ui/tooltip";
-import { useToast } from "@midday/ui/use-toast";
+} from "@invoicewise/ui/tooltip";
+import { useToast } from "@invoicewise/ui/use-toast";
 import {
   useMutation,
   useQueryClient,

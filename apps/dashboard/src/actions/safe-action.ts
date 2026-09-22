@@ -1,7 +1,7 @@
 import { getQueryClient, trpc } from "@/trpc/server";
 import { logger } from "@/utils/logger";
-import { db } from "@midday/db/client";
-import { setupAnalytics } from "@midday/events/server";
+import { db } from "@invoicewise/db/client";
+import { setupAnalytics } from "@invoicewise/events/server";
 import {
   DEFAULT_SERVER_ERROR_MESSAGE,
   createSafeActionClient,

@@ -1,4 +1,4 @@
-import { TableHead, TableHeader, TableRow } from "@midday/ui/table";
+import { TableHead, TableHeader, TableRow } from "@invoicewise/ui/table";
 
 export function OrdersTableHeader() {
   return (

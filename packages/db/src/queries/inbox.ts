@@ -9,8 +9,8 @@ import {
   transactions,
 } from "@db/schema";
 import { remove as removeStoredFile } from "@db/storage";
-import { buildSearchQuery } from "@midday/db/utils/search-query";
-import { logger } from "@midday/logger";
+import { buildSearchQuery } from "@invoicewise/db/utils/search-query";
+import { logger } from "@invoicewise/logger";
 import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm/sql/sql";
 

@@ -14,7 +14,7 @@ import {
   getTeamsByUserId,
   hasTeamAccess,
   updateTeamById,
-} from "@midday/db/queries";
+} from "@invoicewise/db/queries";
 import { HTTPException } from "hono/http-exception";
 import { withRequiredScope } from "../middleware";
 

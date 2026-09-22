@@ -1,4 +1,4 @@
-import { Icons } from "@midday/ui/icons";
+import { Icons } from "@invoicewise/ui/icons";
 import Link from "next/link";
 
 export default function Layout({

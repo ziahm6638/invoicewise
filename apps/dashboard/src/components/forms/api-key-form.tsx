@@ -11,7 +11,7 @@ import {
   scopePresets,
   scopesToName,
 } from "@api/utils/scopes";
-import { AnimatedSizeContainer } from "@midday/ui/animated-size-container";
+import { AnimatedSizeContainer } from "@invoicewise/ui/animated-size-container";
 import {
   Form,
   FormControl,
@@ -19,10 +19,10 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-} from "@midday/ui/form";
-import { Input } from "@midday/ui/input";
-import { SubmitButton } from "@midday/ui/submit-button";
-import { Tabs, TabsList, TabsTrigger } from "@midday/ui/tabs";
+} from "@invoicewise/ui/form";
+import { Input } from "@invoicewise/ui/input";
+import { SubmitButton } from "@invoicewise/ui/submit-button";
+import { Tabs, TabsList, TabsTrigger } from "@invoicewise/ui/tabs";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { z } from "zod";

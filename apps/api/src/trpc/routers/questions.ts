@@ -10,7 +10,7 @@ import {
   getUserQuestionVersions,
   getUserQuestions,
   updateUserQuestion,
-} from "@midday/db/queries";
+} from "@invoicewise/db/queries";
 import { TRPCError } from "@trpc/server";
 
 const mutationError = (error: unknown) =>

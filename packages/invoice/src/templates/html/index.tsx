@@ -1,4 +1,4 @@
-import { ScrollArea } from "@midday/ui/scroll-area";
+import { ScrollArea } from "@invoicewise/ui/scroll-area";
 import type { Invoice } from "../../types";
 import { EditorContent } from "./components/editor-content";
 import { LineItems } from "./components/line-items";

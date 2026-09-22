@@ -5,7 +5,7 @@ import {
   failWorkflowJob,
   heartbeatWorkflowJob,
   retryWorkflowJob,
-} from "@midday/db/queries";
+} from "@invoicewise/db/queries";
 import { Config, Context, Effect, Either, Layer, Schema } from "effect";
 import {
   WorkflowDatabase,

@@ -1,4 +1,4 @@
-import { formatAmount } from "@midday/utils/format";
+import { formatAmount } from "@invoicewise/utils/format";
 import type { LineItem } from "../../../types";
 import { calculateLineItemTotal } from "../../../utils/calculate";
 import { Description } from "./description";

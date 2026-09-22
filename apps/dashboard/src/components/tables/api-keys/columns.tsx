@@ -1,19 +1,23 @@
 import type { RouterOutputs } from "@api/trpc/routers/_app";
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import type { ColumnDef } from "@tanstack/react-table";
 import * as React from "react";
 import "@tanstack/react-table";
 import { useTokenModalStore } from "@/store/token-modal";
 import { scopesToName } from "@api/utils/scopes";
-import { Avatar, AvatarFallback, AvatarImageNext } from "@midday/ui/avatar";
-import { Badge } from "@midday/ui/badge";
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImageNext,
+} from "@invoicewise/ui/avatar";
+import { Badge } from "@invoicewise/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@midday/ui/dropdown-menu";
-import { Icons } from "@midday/ui/icons";
+} from "@invoicewise/ui/dropdown-menu";
+import { Icons } from "@invoicewise/ui/icons";
 import { formatDistanceToNow } from "date-fns";
 
 type ApiKey = RouterOutputs["apiKeys"]["get"][number];

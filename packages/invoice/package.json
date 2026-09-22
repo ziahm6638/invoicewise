@@ -1,5 +1,5 @@
 {
-  "name": "@midday/invoice",
+  "name": "@invoicewise/invoice",
   "private": true,
   "main": "src/index.tsx",
   "scripts": {
@@ -23,8 +23,8 @@
     "./utils": "./src/utils/transform.ts"
   },
   "dependencies": {
-    "@midday/ui": "workspace:*",
-    "@midday/utils": "workspace:*",
+    "@invoicewise/ui": "workspace:*",
+    "@invoicewise/utils": "workspace:*",
     "@react-pdf/renderer": "^4.3.0",
     "date-fns": "^4.1.0",
     "jose": "^6.0.11",

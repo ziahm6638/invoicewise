@@ -2,7 +2,7 @@
 
 import { InboxOrdering } from "@/components/inbox/inbox-ordering";
 import { InboxSearch } from "@/components/inbox/inbox-search";
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import { Upload } from "lucide-react";
 
 export function InboxHeader() {

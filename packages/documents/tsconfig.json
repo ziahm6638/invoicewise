@@ -1,5 +1,5 @@
 {
-  "extends": "@midday/tsconfig/nextjs.json",
+  "extends": "@invoicewise/tsconfig/nextjs.json",
   "include": ["src"],
   "exclude": ["node_modules"]
 }

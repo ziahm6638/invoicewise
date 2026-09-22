@@ -1,6 +1,6 @@
 import { getQueryClient, trpc } from "@/trpc/server";
-import { db } from "@midday/db/client";
-import { enqueueWorkflow, workflowKey } from "@midday/jobs";
+import { db } from "@invoicewise/db/client";
+import { enqueueWorkflow, workflowKey } from "@invoicewise/jobs";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {

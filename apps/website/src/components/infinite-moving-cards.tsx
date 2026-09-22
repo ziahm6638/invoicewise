@@ -2,7 +2,7 @@
 
 "use client";
 
-import { cn } from "@midday/ui/cn";
+import { cn } from "@invoicewise/ui/cn";
 import Image from "next/image";
 import React, { useEffect, useState } from "react";
 

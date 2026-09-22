@@ -6,7 +6,7 @@ import { useInboxParams } from "@/hooks/use-inbox-params";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
-import { ScrollArea } from "@midday/ui/scroll-area";
+import { ScrollArea } from "@invoicewise/ui/scroll-area";
 import {
   useQueryClient,
   useSuspenseInfiniteQuery,

@@ -10,7 +10,7 @@ import {
   CATEGORIES,
   getTaxRateForCategory,
   getTaxTypeForCountry,
-} from "@midday/categories";
+} from "@invoicewise/categories";
 import { and, eq } from "drizzle-orm";
 
 export const hasTeamAccess = async (

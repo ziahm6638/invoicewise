@@ -1,5 +1,5 @@
-import type { InvoiceJudgment } from "@midday/documents";
-import { Badge } from "@midday/ui/badge";
+import type { InvoiceJudgment } from "@invoicewise/documents";
+import { Badge } from "@invoicewise/ui/badge";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;

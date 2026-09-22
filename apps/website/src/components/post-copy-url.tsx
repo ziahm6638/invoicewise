@@ -1,6 +1,6 @@
 "use client";
 
-import { Icons } from "@midday/ui/icons";
+import { Icons } from "@invoicewise/ui/icons";
 import { motion } from "framer-motion";
 import { useState } from "react";
 

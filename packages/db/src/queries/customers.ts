@@ -6,8 +6,8 @@ import {
   tags,
   trackerProjects,
 } from "@db/schema";
-import { buildSearchQuery } from "@midday/db/utils/search-query";
-import { generateToken } from "@midday/invoice/token";
+import { buildSearchQuery } from "@invoicewise/db/utils/search-query";
+import { generateToken } from "@invoicewise/invoice/token";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm/sql/sql";
 import { createActivity } from "./activities";

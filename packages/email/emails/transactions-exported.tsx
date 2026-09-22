@@ -23,7 +23,7 @@ interface Props {
 
 export const TransactionsExportedEmail = ({
   accountantEmail = "accountant@example.com",
-  teamName = "Midday",
+  teamName = "InvoiceWise",
   transactionCount = 100,
   downloadLink = "https://app.midday.ai/s/abc123",
 }: Props) => {

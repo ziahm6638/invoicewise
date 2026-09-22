@@ -1,5 +1,5 @@
-import { replicationCache } from "@midday/cache/replication-cache";
-import type { DatabaseWithPrimary } from "@midday/db/client";
+import { replicationCache } from "@invoicewise/cache/replication-cache";
+import type { DatabaseWithPrimary } from "@invoicewise/db/client";
 import type { MiddlewareHandler } from "hono";
 
 /**

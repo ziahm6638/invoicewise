@@ -8,8 +8,8 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@midday/ui/dialog";
-import { SubmitButton } from "@midday/ui/submit-button";
+} from "@invoicewise/ui/dialog";
+import { SubmitButton } from "@invoicewise/ui/submit-button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 export function DeleteApiKeyModal() {

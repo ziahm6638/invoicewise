@@ -1,4 +1,4 @@
-import type { Database } from "@midday/db/client";
+import type { Database } from "@invoicewise/db/client";
 import {
   type AccountingProvider,
   disconnectAccountingConnectionRecord,
@@ -12,7 +12,7 @@ import {
   recordAccountingPostSuccess,
   restartFailedWorkflowJob,
   upsertAccountingConnection,
-} from "@midday/db/queries";
+} from "@invoicewise/db/queries";
 import { Effect, Schema } from "effect";
 import { workflowKey } from "./client";
 

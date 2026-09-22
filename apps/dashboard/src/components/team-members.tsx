@@ -1,4 +1,4 @@
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@midday/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@invoicewise/ui/tabs";
 import { Suspense } from "react";
 import { DataTable as MembersTable } from "./tables/members";
 import { DataTable as PendingInvitesTable } from "./tables/pending-invites";

@@ -1,7 +1,7 @@
 "use client";
 
 import { authClient } from "@/lib/auth-client";
-import { DropdownMenuItem } from "@midday/ui/dropdown-menu";
+import { DropdownMenuItem } from "@invoicewise/ui/dropdown-menu";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 

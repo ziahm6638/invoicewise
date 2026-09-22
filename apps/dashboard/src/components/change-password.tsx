@@ -1,16 +1,16 @@
 "use client";
 
 import { authClient } from "@/lib/auth-client";
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
-import { Input } from "@midday/ui/input";
-import { Label } from "@midday/ui/label";
+} from "@invoicewise/ui/card";
+import { Input } from "@invoicewise/ui/input";
+import { Label } from "@invoicewise/ui/label";
 import { type FormEvent, useState } from "react";
 
 export function ChangePassword() {

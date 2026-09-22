@@ -2,8 +2,8 @@ import {
   type InvoiceState,
   invoiceStateLabel,
 } from "@/components/inbox/invoice-state";
-import { Badge } from "@midday/ui/badge";
-import { cn } from "@midday/ui/cn";
+import { Badge } from "@invoicewise/ui/badge";
+import { cn } from "@invoicewise/ui/cn";
 
 const styles: Record<InvoiceState, string> = {
   processing:

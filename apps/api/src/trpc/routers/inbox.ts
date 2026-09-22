@@ -13,9 +13,9 @@ import {
   getInbox,
   getInboxById,
   updateInbox,
-} from "@midday/db/queries";
-import { signedUrl } from "@midday/db/storage";
-import { enqueueWorkflow, workflowKey } from "@midday/jobs";
+} from "@invoicewise/db/queries";
+import { signedUrl } from "@invoicewise/db/storage";
+import { enqueueWorkflow, workflowKey } from "@invoicewise/jobs";
 
 export const inboxRouter = createTRPCRouter({
   get: protectedProcedure

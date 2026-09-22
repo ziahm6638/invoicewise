@@ -1,8 +1,8 @@
 import { getSession } from "@/lib/auth";
 import { getDiscount, getPlans } from "@/utils/plans";
 import { api } from "@/utils/polar";
-import { db } from "@midday/db/client";
-import { getTeamById } from "@midday/db/queries";
+import { db } from "@invoicewise/db/client";
+import { getTeamById } from "@invoicewise/db/queries";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const GET = async (req: NextRequest) => {

@@ -1,5 +1,5 @@
-import type { Database } from "@midday/db/client";
-import { enqueueWorkflowJob, getWorkflowJob } from "@midday/db/queries";
+import type { Database } from "@invoicewise/db/client";
+import { enqueueWorkflowJob, getWorkflowJob } from "@invoicewise/db/queries";
 import type { WorkflowRequest } from "./schema";
 
 export type EnqueueWorkflowInput = WorkflowRequest & {

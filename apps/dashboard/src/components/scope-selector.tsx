@@ -2,9 +2,9 @@
 
 import { RESOURCES } from "@/utils/scopes";
 import type { Scope } from "@api/utils/scopes";
-import { FormDescription } from "@midday/ui/form";
-import { RadioGroup, RadioGroupItem } from "@midday/ui/radio-group";
-import { ScrollArea } from "@midday/ui/scroll-area";
+import { FormDescription } from "@invoicewise/ui/form";
+import { RadioGroup, RadioGroupItem } from "@invoicewise/ui/radio-group";
+import { ScrollArea } from "@invoicewise/ui/scroll-area";
 
 type Props = {
   selectedScopes: Scope[];

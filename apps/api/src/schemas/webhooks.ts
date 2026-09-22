@@ -1,5 +1,5 @@
-import { WEBHOOK_EVENTS } from "@midday/db/queries";
-import { isAllowedWebhookUrl } from "@midday/jobs/webhooks";
+import { WEBHOOK_EVENTS } from "@invoicewise/db/queries";
+import { isAllowedWebhookUrl } from "@invoicewise/jobs/webhooks";
 import { z } from "zod";
 
 const endpointUrl = z

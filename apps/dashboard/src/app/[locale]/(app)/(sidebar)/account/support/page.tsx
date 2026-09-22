@@ -2,7 +2,7 @@ import { SupportForm } from "@/components/support-form";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Support | Midday",
+  title: "Support | InvoiceWise",
 };
 
 export default function Support() {

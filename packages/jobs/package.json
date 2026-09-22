@@ -1,5 +1,5 @@
 {
-  "name": "@midday/jobs",
+  "name": "@invoicewise/jobs",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -19,12 +19,12 @@
   },
   "dependencies": {
     "@effect/platform-bun": "^0.91.2",
-    "@midday/db": "workspace:*",
-    "@midday/documents": "workspace:*",
-    "@midday/email": "workspace:*",
-    "@midday/encryption": "workspace:*",
-    "@midday/inbox": "workspace:*",
-    "@midday/utils": "workspace:*",
+    "@invoicewise/db": "workspace:*",
+    "@invoicewise/documents": "workspace:*",
+    "@invoicewise/email": "workspace:*",
+    "@invoicewise/encryption": "workspace:*",
+    "@invoicewise/inbox": "workspace:*",
+    "@invoicewise/utils": "workspace:*",
     "effect": "^3.22.2",
     "heic-convert": "1.2.4",
     "nanoid": "^5.1.5",

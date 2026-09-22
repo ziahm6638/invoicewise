@@ -1,14 +1,14 @@
 "use client";
 
 import { useInboxFilterParams } from "@/hooks/use-inbox-filter-params";
-import { Button } from "@midday/ui/button";
-import { cn } from "@midday/ui/cn";
+import { Button } from "@invoicewise/ui/button";
+import { cn } from "@invoicewise/ui/cn";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from "@midday/ui/dropdown-menu";
-import { Input } from "@midday/ui/input";
+} from "@invoicewise/ui/dropdown-menu";
+import { Input } from "@invoicewise/ui/input";
 import { CalendarDays, Search, SlidersHorizontal, X } from "lucide-react";
 import { useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";

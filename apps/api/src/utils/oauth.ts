@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { hash } from "@midday/encryption";
+import { hash } from "@invoicewise/encryption";
 
 export type OAuthApplication = {
   id: string;

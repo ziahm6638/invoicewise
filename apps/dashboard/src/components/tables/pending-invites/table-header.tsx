@@ -2,9 +2,9 @@
 
 import { InviteTeamMembersModal } from "@/components/modals/invite-team-members-modal";
 import type { RouterOutputs } from "@api/trpc/routers/_app";
-import { Button } from "@midday/ui/button";
-import { Dialog } from "@midday/ui/dialog";
-import { Input } from "@midday/ui/input";
+import { Button } from "@invoicewise/ui/button";
+import { Dialog } from "@invoicewise/ui/dialog";
+import { Input } from "@invoicewise/ui/input";
 import type { Table } from "@tanstack/react-table";
 import { useState } from "react";
 

@@ -1,7 +1,7 @@
 "use client";
 
-import { Avatar, AvatarImageNext } from "@midday/ui/avatar";
-import { Icons } from "@midday/ui/icons";
+import { Avatar, AvatarImageNext } from "@invoicewise/ui/avatar";
+import { Icons } from "@invoicewise/ui/icons";
 
 export type Story = {
   id: number;

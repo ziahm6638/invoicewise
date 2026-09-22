@@ -7,11 +7,11 @@ import { useInboxParams } from "@/hooks/use-inbox-params";
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
 import { formatDate } from "@/utils/format";
-import type { InvoiceExtraction } from "@midday/documents";
-import { Alert, AlertDescription, AlertTitle } from "@midday/ui/alert";
-import { Button } from "@midday/ui/button";
-import { ScrollArea } from "@midday/ui/scroll-area";
-import { Skeleton } from "@midday/ui/skeleton";
+import type { InvoiceExtraction } from "@invoicewise/documents";
+import { Alert, AlertDescription, AlertTitle } from "@invoicewise/ui/alert";
+import { Button } from "@invoicewise/ui/button";
+import { ScrollArea } from "@invoicewise/ui/scroll-area";
+import { Skeleton } from "@invoicewise/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,

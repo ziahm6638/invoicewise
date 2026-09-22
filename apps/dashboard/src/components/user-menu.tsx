@@ -1,7 +1,11 @@
 "use client";
 
 import { useUserQuery } from "@/hooks/use-user";
-import { Avatar, AvatarFallback, AvatarImageNext } from "@midday/ui/avatar";
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImageNext,
+} from "@invoicewise/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,7 +14,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@midday/ui/dropdown-menu";
+} from "@invoicewise/ui/dropdown-menu";
 import Link from "next/link";
 import { SignOut } from "./sign-out";
 import { ThemeSwitch } from "./theme-switch";

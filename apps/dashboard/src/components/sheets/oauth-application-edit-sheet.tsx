@@ -5,18 +5,18 @@ import { DeleteOAuthApplicationModal } from "@/components/modals/delete-oauth-ap
 import { OAuthApplicationStatusBadge } from "@/components/oauth-application-status-badge";
 import { useOAuthApplicationParams } from "@/hooks/use-oauth-application-params";
 import { useTRPC } from "@/trpc/client";
-import { Badge } from "@midday/ui/badge";
-import { Button } from "@midday/ui/button";
+import { Badge } from "@invoicewise/ui/badge";
+import { Button } from "@invoicewise/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@midday/ui/dropdown-menu";
-import { Icons } from "@midday/ui/icons";
-import { ScrollArea } from "@midday/ui/scroll-area";
-import { Sheet, SheetContent, SheetHeader } from "@midday/ui/sheet";
-import { useToast } from "@midday/ui/use-toast";
+} from "@invoicewise/ui/dropdown-menu";
+import { Icons } from "@invoicewise/ui/icons";
+import { ScrollArea } from "@invoicewise/ui/scroll-area";
+import { Sheet, SheetContent, SheetHeader } from "@invoicewise/ui/sheet";
+import { useToast } from "@invoicewise/ui/use-toast";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useCopyToClipboard } from "usehooks-ts";

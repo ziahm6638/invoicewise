@@ -1,12 +1,12 @@
-import { createDatabaseClient } from "@midday/db/client";
+import { createDatabaseClient } from "@invoicewise/db/client";
 import {
   createInbox,
   getInvoiceAccountingStatus,
   getWorkflowJob,
   updateInboxWithProcessedData,
-} from "@midday/db/queries";
-import { teams } from "@midday/db/schema";
-import { createStorageClientFromEnv } from "@midday/db/storage";
+} from "@invoicewise/db/queries";
+import { teams } from "@invoicewise/db/schema";
+import { createStorageClientFromEnv } from "@invoicewise/db/storage";
 import { eq } from "drizzle-orm";
 import { Effect, Logger } from "effect";
 import {

@@ -1,4 +1,4 @@
-import { ComboboxDropdown } from "@midday/ui/combobox-dropdown";
+import { ComboboxDropdown } from "@invoicewise/ui/combobox-dropdown";
 
 type Props = {
   value?: string;

@@ -3,9 +3,9 @@
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
 import { resumableUpload } from "@/utils/upload";
-import { cn } from "@midday/ui/cn";
-import { useToast } from "@midday/ui/use-toast";
-import { stripSpecialCharacters } from "@midday/utils";
+import { cn } from "@invoicewise/ui/cn";
+import { useToast } from "@invoicewise/ui/use-toast";
+import { stripSpecialCharacters } from "@invoicewise/utils";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";

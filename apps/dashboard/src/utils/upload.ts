@@ -1,4 +1,4 @@
-import { stripSpecialCharacters } from "@midday/utils";
+import { stripSpecialCharacters } from "@invoicewise/utils";
 
 type UploadParams = {
   file: File;

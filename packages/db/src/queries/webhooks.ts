@@ -5,7 +5,7 @@ import {
   webhookDeliveryAttempts,
   webhookEndpoints,
 } from "@db/schema";
-import { encrypt } from "@midday/encryption";
+import { encrypt } from "@invoicewise/encryption";
 import { and, desc, eq, sql } from "drizzle-orm";
 
 export const WEBHOOK_EVENTS = [

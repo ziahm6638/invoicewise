@@ -1,6 +1,6 @@
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { type Database, createDatabaseClient } from "@midday/db/client";
+import { type Database, createDatabaseClient } from "@invoicewise/db/client";
 import {
   type WorkflowJob,
   createInbox,
@@ -12,18 +12,18 @@ import {
   getUserById,
   updateInbox,
   updateInboxAccount,
-} from "@midday/db/queries";
-import { createStorageClient } from "@midday/db/storage";
-import { GetStartedEmail } from "@midday/email/emails/get-started";
-import { InviteEmail } from "@midday/email/emails/invite";
-import { TrialEndedEmail } from "@midday/email/emails/trial-ended";
-import { TrialExpiringEmail } from "@midday/email/emails/trial-expiring";
-import { WelcomeEmail } from "@midday/email/emails/welcome";
-import { getI18n } from "@midday/email/locales";
-import { render } from "@midday/email/render";
-import { InboxConnector } from "@midday/inbox/connector";
-import { isAuthenticationError } from "@midday/inbox/utils";
-import { ensureFileExtension } from "@midday/utils";
+} from "@invoicewise/db/queries";
+import { createStorageClient } from "@invoicewise/db/storage";
+import { GetStartedEmail } from "@invoicewise/email/emails/get-started";
+import { InviteEmail } from "@invoicewise/email/emails/invite";
+import { TrialEndedEmail } from "@invoicewise/email/emails/trial-ended";
+import { TrialExpiringEmail } from "@invoicewise/email/emails/trial-expiring";
+import { WelcomeEmail } from "@invoicewise/email/emails/welcome";
+import { getI18n } from "@invoicewise/email/locales";
+import { render } from "@invoicewise/email/render";
+import { InboxConnector } from "@invoicewise/inbox/connector";
+import { isAuthenticationError } from "@invoicewise/inbox/utils";
+import { ensureFileExtension } from "@invoicewise/utils";
 import {
   Config,
   Context,

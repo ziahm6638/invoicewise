@@ -2,7 +2,7 @@
 
 import { ApiKeyForm } from "@/components/forms/api-key-form";
 import { useTokenModalStore } from "@/store/token-modal";
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -10,7 +10,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@midday/ui/dialog";
+} from "@invoicewise/ui/dialog";
 import { CopyInput } from "../copy-input";
 
 export function CreateApiKeyModal() {

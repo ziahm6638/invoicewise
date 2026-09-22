@@ -6,7 +6,7 @@ import {
   oauthAuthorizationCodes,
   users,
 } from "@db/schema";
-import { hash } from "@midday/encryption";
+import { hash } from "@invoicewise/encryption";
 import { and, desc, eq, gt, gte, lte } from "drizzle-orm";
 import { nanoid } from "nanoid";
 

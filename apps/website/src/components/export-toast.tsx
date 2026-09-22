@@ -1,6 +1,6 @@
 "use client";
 
-import { Progress } from "@midday/ui/progress";
+import { Progress } from "@invoicewise/ui/progress";
 import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useInView } from "react-intersection-observer";

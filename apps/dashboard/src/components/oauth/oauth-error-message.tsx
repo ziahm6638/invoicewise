@@ -1,14 +1,14 @@
 "use client";
 
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
-import { Icons } from "@midday/ui/icons";
+} from "@invoicewise/ui/card";
+import { Icons } from "@invoicewise/ui/icons";
 import { useRouter } from "next/navigation";
 
 export type OAuthErrorType =

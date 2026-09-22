@@ -2,15 +2,15 @@
 
 import { useUserMutation, useUserQuery } from "@/hooks/use-user";
 import { useI18n } from "@/locales/client";
-import { countries } from "@midday/location/countries-intl";
+import { countries } from "@invoicewise/location/countries-intl";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
-import { ComboboxDropdown } from "@midday/ui/combobox-dropdown";
+} from "@invoicewise/ui/card";
+import { ComboboxDropdown } from "@invoicewise/ui/combobox-dropdown";
 
 export function LocaleSettings() {
   const t = useI18n();

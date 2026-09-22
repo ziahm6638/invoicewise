@@ -1,4 +1,4 @@
-import { Skeleton } from "@midday/ui/skeleton";
+import { Skeleton } from "@invoicewise/ui/skeleton";
 
 export function InboxAccountsListSkeleton() {
   return (
