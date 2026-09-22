@@ -135,15 +135,17 @@ describe("TypeSafe invoice judgments", () => {
     const custom: InvoiceJudgmentQuestion[] = [
       {
         id: "approval_route",
+        versionId: "approval-route-v1",
         label: "Approval route",
-        type: "enum",
+        type: "choice",
         question: "Which approval route applies?",
-        options: { routine: null, director: null },
+        context: "Director approval is required over £500.",
+        options: ["Routine", "Director"],
       },
       {
         id: "risk_level",
         label: "Risk level",
-        type: "number",
+        type: "score",
         question: "How risky is this invoice?",
         levels: ["low", "medium", "high"],
       },
@@ -158,8 +160,8 @@ describe("TypeSafe invoice judgments", () => {
           [ids[3]!]: { type: "noul", noul: 0.86 },
           [ids[4]!]: {
             type: "choice",
-            choice: "routine",
-            probabilities: { routine: 0.9, director: 0.1 },
+            choice: "option_0",
+            probabilities: { option_0: 0.9, option_1: 0.1 },
             confidence: 0.8,
           },
           [ids[5]!]: {
@@ -205,10 +207,62 @@ describe("TypeSafe invoice judgments", () => {
         type: "boolean",
         source: "default",
       },
-      { questionId: "approval_route", type: "enum", source: "custom" },
-      { questionId: "risk_level", type: "number", source: "custom" },
+      { questionId: "approval_route", type: "choice", source: "custom" },
+      { questionId: "risk_level", type: "score", source: "custom" },
     ]);
-    expect(result[4]).toMatchObject({ answer: "routine", confidence: 0.8 });
+    expect(result[4]).toMatchObject({
+      answer: "Routine",
+      confidence: 0.8,
+      questionVersionId: "approval-route-v1",
+      status: "answered",
+    });
     expect(result[5]).toMatchObject({ answer: 0.2, confidence: 0.76 });
+  });
+
+  test("records an unparseable question without dropping other answers", async () => {
+    const malformed: InvoiceJudgmentQuestion = {
+      id: "malformed",
+      versionId: "malformed-v1",
+      label: "Malformed answer",
+      type: "choice",
+      question: "Which route applies?",
+      options: ["Routine", "Director"],
+    };
+    const JudgmentTest = Layer.succeed(TypeSafe, {
+      evaluate: ({ questions }) => {
+        const answers = Object.fromEntries(
+          Object.keys(questions).map((id, index) => [
+            id,
+            index === 4
+              ? { type: "noul" as const, noul: 0.5 }
+              : { type: "noul" as const, noul: 0.9 },
+          ]),
+        );
+        return Effect.succeed({
+          model: "test",
+          answers,
+          usage: { inputTokens: 0, outputTokens: 0 },
+        });
+      },
+    });
+    const extraction = await Effect.runPromise(
+      extractInvoiceText(invoiceText).pipe(Effect.provide(ExtractionTest)),
+    );
+    const result = await Effect.runPromise(
+      judgeInvoice(extraction, [], [malformed]).pipe(
+        Effect.provide(JudgmentTest),
+      ),
+    );
+
+    expect(result).toHaveLength(5);
+    expect(
+      result.slice(0, 4).every((judgment) => judgment.status === "answered"),
+    ).toBe(true);
+    expect(result[4]).toMatchObject({
+      questionId: "malformed",
+      questionVersionId: "malformed-v1",
+      status: "failed",
+      error: "TypeSafe returned the wrong answer type for this question",
+    });
   });
 });

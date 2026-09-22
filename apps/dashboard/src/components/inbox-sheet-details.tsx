@@ -12,6 +12,7 @@ import { Separator } from "@midday/ui/separator";
 import { SheetHeader } from "@midday/ui/sheet";
 import { Skeleton } from "@midday/ui/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { JudgmentResults } from "./inbox/judgment-results";
 
 export function InboxSheetDetails() {
   const trpc = useTRPC();
@@ -112,6 +113,10 @@ export function InboxSheetDetails() {
       </div>
 
       <Separator className="mb-4" />
+
+      <JudgmentResults
+        judgments={"judgments" in data ? data.judgments : null}
+      />
 
       {/* Document preview */}
       <div className="flex-1 mb-4 overflow-hidden relative">

@@ -14,6 +14,7 @@
     "dev:dashboard": "turbo dev --filter=@midday/dashboard",
     "build:dashboard": "turbo build --filter=@midday/dashboard",
     "dev:website": "turbo dev --filter=@midday/website ",
+    "db:generate": "cd packages/db && DATABASE_PRIMARY_URL=\"$(grep ^DATABASE_PRIMARY_URL= ../../.env | cut -d= -f2-)\" bunx drizzle-kit generate",
     "db:migrate": "cd packages/db && bun --env-file=../../.env run migrate",
     "jobs:dashboard": "turbo jobs --filter=@midday/jobs",
     "format": "biome format --write .",

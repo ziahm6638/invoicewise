@@ -213,6 +213,8 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       createdAt: inbox.createdAt,
       website: inbox.website,
       description: inbox.description,
+      extraction: inbox.extraction,
+      judgments: inbox.judgments,
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
         id: inboxAccounts.id,
