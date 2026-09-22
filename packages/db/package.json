@@ -2,6 +2,7 @@
   "name": "@midday/db",
   "private": true,
   "scripts": {
+    "migrate": "drizzle-kit migrate",
     "test": "bun test",
     "test:matching": "bun test src/test/transaction-matching.test.ts",
     "test:performance": "bun test src/test/transaction-matching.performance.test.ts",

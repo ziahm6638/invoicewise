@@ -79,10 +79,8 @@ Forked from [Midday](https://github.com/midday-ai/midday), an open-source busine
 
 ## Development
 
-```bash
-bun install
-bun dev
-```
+See [docs/development.md](docs/development.md) for the complete local setup,
+including Docker services, database migrations, and app-specific commands.
 
 ## License
 
