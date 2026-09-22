@@ -1,8 +1,8 @@
 "use client";
 
 import { useUserQuery } from "@/hooks/use-user";
-import { cn } from "@midday/ui/cn";
-import { SubmitButton } from "@midday/ui/submit-button";
+import { cn } from "@invoicewise/ui/cn";
+import { SubmitButton } from "@invoicewise/ui/submit-button";
 import { Check } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";

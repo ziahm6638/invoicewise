@@ -1,8 +1,8 @@
 "use client";
 
 import { useUpload } from "@/hooks/use-upload";
-import { Avatar, AvatarImage } from "@midday/ui/avatar";
-import { Spinner } from "@midday/ui/spinner";
+import { Avatar, AvatarImage } from "@invoicewise/ui/avatar";
+import { Spinner } from "@invoicewise/ui/spinner";
 import { nanoid } from "nanoid";
 import { useRef, useState } from "react";
 

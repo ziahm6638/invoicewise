@@ -1,4 +1,4 @@
-import { getAppUrl } from "@midday/utils/envs";
+import { getAppUrl } from "@invoicewise/utils/envs";
 import {
   Body,
   Container,
@@ -26,7 +26,7 @@ const baseAppUrl = getAppUrl();
 
 export const AppInstalledEmail = ({
   email = "pontus@lostisland.co",
-  teamName = "Midday Labs AB",
+  teamName = "InvoiceWise Labs AB",
   appName = "Raycast",
 }: Props) => {
   const appLink = `${baseAppUrl}/apps`;
@@ -62,7 +62,7 @@ export const AppInstalledEmail = ({
             style={{ color: lightStyles.text.color }}
           >
             The <strong>{appName}</strong> app has been added to your workspace{" "}
-            <strong>{teamName}</strong> on <strong>Midday</strong>.
+            <strong>{teamName}</strong> on <strong>InvoiceWise</strong>.
           </Text>
           <Section className="mb-[42px] mt-[32px] text-center">
             <Button href={appLink}>View installed app</Button>

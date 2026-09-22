@@ -2,7 +2,7 @@
 
 import { sendSupportAction } from "@/actions/send-support-action";
 import { useZodForm } from "@/hooks/use-zod-form";
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import {
   Form,
   FormControl,
@@ -10,17 +10,17 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-} from "@midday/ui/form";
-import { Input } from "@midday/ui/input";
+} from "@invoicewise/ui/form";
+import { Input } from "@invoicewise/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@midday/ui/select";
-import { Textarea } from "@midday/ui/textarea";
-import { useToast } from "@midday/ui/use-toast";
+} from "@invoicewise/ui/select";
+import { Textarea } from "@invoicewise/ui/textarea";
+import { useToast } from "@invoicewise/ui/use-toast";
 import { Loader2 } from "lucide-react";
 import { useAction } from "next-safe-action/hooks";
 import { z } from "zod";

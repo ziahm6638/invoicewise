@@ -6,13 +6,13 @@ import {
   accountingProviderParamSchema,
 } from "@api/schemas/accounting";
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { getAccountingConnections } from "@midday/db/queries";
+import { getAccountingConnections } from "@invoicewise/db/queries";
 import {
   completeAccountingConnection,
   createAccountingConnectSession,
   disconnectAccountingConnection,
   retryAccountingPost,
-} from "@midday/jobs/accounting";
+} from "@invoicewise/jobs/accounting";
 import { withRequiredScope } from "../middleware";
 
 const app = new OpenAPIHono<Context>();

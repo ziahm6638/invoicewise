@@ -1,7 +1,7 @@
 import type { Session } from "@api/utils/auth";
-import { teamCache } from "@midday/cache/team-cache";
-import type { Database } from "@midday/db/client";
-import { hasTeamAccess } from "@midday/db/queries";
+import { teamCache } from "@invoicewise/cache/team-cache";
+import type { Database } from "@invoicewise/db/client";
+import { hasTeamAccess } from "@invoicewise/db/queries";
 import { TRPCError } from "@trpc/server";
 
 export const withTeamPermission = async <TReturn>(opts: {

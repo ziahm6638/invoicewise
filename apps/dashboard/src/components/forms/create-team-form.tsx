@@ -4,7 +4,7 @@ import { revalidateAfterTeamChange } from "@/actions/revalidate-action";
 import { SelectCurrency } from "@/components/select-currency";
 import { useZodForm } from "@/hooks/use-zod-form";
 import { useTRPC } from "@/trpc/client";
-import { uniqueCurrencies } from "@midday/location/currencies";
+import { uniqueCurrencies } from "@invoicewise/location/currencies";
 import {
   Form,
   FormControl,
@@ -13,9 +13,9 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-} from "@midday/ui/form";
-import { Input } from "@midday/ui/input";
-import { SubmitButton } from "@midday/ui/submit-button";
+} from "@invoicewise/ui/form";
+import { Input } from "@invoicewise/ui/input";
+import { SubmitButton } from "@invoicewise/ui/submit-button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { use, useRef, useState } from "react";
 import { z } from "zod";

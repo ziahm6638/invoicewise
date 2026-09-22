@@ -7,7 +7,7 @@ import {
   transactionMatchSuggestions,
   transactions,
 } from "@db/schema";
-import { logger } from "@midday/logger";
+import { logger } from "@invoicewise/logger";
 import {
   and,
   cosineDistance,

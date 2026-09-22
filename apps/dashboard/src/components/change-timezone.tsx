@@ -2,17 +2,17 @@
 
 import { useUserMutation, useUserQuery } from "@/hooks/use-user";
 import { useI18n } from "@/locales/client";
-import { getTimezones } from "@midday/location/timezones";
+import { getTimezones } from "@invoicewise/location/timezones";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
-import { ComboboxDropdown } from "@midday/ui/combobox-dropdown";
-import { Label } from "@midday/ui/label";
-import { Switch } from "@midday/ui/switch";
+} from "@invoicewise/ui/card";
+import { ComboboxDropdown } from "@invoicewise/ui/combobox-dropdown";
+import { Label } from "@invoicewise/ui/label";
+import { Switch } from "@invoicewise/ui/switch";
 import { useEffect, useState } from "react";
 
 export function ChangeTimezone() {

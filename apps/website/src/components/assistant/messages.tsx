@@ -1,7 +1,7 @@
 "use client";
 
-import { Button } from "@midday/ui/button";
-import { cn } from "@midday/ui/cn";
+import { Button } from "@invoicewise/ui/button";
+import { cn } from "@invoicewise/ui/cn";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { ChatAvatar } from "./chat-avatar";

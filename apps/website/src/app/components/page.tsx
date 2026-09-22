@@ -1,6 +1,6 @@
-import { Button } from "@midday/ui/button";
-import { Card } from "@midday/ui/card";
-import { cn } from "@midday/ui/cn";
+import { Button } from "@invoicewise/ui/button";
+import { Card } from "@invoicewise/ui/card";
+import { cn } from "@invoicewise/ui/cn";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";

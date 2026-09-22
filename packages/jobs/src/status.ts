@@ -1,5 +1,5 @@
 import { BunRuntime } from "@effect/platform-bun";
-import { listWorkflowJobs } from "@midday/db/queries";
+import { listWorkflowJobs } from "@invoicewise/db/queries";
 import { Effect } from "effect";
 import { WorkflowDatabase, WorkflowDatabaseLive } from "./workflows";
 

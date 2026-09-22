@@ -1,4 +1,4 @@
-import { cn } from "@midday/ui/cn";
+import { cn } from "@invoicewise/ui/cn";
 
 interface SidebarItemProps {
   chat: any;

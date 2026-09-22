@@ -1,6 +1,6 @@
 import { getPlanByProductId } from "@/utils/plans";
-import { db } from "@midday/db/client";
-import { updateTeamById } from "@midday/db/queries";
+import { db } from "@invoicewise/db/client";
+import { updateTeamById } from "@invoicewise/db/queries";
 import { Webhooks } from "@polar-sh/nextjs";
 
 export const POST = Webhooks({

@@ -1,5 +1,5 @@
 import { getSession } from "@/lib/auth";
-import { download } from "@midday/db/storage";
+import { download } from "@invoicewise/db/storage";
 import type { NextRequest } from "next/server";
 
 export async function GET(req: NextRequest) {

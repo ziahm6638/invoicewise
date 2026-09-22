@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
-import type { Database } from "@midday/db/client";
+import type { Database } from "@invoicewise/db/client";
 import {
   type WebhookEndpointForDelivery,
   type WebhookEvent,
@@ -9,8 +9,8 @@ import {
   getWebhookDelivery,
   getWebhookEndpointsForEvent,
   recordWebhookAttempt,
-} from "@midday/db/queries";
-import { decrypt } from "@midday/encryption";
+} from "@invoicewise/db/queries";
+import { decrypt } from "@invoicewise/encryption";
 import { Clock, Context, Effect, Schema } from "effect";
 import { enqueueWorkflow, workflowKey } from "./client";
 

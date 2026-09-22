@@ -1,4 +1,4 @@
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import Link from "next/link";
 import { HeroImage } from "./hero-image";
 import { Metrics } from "./metrics";

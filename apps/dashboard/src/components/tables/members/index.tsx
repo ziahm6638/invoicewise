@@ -3,11 +3,11 @@
 import { InviteTeamMembersModal } from "@/components/modals/invite-team-members-modal";
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
-import { Button } from "@midday/ui/button";
-import { cn } from "@midday/ui/cn";
-import { Dialog } from "@midday/ui/dialog";
-import { Input } from "@midday/ui/input";
-import { Table, TableBody, TableCell, TableRow } from "@midday/ui/table";
+import { Button } from "@invoicewise/ui/button";
+import { cn } from "@invoicewise/ui/cn";
+import { Dialog } from "@invoicewise/ui/dialog";
+import { Input } from "@invoicewise/ui/input";
+import { Table, TableBody, TableCell, TableRow } from "@invoicewise/ui/table";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,

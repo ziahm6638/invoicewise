@@ -8,7 +8,7 @@ import {
   getUserInvites,
   hasTeamAccess,
   updateUser,
-} from "@midday/db/queries";
+} from "@invoicewise/db/queries";
 import { TRPCError } from "@trpc/server";
 
 export const userRouter = createTRPCRouter({

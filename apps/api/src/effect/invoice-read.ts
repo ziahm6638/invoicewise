@@ -1,4 +1,4 @@
-import { type Database, createDatabaseClient } from "@midday/db/client";
+import { type Database, createDatabaseClient } from "@invoicewise/db/client";
 import {
   type GetInboxParams,
   getInbox,
@@ -6,8 +6,8 @@ import {
   getInvoiceAccountingStatus,
   getInvoiceDeliveryStatus,
   getInvoiceExportRows,
-} from "@midday/db/queries";
-import { createStorageClientFromEnv } from "@midday/db/storage";
+} from "@invoicewise/db/queries";
+import { createStorageClientFromEnv } from "@invoicewise/db/storage";
 import {
   Config,
   Context,

@@ -1,8 +1,8 @@
 "use client";
 
 import { useUserQuery } from "@/hooks/use-user";
-import { Card } from "@midday/ui/card";
-import { SubmitButton } from "@midday/ui/submit-button";
+import { Card } from "@invoicewise/ui/card";
+import { SubmitButton } from "@invoicewise/ui/submit-button";
 import Link from "next/link";
 import { useState } from "react";
 

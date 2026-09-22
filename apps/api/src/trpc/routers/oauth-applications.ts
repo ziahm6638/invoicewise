@@ -25,10 +25,10 @@ import {
   revokeUserApplicationTokens,
   updateOAuthApplication,
   updateOAuthApplicationstatus,
-} from "@midday/db/queries";
-import { AppInstalledEmail } from "@midday/email/emails/app-installed";
-import { AppReviewRequestEmail } from "@midday/email/emails/app-review-request";
-import { render } from "@midday/email/render";
+} from "@invoicewise/db/queries";
+import { AppInstalledEmail } from "@invoicewise/email/emails/app-installed";
+import { AppReviewRequestEmail } from "@invoicewise/email/emails/app-review-request";
+import { render } from "@invoicewise/email/render";
 
 export const oauthApplicationsRouter = createTRPCRouter({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -184,7 +184,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
             );
 
             await resend.emails.send({
-              from: "Midday <middaybot@midday.ai>",
+              from: "InvoiceWise <middaybot@midday.ai>",
               to: session.user.email,
               subject: "An app has been added to your team",
               html,
@@ -351,7 +351,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
             );
 
             await resend.emails.send({
-              from: "Midday <middaybot@midday.ai>",
+              from: "InvoiceWise <middaybot@midday.ai>",
               to: "pontus@midday.ai",
               subject: `Application Review Request - ${application.name}`,
               html,

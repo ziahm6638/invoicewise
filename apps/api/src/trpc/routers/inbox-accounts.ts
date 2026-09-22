@@ -6,9 +6,13 @@ import {
   workflowStatusSchema,
 } from "@api/schemas/inbox-accounts";
 import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
-import { deleteInboxAccount, getInboxAccounts } from "@midday/db/queries";
-import { InboxConnector } from "@midday/inbox/connector";
-import { enqueueWorkflow, getWorkflowStatus, workflowKey } from "@midday/jobs";
+import { deleteInboxAccount, getInboxAccounts } from "@invoicewise/db/queries";
+import { InboxConnector } from "@invoicewise/inbox/connector";
+import {
+  enqueueWorkflow,
+  getWorkflowStatus,
+  workflowKey,
+} from "@invoicewise/jobs";
 import { TRPCError } from "@trpc/server";
 
 export const inboxAccountsRouter = createTRPCRouter({

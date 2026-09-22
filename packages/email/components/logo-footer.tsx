@@ -1,4 +1,4 @@
-import { getEmailUrl } from "@midday/utils/envs";
+import { getEmailUrl } from "@invoicewise/utils/envs";
 import { Img, Link, Section } from "@react-email/components";
 
 const baseUrl = getEmailUrl();
@@ -36,7 +36,7 @@ export function LogoFooter() {
         <Img
           src={`${baseUrl}/email/logo-footer.png`}
           width="80"
-          alt="Midday"
+          alt="InvoiceWise"
           className="block logo-blend"
         />
       </Link>

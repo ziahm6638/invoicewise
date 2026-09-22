@@ -2,9 +2,13 @@ import { HttpApp, HttpServer } from "@effect/platform";
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
 import { trpcServer } from "@hono/trpc-server";
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { closeDatabase, db, getConnectionPoolStats } from "@midday/db/client";
-import { download, verifySignedUrl } from "@midday/db/storage";
-import { WorkflowRuntimeLive, runWorkflows } from "@midday/jobs/runner";
+import {
+  closeDatabase,
+  db,
+  getConnectionPoolStats,
+} from "@invoicewise/db/client";
+import { download, verifySignedUrl } from "@invoicewise/db/storage";
+import { WorkflowRuntimeLive, runWorkflows } from "@invoicewise/jobs/runner";
 import { Scalar } from "@scalar/hono-api-reference";
 import { sql } from "drizzle-orm";
 import { Config, Effect, Logger } from "effect";

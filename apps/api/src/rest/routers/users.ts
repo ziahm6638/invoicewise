@@ -3,7 +3,11 @@ import type { Context } from "@api/rest/types";
 import { updateUserSchema, userSchema } from "@api/schemas/users";
 import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
-import { getUserById, hasTeamAccess, updateUser } from "@midday/db/queries";
+import {
+  getUserById,
+  hasTeamAccess,
+  updateUser,
+} from "@invoicewise/db/queries";
 import { HTTPException } from "hono/http-exception";
 import { withRequiredScope } from "../middleware";
 

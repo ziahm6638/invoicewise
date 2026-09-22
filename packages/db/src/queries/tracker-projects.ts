@@ -6,7 +6,7 @@ import {
   trackerProjectTags,
   trackerProjects,
 } from "@db/schema";
-import { buildSearchQuery } from "@midday/db/utils/search-query";
+import { buildSearchQuery } from "@invoicewise/db/utils/search-query";
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm/sql/sql";
 import { createActivity } from "./activities";

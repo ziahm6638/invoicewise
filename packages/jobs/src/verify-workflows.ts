@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { createDatabaseClient } from "@midday/db/client";
+import { createDatabaseClient } from "@invoicewise/db/client";
 import {
   createInbox,
   createUserQuestion,
@@ -9,10 +9,10 @@ import {
   getWorkflowJob,
   updateInboxWithProcessedData,
   updateUserQuestion,
-} from "@midday/db/queries";
-import { inbox, teams, users } from "@midday/db/schema";
-import { createStorageClientFromEnv } from "@midday/db/storage";
-import type { InvoiceExtraction } from "@midday/documents";
+} from "@invoicewise/db/queries";
+import { inbox, teams, users } from "@invoicewise/db/schema";
+import { createStorageClientFromEnv } from "@invoicewise/db/storage";
+import type { InvoiceExtraction } from "@invoicewise/documents";
 import { eq } from "drizzle-orm";
 import { Effect, Logger } from "effect";
 import { enqueueWorkflow, workflowKey } from "./client";

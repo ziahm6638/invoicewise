@@ -4,7 +4,7 @@ This setup runs InvoiceWise's API and dashboard locally. Postgres, Redis, and a
 private MinIO bucket for S3-compatible storage testing run in Docker; the apps
 run with Bun. Product database reads and writes use Drizzle against this
 Postgres instance. Redis is included because the API's auth, team-permission,
-and read-after-write caches use `@midday/cache`.
+and read-after-write caches use `@invoicewise/cache`.
 
 ## Prerequisites
 
@@ -63,7 +63,7 @@ Expected response:
 
 ## Background workflows
 
-Product work is enqueued with `enqueueWorkflow` from `@midday/jobs`. The
+Product work is enqueued with `enqueueWorkflow` from `@invoicewise/jobs`. The
 enqueue call writes a `workflow_jobs` row in Postgres and requires an
 idempotency key; repeating the same workflow name and key returns the existing
 row instead of scheduling duplicate work. The API-owned Effect runner claims
@@ -160,7 +160,7 @@ and removes its temporary rows and file.
 
 ## Document storage
 
-All callers use `@midday/db/storage`. `STORAGE_BACKEND` selects one of two
+All callers use `@invoicewise/db/storage`. `STORAGE_BACKEND` selects one of two
 implementations:
 
 - `local` (the default) stores files under `LOCAL_STORAGE_PATH`.

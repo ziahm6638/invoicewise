@@ -1,11 +1,11 @@
-import { Button } from "@midday/ui/button";
-import { Icons } from "@midday/ui/icons";
+import { Button } from "@invoicewise/ui/button";
+import { Icons } from "@invoicewise/ui/icons";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@midday/ui/tooltip";
+} from "@invoicewise/ui/tooltip";
 
 type Props = {
   disabled: boolean;

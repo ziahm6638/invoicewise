@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/auth";
 import { getPdfImage } from "@/utils/pdf-to-img";
-import { download } from "@midday/db/storage";
+import { download } from "@invoicewise/db/storage";
 import type { NextRequest } from "next/server";
 
 export async function GET(request: NextRequest) {

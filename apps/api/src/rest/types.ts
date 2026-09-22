@@ -1,5 +1,5 @@
 import type { Session } from "@api/utils/auth";
-import type { Database } from "@midday/db/client";
+import type { Database } from "@invoicewise/db/client";
 
 export type Context = {
   Variables: {

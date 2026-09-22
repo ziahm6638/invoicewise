@@ -11,17 +11,21 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@midday/ui/alert-dialog";
-import { Avatar, AvatarFallback, AvatarImageNext } from "@midday/ui/avatar";
-import { Button } from "@midday/ui/button";
+} from "@invoicewise/ui/alert-dialog";
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImageNext,
+} from "@invoicewise/ui/avatar";
+import { Button } from "@invoicewise/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@midday/ui/dropdown-menu";
-import { SubmitButton } from "@midday/ui/submit-button";
-import { toast } from "@midday/ui/use-toast";
+} from "@invoicewise/ui/dropdown-menu";
+import { SubmitButton } from "@invoicewise/ui/submit-button";
+import { toast } from "@invoicewise/ui/use-toast";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, FilterFn, Row } from "@tanstack/react-table";
 import { MoreHorizontal } from "lucide-react";

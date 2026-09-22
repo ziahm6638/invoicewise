@@ -1,7 +1,7 @@
 import { resend } from "@api/services/resend";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
-import { db, primaryDb } from "@midday/db/client";
-import { createTeam } from "@midday/db/queries/teams";
+import { db, primaryDb } from "@invoicewise/db/client";
+import { createTeam } from "@invoicewise/db/queries/teams";
 import {
   authAccounts,
   authSessions,
@@ -10,7 +10,7 @@ import {
   userInvites,
   users,
   usersOnTeam,
-} from "@midday/db/schema";
+} from "@invoicewise/db/schema";
 import bcrypt from "bcryptjs";
 import { betterAuth } from "better-auth";
 import { bearer, organization } from "better-auth/plugins";

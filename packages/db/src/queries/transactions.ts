@@ -13,9 +13,9 @@ import {
   transactions,
   users,
 } from "@db/schema";
-import { buildSearchQuery } from "@midday/db/utils/search-query";
-import { logger } from "@midday/logger";
-import { resolveTaxValues } from "@midday/utils/tax";
+import { buildSearchQuery } from "@invoicewise/db/utils/search-query";
+import { logger } from "@invoicewise/logger";
+import { resolveTaxValues } from "@invoicewise/utils/tax";
 import {
   and,
   asc,

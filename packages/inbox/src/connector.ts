@@ -1,6 +1,9 @@
-import type { Database } from "@midday/db/client";
-import { getInboxAccountById, upsertInboxAccount } from "@midday/db/queries";
-import { decrypt, encrypt } from "@midday/encryption";
+import type { Database } from "@invoicewise/db/client";
+import {
+  getInboxAccountById,
+  upsertInboxAccount,
+} from "@invoicewise/db/queries";
+import { decrypt, encrypt } from "@invoicewise/encryption";
 import { GmailProvider } from "./providers/gmail";
 import {
   type Account,

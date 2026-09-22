@@ -4,25 +4,25 @@ import { useOAuthParams } from "@/hooks/use-oauth-params";
 import { useTeamQuery } from "@/hooks/use-team";
 import { useTRPC } from "@/trpc/client";
 import { getScopeDescription } from "@/utils/scopes";
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
-import { cn } from "@midday/ui/cn";
-import { Icons } from "@midday/ui/icons";
-import { Label } from "@midday/ui/label";
+} from "@invoicewise/ui/card";
+import { cn } from "@invoicewise/ui/cn";
+import { Icons } from "@invoicewise/ui/icons";
+import { Label } from "@invoicewise/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@midday/ui/select";
-import { useToast } from "@midday/ui/use-toast";
+} from "@invoicewise/ui/select";
+import { useToast } from "@invoicewise/ui/use-toast";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { AlertTriangle, Check, X } from "lucide-react";
 import Image from "next/image";
@@ -178,7 +178,7 @@ export function OAuthConsentScreen() {
 
           <CardTitle className="text-lg mb-2 font-serif">
             {applicationInfo.name} is requesting API access <br /> to a team in
-            Midday.
+            InvoiceWise.
           </CardTitle>
 
           <CardDescription className="text-sm text-muted-foreground text-center">
@@ -208,7 +208,7 @@ export function OAuthConsentScreen() {
             <div className="flex items-center gap-2">
               <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
               <span className="text-sm text-amber-700 dark:text-amber-300">
-                This app hasn't been verified by Midday yet
+                This app hasn't been verified by InvoiceWise yet
               </span>
             </div>
           </div>

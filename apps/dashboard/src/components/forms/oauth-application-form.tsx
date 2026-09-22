@@ -20,9 +20,9 @@ import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "@midday/ui/accordion";
-import { Button } from "@midday/ui/button";
-import { cn } from "@midday/ui/cn";
+} from "@invoicewise/ui/accordion";
+import { Button } from "@invoicewise/ui/button";
+import { cn } from "@invoicewise/ui/cn";
 import {
   Form,
   FormControl,
@@ -31,14 +31,14 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-} from "@midday/ui/form";
-import { Input } from "@midday/ui/input";
-import { SubmitButton } from "@midday/ui/submit-button";
-import { Switch } from "@midday/ui/switch";
-import { Tabs, TabsList, TabsTrigger } from "@midday/ui/tabs";
-import { Textarea } from "@midday/ui/textarea";
-import { useToast } from "@midday/ui/use-toast";
-import { stripSpecialCharacters } from "@midday/utils";
+} from "@invoicewise/ui/form";
+import { Input } from "@invoicewise/ui/input";
+import { SubmitButton } from "@invoicewise/ui/submit-button";
+import { Switch } from "@invoicewise/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@invoicewise/ui/tabs";
+import { Textarea } from "@invoicewise/ui/textarea";
+import { useToast } from "@invoicewise/ui/use-toast";
+import { stripSpecialCharacters } from "@invoicewise/utils";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { nanoid } from "nanoid";
 import { useEffect, useState } from "react";

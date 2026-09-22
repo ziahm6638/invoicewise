@@ -1,8 +1,8 @@
 "use client";
 
-import { useEnterSubmit } from "@midday/ui/hooks";
-import { ScrollArea } from "@midday/ui/scroll-area";
-import { Textarea } from "@midday/ui/textarea";
+import { useEnterSubmit } from "@invoicewise/ui/hooks";
+import { ScrollArea } from "@invoicewise/ui/scroll-area";
+import { Textarea } from "@invoicewise/ui/textarea";
 import { motion } from "framer-motion";
 import { nanoid } from "nanoid";
 import { useState } from "react";

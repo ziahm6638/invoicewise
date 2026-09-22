@@ -1,5 +1,5 @@
-import type { Database, DatabaseWithPrimary } from "@midday/db/client";
-import { userQuestions } from "@midday/db/schema";
+import type { Database, DatabaseWithPrimary } from "@invoicewise/db/client";
+import { userQuestions } from "@invoicewise/db/schema";
 import { and, asc, desc, eq } from "drizzle-orm";
 
 export type UserQuestionType = "boolean" | "choice" | "score";

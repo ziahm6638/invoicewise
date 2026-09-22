@@ -1,13 +1,13 @@
 "use client";
 
 import { useInboxParams } from "@/hooks/use-inbox-params";
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from "@midday/ui/dropdown-menu";
+} from "@invoicewise/ui/dropdown-menu";
 import { ArrowUpDown } from "lucide-react";
 
 export function InboxOrdering() {

@@ -1,5 +1,5 @@
-import { Button } from "@midday/ui/button";
-import { Icons } from "@midday/ui/icons";
+import { Button } from "@invoicewise/ui/button";
+import { Icons } from "@invoicewise/ui/icons";
 
 type Props = {
   isExpanded: boolean;

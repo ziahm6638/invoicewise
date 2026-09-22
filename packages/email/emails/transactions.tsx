@@ -1,5 +1,5 @@
-import { cn } from "@midday/ui/cn";
-import { getAppUrl } from "@midday/utils/envs";
+import { cn } from "@invoicewise/ui/cn";
+import { getAppUrl } from "@invoicewise/utils/envs";
 import {
   Body,
   Container,

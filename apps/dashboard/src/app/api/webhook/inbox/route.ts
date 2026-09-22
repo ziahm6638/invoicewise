@@ -1,14 +1,17 @@
 import { logger } from "@/utils/logger";
 import { resend } from "@api/services/resend";
-import { db } from "@midday/db/client";
-import { teams } from "@midday/db/schema";
-import { upload } from "@midday/db/storage";
-import { getAllowedAttachments } from "@midday/documents";
-import { LogEvents } from "@midday/events/events";
-import { setupAnalytics } from "@midday/events/server";
-import { getInboxIdFromEmail, inboxWebhookPostSchema } from "@midday/inbox";
-import { enqueueWorkflow, workflowKey } from "@midday/jobs";
-import { getExtensionFromMimeType } from "@midday/utils";
+import { db } from "@invoicewise/db/client";
+import { teams } from "@invoicewise/db/schema";
+import { upload } from "@invoicewise/db/storage";
+import { getAllowedAttachments } from "@invoicewise/documents";
+import { LogEvents } from "@invoicewise/events/events";
+import { setupAnalytics } from "@invoicewise/events/server";
+import {
+  getInboxIdFromEmail,
+  inboxWebhookPostSchema,
+} from "@invoicewise/inbox";
+import { enqueueWorkflow, workflowKey } from "@invoicewise/jobs";
+import { getExtensionFromMimeType } from "@invoicewise/utils";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { headers } from "next/headers";

@@ -2,14 +2,14 @@ import { SelectTeamTable } from "@/components/tables/select-team/table";
 import { TeamInvites } from "@/components/team-invites";
 import { UserMenu } from "@/components/user-menu";
 import { HydrateClient, getQueryClient, prefetch, trpc } from "@/trpc/server";
-import { Button } from "@midday/ui/button";
-import { Icons } from "@midday/ui/icons";
+import { Button } from "@invoicewise/ui/button";
+import { Icons } from "@invoicewise/ui/icons";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
-  title: "Teams | Midday",
+  title: "Teams | InvoiceWise",
 };
 
 export default async function Teams() {

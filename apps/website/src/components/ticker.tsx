@@ -1,4 +1,4 @@
-import type { Database } from "@midday/supabase/types";
+import type { Database } from "@invoicewise/supabase/types";
 import { createServerClient } from "@supabase/ssr";
 import Link from "next/link";
 

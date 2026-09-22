@@ -10,7 +10,7 @@ import {
   getWebhookAttemptsByEndpoint,
   getWebhookEndpointById,
   getWebhookEndpoints,
-} from "@midday/db/queries";
+} from "@invoicewise/db/queries";
 import { withRequiredScope } from "../middleware";
 
 const app = new OpenAPIHono<Context>();

@@ -4,7 +4,7 @@ import { useTRPC } from "@/trpc/client";
 import type {
   RouterInputs,
   RouterOutputs,
-} from "@midday/api/trpc/routers/_app";
+} from "@invoicewise/api/trpc/routers/_app";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,27 +15,27 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@midday/ui/alert-dialog";
-import { Badge } from "@midday/ui/badge";
-import { Button } from "@midday/ui/button";
+} from "@invoicewise/ui/alert-dialog";
+import { Badge } from "@invoicewise/ui/badge";
+import { Button } from "@invoicewise/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
-import { Label } from "@midday/ui/label";
+} from "@invoicewise/ui/card";
+import { Label } from "@invoicewise/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@midday/ui/select";
-import { Switch } from "@midday/ui/switch";
-import { Textarea } from "@midday/ui/textarea";
-import { useToast } from "@midday/ui/use-toast";
+} from "@invoicewise/ui/select";
+import { Switch } from "@invoicewise/ui/switch";
+import { Textarea } from "@invoicewise/ui/textarea";
+import { useToast } from "@invoicewise/ui/use-toast";
 import {
   useMutation,
   useQueryClient,

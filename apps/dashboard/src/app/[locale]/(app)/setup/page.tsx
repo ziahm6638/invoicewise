@@ -1,13 +1,13 @@
 import { SetupForm } from "@/components/setup-form";
 import { getQueryClient, trpc } from "@/trpc/server";
 import { HydrateClient } from "@/trpc/server";
-import { Icons } from "@midday/ui/icons";
+import { Icons } from "@invoicewise/ui/icons";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
-  title: "Setup account | Midday",
+  title: "Setup account | InvoiceWise",
 };
 
 export default async function Page() {

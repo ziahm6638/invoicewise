@@ -1,5 +1,5 @@
 {
-  "name": "@midday/categories",
+  "name": "@invoicewise/categories",
   "version": "0.1.0",
   "description": "Transaction categories with parent-child structure for financial reports",
   "main": "./src/index.ts",
@@ -21,7 +21,7 @@
     "zod": "^4.1.5",
     "ai": "5.0.29",
     "@ai-sdk/google": "^2.0.11",
-    "@midday/logger": "workspace:*"
+    "@invoicewise/logger": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

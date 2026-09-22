@@ -1,8 +1,8 @@
 "use client";
 
-import { Button } from "@midday/ui/button";
-import { Icons } from "@midday/ui/icons";
-import { Sheet, SheetContent, SheetTrigger } from "@midday/ui/sheet";
+import { Button } from "@invoicewise/ui/button";
+import { Icons } from "@invoicewise/ui/icons";
+import { Sheet, SheetContent, SheetTrigger } from "@invoicewise/ui/sheet";
 import { useState } from "react";
 import { MainMenu } from "./main-menu";
 

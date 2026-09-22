@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@midday/ui/cn";
+import { cn } from "@invoicewise/ui/cn";
 import { motion, stagger, useAnimate } from "framer-motion";
 
 export const TextGenerateEffect = ({

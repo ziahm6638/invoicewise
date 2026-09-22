@@ -1,5 +1,5 @@
 {
-  "name": "@midday/email",
+  "name": "@invoicewise/email",
   "version": "1.0.0",
   "private": true,
   "main": "index.ts",
@@ -18,8 +18,8 @@
     "start": "email start"
   },
   "dependencies": {
-    "@midday/ui": "workspace:*",
-    "@midday/utils": "workspace:*",
+    "@invoicewise/ui": "workspace:*",
+    "@invoicewise/utils": "workspace:*",
     "@react-email/components": "0.0.42",
     "@react-email/render": "1.1.2",
     "@react-email/tailwind": "1.0.5",

@@ -1,4 +1,4 @@
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import { Check } from "lucide-react";
 import Link from "next/link";
 

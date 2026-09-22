@@ -9,15 +9,15 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
+} from "@invoicewise/ui/card";
 import {
   Form,
   FormControl,
   FormField,
   FormItem,
   FormMessage,
-} from "@midday/ui/form";
-import { SubmitButton } from "@midday/ui/submit-button";
+} from "@invoicewise/ui/form";
+import { SubmitButton } from "@invoicewise/ui/submit-button";
 import { z } from "zod";
 import { CountrySelector } from "./country-selector";
 

@@ -1,5 +1,5 @@
 import { DynamicImage } from "@/components/dynamic-image";
-import { Button } from "@midday/ui/button";
+import { Button } from "@invoicewise/ui/button";
 import type { Metadata } from "next";
 import Image from "next/image";
 import dockDark from "public/dock-dark.png";

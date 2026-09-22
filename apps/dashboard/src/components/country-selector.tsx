@@ -1,6 +1,6 @@
-import countries from "@midday/location/country-flags";
-import { Button } from "@midday/ui/button";
-import { cn } from "@midday/ui/cn";
+import countries from "@invoicewise/location/country-flags";
+import { Button } from "@invoicewise/ui/button";
+import { cn } from "@invoicewise/ui/cn";
 import {
   Command,
   CommandEmpty,
@@ -8,8 +8,12 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from "@midday/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@midday/ui/popover";
+} from "@invoicewise/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@invoicewise/ui/popover";
 import { CaretSortIcon, CheckIcon } from "@radix-ui/react-icons";
 import * as React from "react";
 import { useEffect } from "react";

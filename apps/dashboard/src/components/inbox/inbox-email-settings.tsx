@@ -2,8 +2,13 @@
 
 import { CopyInput } from "@/components/copy-input";
 import { useUserQuery } from "@/hooks/use-user";
-import { getInboxEmail } from "@midday/inbox";
-import { Card, CardDescription, CardHeader, CardTitle } from "@midday/ui/card";
+import { getInboxEmail } from "@invoicewise/inbox";
+import {
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@invoicewise/ui/card";
 
 export function InboxEmailSettings() {
   const { data: user } = useUserQuery();

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getAuthSession } from "@midday/api/auth";
+import { getAuthSession } from "@invoicewise/api/auth";
 import { headers } from "next/headers";
 
 export async function getSession() {

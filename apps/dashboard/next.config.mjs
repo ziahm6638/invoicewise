@@ -15,7 +15,11 @@ const config = {
       },
     ],
   },
-  transpilePackages: ["@midday/ui", "@midday/tailwind", "@midday/api"],
+  transpilePackages: [
+    "@invoicewise/ui",
+    "@invoicewise/tailwind",
+    "@invoicewise/api",
+  ],
   serverExternalPackages: ["@react-pdf/renderer", "pdfjs-dist"],
   eslint: {
     ignoreDuringBuilds: true,

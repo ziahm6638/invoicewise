@@ -2,9 +2,9 @@
 
 import { useTRPC } from "@/trpc/client";
 import { formatDate } from "@/utils/format";
-import { Button } from "@midday/ui/button";
-import { Spinner } from "@midday/ui/spinner";
-import { Table, TableBody, TableCell, TableRow } from "@midday/ui/table";
+import { Button } from "@invoicewise/ui/button";
+import { Spinner } from "@invoicewise/ui/spinner";
+import { Table, TableBody, TableCell, TableRow } from "@invoicewise/ui/table";
 import { useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { FormatAmount } from "../../format-amount";

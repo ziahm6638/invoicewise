@@ -1,6 +1,6 @@
 "use client";
 
-import { cn } from "@midday/ui/cn";
+import { cn } from "@invoicewise/ui/cn";
 import type { ImageProps } from "next/image";
 import Image from "next/image";
 

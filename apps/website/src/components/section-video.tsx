@@ -1,7 +1,7 @@
 "use client";
 
-import { Button } from "@midday/ui/button";
-import { Icons } from "@midday/ui/icons";
+import { Button } from "@invoicewise/ui/button";
+import { Icons } from "@invoicewise/ui/icons";
 import { motion } from "framer-motion";
 import dynamic from "next/dynamic";
 import { useRef, useState } from "react";

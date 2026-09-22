@@ -1,4 +1,4 @@
-# @midday/categories
+# @invoicewise/categories
 
 A comprehensive financial category system for SMBs with international tax rate support.
 
@@ -12,7 +12,7 @@ A comprehensive financial category system for SMBs with international tax rate s
 ## Installation
 
 ```bash
-npm install @midday/categories
+npm install @invoicewise/categories
 ```
 
 ## Usage
@@ -20,7 +20,7 @@ npm install @midday/categories
 ### Basic Category Access
 
 ```typescript
-import { CATEGORIES, getCategoryBySlug, getParentCategory } from '@midday/categories';
+import { CATEGORIES, getCategoryBySlug, getParentCategory } from '@invoicewise/categories';
 
 // Get all categories
 const allCategories = CATEGORIES;
@@ -35,7 +35,7 @@ const parent = getParentCategory('software'); // Returns 'technology'
 ### Tax Rate Lookup
 
 ```typescript
-import { getTaxRateForCategory, getTaxTypeForCountry } from '@midday/categories';
+import { getTaxRateForCategory, getTaxTypeForCountry } from '@invoicewise/categories';
 
 // Get tax rate for a category in a specific country
 const taxRate = getTaxRateForCategory('SE', 'meals'); // Returns 12 (Sweden, reduced rate)
@@ -62,7 +62,7 @@ console.log(officeSupplies.name); // "Office Supplies"
 Each category has a predefined color for consistent UI representation:
 
 ```typescript
-import { getCategoryColor, CATEGORY_COLOR_MAP } from '@midday/categories';
+import { getCategoryColor, CATEGORY_COLOR_MAP } from '@invoicewise/categories';
 
 // Get color for any category
 const revenueColor = getCategoryColor('revenue'); // "#00D084" (Green)

@@ -4,8 +4,8 @@ import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "@midday/ui/accordion";
-import { Button } from "@midday/ui/button";
+} from "@invoicewise/ui/accordion";
+import { Button } from "@invoicewise/ui/button";
 import { Check } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";

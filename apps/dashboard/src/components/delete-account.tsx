@@ -12,17 +12,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@midday/ui/alert-dialog";
-import { Button } from "@midday/ui/button";
+} from "@invoicewise/ui/alert-dialog";
+import { Button } from "@invoicewise/ui/button";
 import {
   Card,
   CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@midday/ui/card";
-import { Input } from "@midday/ui/input";
-import { Label } from "@midday/ui/label";
+} from "@invoicewise/ui/card";
+import { Input } from "@invoicewise/ui/input";
+import { Label } from "@invoicewise/ui/label";
 import { useMutation } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -49,8 +49,8 @@ export function DeleteAccount() {
         <CardTitle>Delete account</CardTitle>
         <CardDescription>
           Permanently remove your Personal Account and all of its contents from
-          the Midday platform. This action is not reversible, so please continue
-          with caution.
+          the InvoiceWise platform. This action is not reversible, so please
+          continue with caution.
         </CardDescription>
       </CardHeader>
       <CardFooter className="flex justify-between">

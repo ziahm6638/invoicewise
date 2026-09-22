@@ -1,14 +1,14 @@
 import { deleteApiKeySchema, upsertApiKeySchema } from "@api/schemas/api-keys";
 import { resend } from "@api/services/resend";
 import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
-import { apiKeyCache } from "@midday/cache/api-key-cache";
+import { apiKeyCache } from "@invoicewise/cache/api-key-cache";
 import {
   deleteApiKey,
   getApiKeysByTeam,
   upsertApiKey,
-} from "@midday/db/queries";
-import { ApiKeyCreatedEmail } from "@midday/email/emails/api-key-created";
-import { logger } from "@midday/logger";
+} from "@invoicewise/db/queries";
+import { ApiKeyCreatedEmail } from "@invoicewise/email/emails/api-key-created";
+import { logger } from "@invoicewise/logger";
 
 export const apiKeysRouter = createTRPCRouter({
   get: protectedProcedure.query(async ({ ctx: { db, teamId } }) => {
@@ -33,7 +33,7 @@ export const apiKeysRouter = createTRPCRouter({
         try {
           // We don't need to await this, it will be sent in the background
           resend.emails.send({
-            from: "Middaybot <middaybot@midday.ai>",
+            from: "InvoiceWise <middaybot@midday.ai>",
             to: session.user.email!,
             subject: "New API Key Created",
             react: ApiKeyCreatedEmail({

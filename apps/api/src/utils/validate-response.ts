@@ -1,4 +1,4 @@
-import { logger } from "@midday/logger";
+import { logger } from "@invoicewise/logger";
 import type { ZodSchema } from "zod";
 
 export const validateResponse = (data: any, schema: ZodSchema) => {

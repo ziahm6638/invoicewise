@@ -1,6 +1,6 @@
 "use client";
 
-import type { AppRouter } from "@midday/api/trpc/routers/_app";
+import type { AppRouter } from "@invoicewise/api/trpc/routers/_app";
 import type { QueryClient } from "@tanstack/react-query";
 import { QueryClientProvider, isServer } from "@tanstack/react-query";
 import { createTRPCClient, httpBatchLink, loggerLink } from "@trpc/client";

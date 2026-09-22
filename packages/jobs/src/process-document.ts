@@ -1,13 +1,13 @@
-import type { Database } from "@midday/db/client";
+import type { Database } from "@invoicewise/db/client";
 import {
   getProcessedInvoiceHistory,
   getUserQuestions,
   updateInboxWithProcessedData,
-} from "@midday/db/queries";
+} from "@invoicewise/db/queries";
 import {
   DocumentClient,
   type InvoiceJudgmentQuestion,
-} from "@midday/documents";
+} from "@invoicewise/documents";
 import { emitInvoiceProcessedWebhooks } from "./webhooks";
 
 export async function processDocumentAttachment(

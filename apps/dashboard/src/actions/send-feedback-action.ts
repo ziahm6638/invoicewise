@@ -1,6 +1,6 @@
 "use server";
 
-import { LogEvents } from "@midday/events/events";
+import { LogEvents } from "@invoicewise/events/events";
 import { PlainClient } from "@team-plain/typescript-sdk";
 import { z } from "zod";
 import { authActionClient } from "./safe-action";
