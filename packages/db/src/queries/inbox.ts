@@ -8,6 +8,7 @@ import {
   transactionMatchSuggestions,
   transactions,
 } from "@db/schema";
+import { remove as removeStoredFile } from "@db/storage";
 import { buildSearchQuery } from "@midday/db/utils/search-query";
 import { logger } from "@midday/logger";
 import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
@@ -286,6 +287,7 @@ export async function deleteInbox(db: Database, params: DeleteInboxParams) {
       id: inbox.id,
       transactionId: inbox.transactionId,
       attachmentId: inbox.attachmentId,
+      filePath: inbox.filePath,
     })
     .from(inbox)
     .where(and(eq(inbox.id, id), eq(inbox.teamId, teamId)))
@@ -331,7 +333,7 @@ export async function deleteInbox(db: Database, params: DeleteInboxParams) {
   }
 
   // Mark inbox item as deleted and clear attachment/transaction references
-  return db
+  const deleted = await db
     .update(inbox)
     .set({
       status: "deleted",
@@ -340,6 +342,12 @@ export async function deleteInbox(db: Database, params: DeleteInboxParams) {
     })
     .where(and(eq(inbox.id, id), eq(inbox.teamId, teamId)))
     .returning();
+
+  if (result.filePath?.length) {
+    await removeStoredFile({ bucket: "vault", path: result.filePath });
+  }
+
+  return deleted;
 }
 
 export type GetInboxSearchParams = {

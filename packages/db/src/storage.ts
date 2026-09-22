@@ -2,13 +2,40 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, resolve, sep } from "node:path";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 
 type StoragePath = { bucket: string; path: string | string[] };
 
-export type StorageClientConfig = {
-  rootPath: string;
+type CommonStorageConfig = {
   publicUrl: string;
   signingSecret?: string;
+};
+
+export type StorageClientConfig = CommonStorageConfig &
+  (
+    | {
+        backend?: "local";
+        rootPath: string;
+      }
+    | {
+        backend: "s3";
+        endpoint: string;
+        bucket: string;
+        accessKeyId: string;
+        secretAccessKey: string;
+        region: string;
+        forcePathStyle?: boolean;
+      }
+  );
+
+type UploadInput = StoragePath & {
+  file: Blob | Buffer | Uint8Array | ArrayBuffer;
+  contentType?: string;
 };
 
 const MIME_TYPES: Record<string, string> = {
@@ -34,9 +61,20 @@ function normalizePath(path: string | string[]) {
   return value;
 }
 
-export function createStorageClient(config: StorageClientConfig) {
-  const root = resolve(config.rootPath);
+const bytes = async (file: UploadInput["file"]) =>
+  file instanceof Blob
+    ? Buffer.from(await file.arrayBuffer())
+    : file instanceof ArrayBuffer
+      ? Buffer.from(file)
+      : Buffer.from(file);
 
+const contentType = (path: string) =>
+  MIME_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
+
+function createLocalBackend(
+  config: Extract<StorageClientConfig, { backend?: "local" }>,
+) {
+  const root = resolve(config.rootPath);
   const resolveStoragePath = ({ bucket, path }: StoragePath) => {
     const relativePath = normalizePath([bucket, normalizePath(path)]);
     const absolutePath = resolve(root, relativePath);
@@ -45,54 +83,95 @@ export function createStorageClient(config: StorageClientConfig) {
       throw new Error("Storage path escapes the configured root");
     }
 
-    return { absolutePath, relativePath };
+    return { absolutePath, path: normalizePath(path) };
   };
+
+  return {
+    async upload(input: UploadInput) {
+      const { absolutePath, path } = resolveStoragePath(input);
+      await mkdir(dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, await bytes(input.file));
+      return { path };
+    },
+    async download(input: StoragePath) {
+      const { absolutePath } = resolveStoragePath(input);
+      const data = await readFile(absolutePath);
+      const contents = data.buffer.slice(
+        data.byteOffset,
+        data.byteOffset + data.byteLength,
+      ) as ArrayBuffer;
+      return new Blob([contents], { type: contentType(absolutePath) });
+    },
+    async remove(input: StoragePath) {
+      const { absolutePath } = resolveStoragePath(input);
+      await rm(absolutePath, { force: true });
+    },
+  };
+}
+
+function createS3Backend(
+  config: Extract<StorageClientConfig, { backend: "s3" }>,
+) {
+  const client = new S3Client({
+    endpoint: config.endpoint,
+    region: config.region,
+    forcePathStyle: config.forcePathStyle,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+  const key = ({ bucket, path }: StoragePath) =>
+    normalizePath([bucket, normalizePath(path)]);
+
+  return {
+    async upload(input: UploadInput) {
+      const path = normalizePath(input.path);
+      await client.send(
+        new PutObjectCommand({
+          Bucket: config.bucket,
+          Key: key(input),
+          Body: await bytes(input.file),
+          ContentType: input.contentType ?? contentType(path),
+        }),
+      );
+      return { path };
+    },
+    async download(input: StoragePath) {
+      const response = await client.send(
+        new GetObjectCommand({ Bucket: config.bucket, Key: key(input) }),
+      );
+      if (!response.Body) throw new Error("Storage object has no body");
+      const data = Buffer.from(await response.Body.transformToByteArray());
+      const contents = data.buffer.slice(
+        data.byteOffset,
+        data.byteOffset + data.byteLength,
+      ) as ArrayBuffer;
+      return new Blob([contents], {
+        type: response.ContentType ?? contentType(normalizePath(input.path)),
+      });
+    },
+    async remove(input: StoragePath) {
+      await client.send(
+        new DeleteObjectCommand({ Bucket: config.bucket, Key: key(input) }),
+      );
+    },
+  };
+}
+
+export function createStorageClient(config: StorageClientConfig) {
+  const backend =
+    config.backend === "s3"
+      ? createS3Backend(config)
+      : createLocalBackend(config);
 
   const signature = (value: string) => {
     if (!config.signingSecret) {
-      throw new Error("LOCAL_STORAGE_SIGNING_SECRET must be configured");
+      throw new Error("STORAGE_SIGNING_SECRET must be configured");
     }
     return createHmac("sha256", config.signingSecret)
       .update(value)
       .digest("hex");
-  };
-
-  const upload = async ({
-    bucket,
-    path,
-    file,
-  }: StoragePath & { file: Blob | Buffer | Uint8Array | ArrayBuffer }) => {
-    const { absolutePath, relativePath } = resolveStoragePath({ bucket, path });
-    const bytes =
-      file instanceof Blob
-        ? Buffer.from(await file.arrayBuffer())
-        : file instanceof ArrayBuffer
-          ? Buffer.from(file)
-          : Buffer.from(file);
-
-    await mkdir(dirname(absolutePath), { recursive: true });
-    await writeFile(absolutePath, bytes);
-
-    return { path: relativePath.slice(bucket.length + 1) };
-  };
-
-  const download = async ({ bucket, path }: StoragePath) => {
-    const { absolutePath } = resolveStoragePath({ bucket, path });
-    const data = await readFile(absolutePath);
-    const contents = data.buffer.slice(
-      data.byteOffset,
-      data.byteOffset + data.byteLength,
-    ) as ArrayBuffer;
-    return new Blob([contents], {
-      type:
-        MIME_TYPES[extname(absolutePath).toLowerCase()] ??
-        "application/octet-stream",
-    });
-  };
-
-  const remove = async ({ bucket, path }: StoragePath) => {
-    const { absolutePath } = resolveStoragePath({ bucket, path });
-    await rm(absolutePath, { force: true });
   };
 
   const signedUrl = async ({
@@ -144,20 +223,55 @@ export function createStorageClient(config: StorageClientConfig) {
     );
   };
 
-  return { download, remove, signedUrl, upload, verifySignedUrl };
+  return { ...backend, signedUrl, verifySignedUrl };
 }
 
-const defaultStorageClient = () =>
-  createStorageClient({
-    rootPath:
-      process.env.LOCAL_STORAGE_PATH ??
-      resolve(tmpdir(), "invoicewise-storage"),
+const required = (env: NodeJS.ProcessEnv, name: string) => {
+  const value = env[name];
+  if (!value) throw new Error(`${name} must be configured`);
+  return value;
+};
+
+export function createStorageClientFromEnv(env = process.env) {
+  const common = {
     publicUrl:
-      process.env.STORAGE_PUBLIC_URL ??
-      process.env.NEXT_PUBLIC_API_URL ??
+      env.STORAGE_PUBLIC_URL ??
+      env.NEXT_PUBLIC_API_URL ??
       "http://localhost:3003",
-    signingSecret: process.env.LOCAL_STORAGE_SIGNING_SECRET,
+    signingSecret:
+      env.STORAGE_SIGNING_SECRET ?? env.LOCAL_STORAGE_SIGNING_SECRET,
+  };
+
+  if ((env.STORAGE_BACKEND ?? "local") === "local") {
+    return createStorageClient({
+      ...common,
+      backend: "local",
+      rootPath:
+        env.LOCAL_STORAGE_PATH ?? resolve(tmpdir(), "invoicewise-storage"),
+    });
+  }
+
+  if (env.STORAGE_BACKEND !== "s3") {
+    throw new Error(`Unsupported STORAGE_BACKEND: ${env.STORAGE_BACKEND}`);
+  }
+
+  return createStorageClient({
+    ...common,
+    backend: "s3",
+    endpoint: required(env, "STORAGE_S3_ENDPOINT"),
+    bucket: required(env, "STORAGE_S3_BUCKET"),
+    accessKeyId: required(env, "STORAGE_S3_ACCESS_KEY_ID"),
+    secretAccessKey: required(env, "STORAGE_S3_SECRET_ACCESS_KEY"),
+    region: env.STORAGE_S3_REGION ?? "auto",
+    forcePathStyle: env.STORAGE_S3_FORCE_PATH_STYLE === "true",
   });
+}
+
+let defaultClient: ReturnType<typeof createStorageClient> | undefined;
+const defaultStorageClient = () => {
+  defaultClient ??= createStorageClientFromEnv();
+  return defaultClient;
+};
 
 export const upload = (
   input: Parameters<ReturnType<typeof createStorageClient>["upload"]>[0],

@@ -39,7 +39,7 @@ export async function POST(request: Request) {
   const url = await signedUrl({
     bucket,
     path,
-    expireIn: 365 * 24 * 60 * 60,
+    expireIn: 60,
   });
 
   return NextResponse.json({ ...result, url });

@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { createDatabaseClient } from "@midday/db/client";
 import { createInbox, updateInboxWithProcessedData } from "@midday/db/queries";
 import { teams } from "@midday/db/schema";
-import { createStorageClient } from "@midday/db/storage";
+import { createStorageClientFromEnv } from "@midday/db/storage";
 import type { InvoiceExtraction } from "@midday/documents";
 import { eq } from "drizzle-orm";
 import { processDocumentAttachment } from "./tasks/inbox/process-document";
@@ -47,11 +47,7 @@ async function main() {
     primaryUrl: required("DATABASE_PRIMARY_URL"),
     isDevelopment: true,
   });
-  const storage = createStorageClient({
-    rootPath: required("LOCAL_STORAGE_PATH"),
-    publicUrl: required("STORAGE_PUBLIC_URL"),
-    signingSecret: required("LOCAL_STORAGE_SIGNING_SECRET"),
-  });
+  const storage = createStorageClientFromEnv();
   const fixture = Bun.file(
     resolve(
       process.cwd(),
