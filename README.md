@@ -1,91 +1,93 @@
-![hero](github.png)
+# InvoiceWise
 
-<p align="center">
-	<h1 align="center"><b>Midday</b></h1>
-<p align="center">
-    Run your business smarter
-    <br />
-    <br />
-    <a href="https://go.midday.ai/anPiuRx">Discord</a>
-    ·
-    <a href="https://midday.ai">Website</a>
-    ·
-    <a href="https://github.com/midday-ai/midday/issues">Issues</a>
-  </p>
-</p>
+**Invoice middleware. Extraction + delivery.**
 
-<p align="center">
-  <a href="https://go.midday.ai/K7GwMoQ">
-    <img src="https://img.shields.io/badge/Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white" alt="Supabase" />
-  </a>
-</p>
+InvoiceWise turns unstructured invoices into structured, intelligent data. Email in → TypeSafe extraction + judgments → auto-post to accounting or API/webhooks out.
 
-## About Midday
+## What It Is
 
-Midday is an all-in-one tool designed to help freelancers, contractors, consultants, and solo entrepreneurs manage their business operations more efficiently. It integrates various functions typically scattered across multiple platforms into a single, cohesive system.
+- Middleware for invoices (not an invoicing system, not an accounting system)
+- Email-first ingestion via dedicated mailboxes
+- TypeSafe-powered extraction and semantic judgments
+- User-defined questions that run on every invoice
+- Auto-delivery to Xero/QuickBooks (via Nango) or API/MCP/webhooks
 
+## What It Is Not
 
-## Features
+- ❌ An invoicing system (you don't create invoices here)
+- ❌ An accounting system (Xero/QuickBooks stays)
+- ❌ An AP approval workflow (no manual review steps required)
+- ❌ A replacement for anything — it connects everything
 
-**Time Tracking**: Allows for live time tracking of projects to boost productivity and collaboration, providing insightful project overviews.<br/>
-**Invoicing**: An upcoming feature that will enable users to create web-based invoices, collaborate in real-time, and synchronize projects seamlessly.<br/>
-**Magic Inbox**: Automatically matches incoming invoices or receipts to the correct transactions, simplifying financial tracking and organization.<br/>
-**Vault**: Secure storage for important files like contracts and agreements, keeping everything in one place for easy access​.<br/>
-**Seamless Export**: Facilitates easy export of financial data, packaged neatly in CSV files for accountants.<br/>
-**Assistant**: Provides tailored insights into financial situations, helping users understand spending patterns, cut costs, and find documents.<br/>
+## Core Flow
 
+```
+1. Customer gets a mailbox: invoices@acme.invoicewise.uk
+2. Invoices arrive (supplier sends or customer forwards)
+3. Auto-ingest from email
+4. TypeSafe extracts structured data + runs judgments
+5. User-defined questions run automatically
+6. Auto-post to connected accounting (Nango) OR available via API/MCP/webhooks
+```
 
+Zero manual steps in the happy path.
 
+## User-Defined Questions
 
-## Get started
+Customers configure their own TypeSafe questions. These run automatically on every invoice:
 
-We are working on the documentation to get started with Midday for local development: https://docs.midday.ai
+```yaml
+# Default questions (shipped with product)
+- Is this a duplicate of a previous invoice?
+- Is the VAT calculation correct?
+- Does this supplier match known suppliers?
+- Are bank details consistent with previous invoices?
 
-## App Architecture
+# User-defined (examples)
+- Is this over our £500 approval threshold?
+- Does this look like capital or operational spend?
+- Should this be allocated to multiple cost centers?
+- Is this contractor charging more than their average?
+```
 
-- Monorepo
+## Roadmap Layers
+
+| Layer | What | Status |
+|-------|------|--------|
+| **Layer 1: Extract + Deliver** | Email → Extract → Judgments → Deliver | MVP |
+| **Layer 2: Reconcile** | Match invoices to jobs/POs, verify against authorisation | Future |
+| **Layer 3: Monitor** | Patterns, contractor reliability, scope creep, anomalies over time | Future |
+
+## Moat
+
+- **TypeSafe** — Semantic understanding, not OCR. Competitors don't have it.
+- **User-defined questions** — Customers build their own logic. Switching cost increases.
+- **Accumulated intelligence** — History + patterns + questions = their invoice brain.
+
+## Origin
+
+Forked from [Midday](https://github.com/midday-ai/midday), an open-source business management platform. We use their email ingestion, document extraction, and matching infrastructure, replacing transaction matching with TypeSafe-powered authorisation matching.
+
+## Stack (inherited from Midday)
+
 - Bun
-- React
 - TypeScript
-- Nextjs
-- Supabase
-- Shadcn
-- Tauri
-- Expo
-- TailwindCSS
-
-### Hosting
-
-- Supabase (database, storage, realtime, auth)
-- Vercel (Website, Dashboard)
-- Fly.io (API/tRPC)
-
-### Services
-
+- Next.js
+- Supabase (database, storage, auth)
 - Trigger.dev (background jobs)
-- Resend (Transactional & Marketing)
-- Github Actions (CI/CD)
-- GoCardLess (Bank connection EU)
-- Plaid (Bank connection in Canada and US)
-- Teller (Bank connection in the US)
-- OpenPanel (Events and Analytics)
-- Polar (Payment processing)
-- Typesense (Search)
-- Mistral
-- Gemini
-- OpenAI
+- Nango (accounting integrations) — replacing GoCardless/Plaid bank connections
 
-## Repo Activity
+## Development
 
-![Alt](https://repobeats.axiom.co/api/embed/96aae855e5dd87c30d53c1d154b37cf7aa5a89b3.svg "Repobeats analytics image")
+```bash
+bun install
+bun dev
+```
 
 ## License
 
-This project is licensed under the **[AGPL-3.0](https://opensource.org/licenses/AGPL-3.0)** for non-commercial use. 
+AGPL-3.0 (inherited from Midday). Open source code, paid hosted service.
 
-### Commercial Use
+---
 
-For commercial use or deployments requiring a setup fee, please contact us
-for a commercial license at [engineer@midday.ai](mailto:engineer@midday.ai).
-
-By using this software, you agree to the terms of the license.
+**Domain:** [invoicewise.uk](https://invoicewise.uk)
