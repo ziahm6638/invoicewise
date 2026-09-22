@@ -1,5 +1,6 @@
 import { getQueryClient, trpc } from "@/trpc/server";
 import { logger } from "@/utils/logger";
+import { db } from "@midday/db/client";
 import { setupAnalytics } from "@midday/events/server";
 import { createClient } from "@midday/supabase/server";
 import {
@@ -75,6 +76,7 @@ export const authActionClient = actionClientWithMeta
     return next({
       ctx: {
         supabase,
+        db,
         analytics,
         user,
         teamId: user.teamId,

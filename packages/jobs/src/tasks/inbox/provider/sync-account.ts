@@ -1,10 +1,13 @@
 import { getDb } from "@jobs/init";
 import { processBatch } from "@jobs/utils/process-batch";
-import { getInboxAccountInfo, updateInboxAccount } from "@midday/db/queries";
+import { createClient } from "@midday/db/legacy-client";
+import {
+  getExistingInboxAttachments,
+  getInboxAccountInfo,
+  updateInboxAccount,
+} from "@midday/db/queries";
 import { InboxConnector } from "@midday/inbox/connector";
 import { isAuthenticationError } from "@midday/inbox/utils";
-import { createClient } from "@midday/supabase/job";
-import { getExistingInboxAttachmentsQuery } from "@midday/supabase/queries";
 import { ensureFileExtension } from "@midday/utils";
 import { logger, schemaTask } from "@trigger.dev/sdk";
 import { z } from "zod";
@@ -36,7 +39,7 @@ export const syncInboxAccount = schemaTask({
   run: async (payload) => {
     const { id, manualSync = false } = payload;
 
-    const supabase = createClient();
+    const database = createClient();
 
     if (!id) {
       throw new Error("id is required");
@@ -85,16 +88,16 @@ export const syncInboxAccount = schemaTask({
       });
 
       // Filter out attachments that are already processed
-      const existingAttachments = await getExistingInboxAttachmentsQuery(
-        supabase,
+      const existingAttachments = await getExistingInboxAttachments(
+        getDb(),
         attachments.map((attachment) => attachment.referenceId),
       );
 
       const filteredAttachments = attachments.filter((attachment) => {
         // Skip if already exists in database
         if (
-          existingAttachments.data?.some(
-            (existing) => existing.reference_id === attachment.referenceId,
+          existingAttachments.some(
+            (existing) => existing.referenceId === attachment.referenceId,
           )
         ) {
           logger.info("Skipping attachment - already processed", {
@@ -138,7 +141,7 @@ export const syncInboxAccount = schemaTask({
               item.mimeType,
             );
 
-            const { data: uploadData } = await supabase.storage
+            const { data: uploadData } = await database.storage
               .from("vault")
               .upload(`${accountRow.teamId}/inbox/${safeFilename}`, item.data, {
                 contentType: item.mimeType,

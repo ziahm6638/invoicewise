@@ -19,6 +19,7 @@
     "@date-fns/utc": "^2.1.0",
     "@hookform/resolvers": "^5.1.1",
     "@midday/api": "workspace:*",
+    "@midday/db": "workspace:*",
     "@midday/documents": "workspace:*",
     "@midday/events": "workspace:*",
     "@midday/inbox": "workspace:*",
@@ -61,7 +62,6 @@
     "server-only": "^0.0.1",
     "sharp": "0.34.1",
     "superjson": "^2.2.2",
-    "tus-js-client": "4.3.1",
     "usehooks-ts": "^3.1.1",
     "zod": "3.25.64",
     "zustand": "^5.0.8"

@@ -2,6 +2,7 @@ import { trpcServer } from "@hono/trpc-server";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { getConnectionPoolStats } from "@midday/db/client";
 import { db } from "@midday/db/client";
+import { download, verifySignedUrl } from "@midday/db/storage";
 import { Scalar } from "@scalar/hono-api-reference";
 import { sql } from "drizzle-orm";
 import { cors } from "hono/cors";
@@ -154,6 +155,45 @@ app.get("/health/db", async (c) => {
       },
       500,
     );
+  }
+});
+
+app.get("/storage/*", async (c) => {
+  const parts = c.req.path.split("/").filter(Boolean);
+  const [, bucket, ...pathParts] = parts;
+  const path = pathParts.map(decodeURIComponent).join("/");
+  const expires = Number(c.req.query("expires"));
+  const providedSignature = c.req.query("signature") ?? "";
+  const downloadFile = c.req.query("download") === "1";
+
+  if (
+    !bucket ||
+    !path ||
+    !Number.isFinite(expires) ||
+    !verifySignedUrl({
+      bucket,
+      path,
+      expires,
+      providedSignature,
+      download: downloadFile,
+    })
+  ) {
+    return c.json({ error: "Invalid or expired storage URL" }, 401);
+  }
+
+  try {
+    const file = await download({ bucket, path });
+    const headers: Record<string, string> = {
+      "Content-Type": file.type,
+      "Content-Length": String(file.size),
+    };
+    if (downloadFile) {
+      headers["Content-Disposition"] =
+        `attachment; filename="${pathParts.at(-1)}"`;
+    }
+    return new Response(file, { headers });
+  } catch {
+    return c.json({ error: "File not found" }, 404);
   }
 });
 

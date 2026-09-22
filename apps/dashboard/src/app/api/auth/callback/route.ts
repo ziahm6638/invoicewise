@@ -1,9 +1,12 @@
 import { Cookies } from "@/utils/constants";
+import { db } from "@midday/db/client";
+import { usersOnTeam } from "@midday/db/schema";
 import { LogEvents } from "@midday/events/events";
 import { setupAnalytics } from "@midday/events/server";
 import { getSession } from "@midday/supabase/cached-queries";
 import { createClient } from "@midday/supabase/server";
 import { addYears } from "date-fns";
+import { count, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
@@ -49,12 +52,15 @@ export async function GET(req: NextRequest) {
       }
 
       // If user have no teams, redirect to team creation
-      const { count } = await supabase
-        .from("users_on_team")
-        .select("*", { count: "exact" })
-        .eq("user_id", userId);
+      const [membership] = await db
+        .select({ membershipCount: count() })
+        .from(usersOnTeam)
+        .where(eq(usersOnTeam.userId, userId));
 
-      if (count === 0 && !returnTo?.startsWith("teams/invite/")) {
+      if (
+        membership?.membershipCount === 0 &&
+        !returnTo?.startsWith("teams/invite/")
+      ) {
         return NextResponse.redirect(`${requestUrl.origin}/teams/create`);
       }
     }

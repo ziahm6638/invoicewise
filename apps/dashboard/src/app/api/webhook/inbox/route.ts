@@ -1,13 +1,16 @@
 import { logger } from "@/utils/logger";
 import { resend } from "@api/services/resend";
+import { db } from "@midday/db/client";
+import { teams } from "@midday/db/schema";
+import { upload } from "@midday/db/storage";
 import { getAllowedAttachments } from "@midday/documents";
 import { LogEvents } from "@midday/events/events";
 import { setupAnalytics } from "@midday/events/server";
 import { getInboxIdFromEmail, inboxWebhookPostSchema } from "@midday/inbox";
 import type { ProcessAttachmentPayload } from "@midday/jobs/schema";
-import { createClient } from "@midday/supabase/server";
 import { getExtensionFromMimeType } from "@midday/utils";
 import { tasks } from "@trigger.dev/sdk";
+import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
@@ -73,15 +76,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true });
   }
 
-  const supabase = await createClient({ admin: true });
-
   try {
-    const { data: teamData } = await supabase
-      .from("teams")
-      .select("id, email")
-      .eq("inbox_id", inboxId)
-      .single()
-      .throwOnError();
+    const [teamData] = await db
+      .select({ id: teams.id, email: teams.email })
+      .from(teams)
+      .where(eq(teams.inboxId, inboxId));
+
+    if (!teamData) {
+      return NextResponse.json({ error: "Team not found" }, { status: 404 });
+    }
 
     const analytics = await setupAnalytics();
 
@@ -90,7 +93,7 @@ export async function POST(req: Request) {
       channel: LogEvents.InboxInbound.channel,
     });
 
-    const teamId = teamData?.id;
+    const teamId = teamData.id;
 
     // If the email is forwarded from a Google Workspace account, we need to send a reply to the team email
     if (teamData?.email && ALLOWED_FORWARDING_EMAILS.includes(FromFull.Email)) {
@@ -140,22 +143,17 @@ export async function POST(req: Request) {
             )
           : `${attachment.Name}_${nanoid(4)}${getExtensionFromMimeType(attachment.ContentType)}`;
 
-        const { data } = await supabase.storage
-          .from("vault")
-          .upload(
-            `${teamId}/inbox/${uniqueFileName}`,
-            Buffer.from(attachment.Content, "base64"),
-            {
-              contentType: attachment.ContentType,
-              upsert: true,
-            },
-          );
+        const data = await upload({
+          bucket: "vault",
+          path: `${teamId}/inbox/${uniqueFileName}`,
+          file: Buffer.from(attachment.Content, "base64"),
+        });
 
         return {
           // NOTE: If we can't parse the name using OCR this will be the fallback name
           display_name: Subject || attachment.Name,
           team_id: teamId,
-          file_path: data?.path.split("/"),
+          file_path: data.path.split("/"),
           file_name: uniqueFileName,
           content_type: attachment.ContentType,
           reference_id: `${MessageID}_${attachment.Name}`,

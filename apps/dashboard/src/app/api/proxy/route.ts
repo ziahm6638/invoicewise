@@ -1,3 +1,6 @@
+import { db } from "@midday/db/client";
+import { getUserTeamId } from "@midday/db/queries";
+import { download } from "@midday/db/storage";
 import { getSession } from "@midday/supabase/cached-queries";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -13,33 +16,21 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  // Ensure filePath starts with 'vault/'
-  const finalFilePath = filePath.startsWith("vault/")
-    ? filePath
-    : `vault/${filePath}`;
-
-  // Fetch the object from Supabase Storage
-  const response = await fetch(
-    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/${finalFilePath}`,
-    {
-      headers: {
-        authorization: `Bearer ${session.access_token}`,
-      },
-    },
-  );
-
-  // Check if the fetch was successful
-  if (!response.ok) {
-    return new NextResponse(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
+  const path = filePath.replace(/^vault\//, "");
+  const teamId = await getUserTeamId(db, session.user.id);
+  if (!teamId || path.split("/")[0] !== teamId) {
+    return new NextResponse("Forbidden", { status: 403 });
   }
 
-  return new NextResponse(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  try {
+    const data = await download({
+      bucket: "vault",
+      path,
+    });
+    return new NextResponse(data, {
+      headers: { "Content-Type": data.type },
+    });
+  } catch {
+    return new NextResponse("File not found", { status: 404 });
+  }
 }

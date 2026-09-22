@@ -1,20 +1,22 @@
 import { getPlanByProductId } from "@/utils/plans";
-import { updateTeamPlan } from "@midday/supabase/mutations";
-import { createClient } from "@midday/supabase/server";
+import { db } from "@midday/db/client";
+import { updateTeamById } from "@midday/db/queries";
 import { Webhooks } from "@polar-sh/nextjs";
 
 export const POST = Webhooks({
   webhookSecret: process.env.POLAR_WEBHOOK_SECRET!,
   onPayload: async (payload) => {
-    const supabase = await createClient({ admin: true });
-
     switch (payload.type) {
       case "subscription.active": {
-        await updateTeamPlan(supabase, {
+        await updateTeamById(db, {
           id: payload.data.metadata.teamId as string,
-          email: payload.data.customer.email ?? undefined,
-          plan: getPlanByProductId(payload.data.productId) as "starter" | "pro",
-          canceled_at: null,
+          data: {
+            email: payload.data.customer.email ?? undefined,
+            plan: getPlanByProductId(payload.data.productId) as
+              | "starter"
+              | "pro",
+            canceledAt: null,
+          },
         });
 
         break;
@@ -22,10 +24,12 @@ export const POST = Webhooks({
 
       // Subscription has been explicitly canceled by the user
       case "subscription.canceled": {
-        await updateTeamPlan(supabase, {
+        await updateTeamById(db, {
           id: payload.data.metadata.teamId as string,
-          email: payload.data.customer.email ?? undefined,
-          canceled_at: new Date().toISOString(),
+          data: {
+            email: payload.data.customer.email ?? undefined,
+            canceledAt: new Date().toISOString(),
+          },
         });
 
         break;
@@ -38,10 +42,9 @@ export const POST = Webhooks({
           break;
         }
 
-        await updateTeamPlan(supabase, {
+        await updateTeamById(db, {
           id: payload.data.metadata.teamId as string,
-          plan: "trial",
-          canceled_at: new Date().toISOString(),
+          data: { plan: "trial", canceledAt: new Date().toISOString() },
         });
 
         break;

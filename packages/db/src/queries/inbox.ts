@@ -10,7 +10,7 @@ import {
 } from "@db/schema";
 import { buildSearchQuery } from "@midday/db/utils/search-query";
 import { logger } from "@midday/logger";
-import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm/sql/sql";
 
 // Scoring functions for suggestion ranking
@@ -497,28 +497,28 @@ export async function getInboxSearch(
         // Use the same successful approach as batch-process-matching
         // Get candidates first, then score them with the same logic that works
         const candidates = await db
-        .select({
-          id: inbox.id,
-          createdAt: inbox.createdAt,
-          fileName: inbox.fileName,
-          amount: inbox.amount,
-          currency: inbox.currency,
-          filePath: inbox.filePath,
-          contentType: inbox.contentType,
-          date: inbox.date,
-          displayName: inbox.displayName,
-          size: inbox.size,
-          description: inbox.description,
-          baseAmount: inbox.baseAmount,
-          baseCurrency: inbox.baseCurrency,
-          status: inbox.status,
-          website: inbox.website,
-          taxAmount: inbox.taxAmount,
-          taxRate: inbox.taxRate,
-          taxType: inbox.taxType,
-          embeddingScore:
-            sql<number>`(${transactionEmbeddings.embedding} <-> ${inboxEmbeddings.embedding})`.as(
-              "embedding_score",
+          .select({
+            id: inbox.id,
+            createdAt: inbox.createdAt,
+            fileName: inbox.fileName,
+            amount: inbox.amount,
+            currency: inbox.currency,
+            filePath: inbox.filePath,
+            contentType: inbox.contentType,
+            date: inbox.date,
+            displayName: inbox.displayName,
+            size: inbox.size,
+            description: inbox.description,
+            baseAmount: inbox.baseAmount,
+            baseCurrency: inbox.baseCurrency,
+            status: inbox.status,
+            website: inbox.website,
+            taxAmount: inbox.taxAmount,
+            taxRate: inbox.taxRate,
+            taxType: inbox.taxType,
+            embeddingScore:
+              sql<number>`(${transactionEmbeddings.embedding} <-> ${inboxEmbeddings.embedding})`.as(
+                "embedding_score",
               ),
           })
           .from(inbox)
@@ -661,6 +661,7 @@ export async function getInboxSearch(
 export type UpdateInboxParams = {
   id: string;
   teamId: string;
+  transactionId?: string | null;
   status?:
     | "deleted"
     | "new"
@@ -1056,6 +1057,18 @@ export async function getInboxByFilePath(
   return result;
 }
 
+export async function getExistingInboxAttachments(
+  db: Database,
+  referenceIds: string[],
+) {
+  if (referenceIds.length === 0) return [];
+
+  return db
+    .select({ referenceId: inbox.referenceId })
+    .from(inbox)
+    .where(inArray(inbox.referenceId, referenceIds));
+}
+
 export type CreateInboxParams = {
   displayName: string;
   teamId: string;
@@ -1127,16 +1140,23 @@ export async function createInbox(db: Database, params: CreateInboxParams) {
 
 export type UpdateInboxWithProcessedDataParams = {
   id: string;
-  amount?: number;
-  currency?: string;
-  displayName?: string;
-  website?: string;
-  date?: string;
-  taxAmount?: number;
-  taxRate?: number;
-  taxType?: string;
+  amount?: number | null;
+  currency?: string | null;
+  displayName?: string | null;
+  website?: string | null;
+  date?: string | null;
+  taxAmount?: number | null;
+  taxRate?: number | null;
+  taxType?: string | null;
   type?: "invoice" | "expense" | null;
-  status?: "pending" | "new" | "archived" | "processing" | "done" | "deleted";
+  status?:
+    | "pending"
+    | "new"
+    | "archived"
+    | "processing"
+    | "analyzing"
+    | "done"
+    | "deleted";
 };
 
 export async function updateInboxWithProcessedData(

@@ -1,87 +1,46 @@
 "use client";
 
-import { createClient } from "@midday/supabase/client";
-import type { Database } from "@midday/supabase/types";
-import type {
-  RealtimePostgresChangesFilter,
-  RealtimePostgresChangesPayload,
-  SupabaseClient,
-} from "@supabase/supabase-js";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
-type PublicSchema = Database[Extract<keyof Database, "public">];
-type Tables = PublicSchema["Tables"];
-type TableName = keyof Tables;
+type EventType = "INSERT" | "UPDATE" | "DELETE" | "*";
+type RealtimePayload = {
+  eventType: Exclude<EventType, "*">;
+  new: Record<string, unknown>;
+  old: Record<string, unknown>;
+};
 
-interface UseRealtimeProps<TN extends TableName> {
+interface UseRealtimeProps {
   channelName: string;
-  event?: "INSERT" | "UPDATE" | "DELETE" | "*";
-  table: TN;
+  event?: EventType;
+  table: string;
   filter?: string;
-  onEvent: (payload: RealtimePostgresChangesPayload<Tables[TN]["Row"]>) => void;
+  onEvent: (payload: RealtimePayload) => void;
 }
 
-export function useRealtime<TN extends TableName>({
+export function useRealtime({
   channelName,
   event = "*",
   table,
   filter,
   onEvent,
-}: UseRealtimeProps<TN>) {
-  const supabase: SupabaseClient = createClient();
+}: UseRealtimeProps) {
   const onEventRef = useRef(onEvent);
-  const [isReady, setIsReady] = useState(false);
 
-  // Update the ref when onEvent changes
   useEffect(() => {
     onEventRef.current = onEvent;
   }, [onEvent]);
 
-  // Add a small delay to prevent rapid subscription creation/destruction
   useEffect(() => {
-    if (filter === undefined) {
-      setIsReady(false);
-      return;
-    }
+    if (filter === undefined) return;
 
-    const timer = setTimeout(() => {
-      setIsReady(true);
-    }, 100); // Small delay to prevent race conditions
+    const timer = window.setInterval(() => {
+      onEventRef.current({
+        eventType: event === "*" ? "UPDATE" : event,
+        new: { priority: 1 },
+        old: {},
+      });
+    }, 5000);
 
-    return () => {
-      clearTimeout(timer);
-      setIsReady(false);
-    };
-  }, [filter]);
-
-  useEffect(() => {
-    // Don't set up subscription if not ready or filter is undefined
-    if (!isReady || filter === undefined) {
-      return;
-    }
-
-    const filterConfig: RealtimePostgresChangesFilter<"*"> = {
-      event: event as RealtimePostgresChangesFilter<"*">["event"],
-      schema: "public",
-      table,
-      filter,
-    };
-
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        filterConfig,
-        (payload: RealtimePostgresChangesPayload<Tables[TN]["Row"]>) => {
-          onEventRef.current(payload);
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-    // Note: supabase is intentionally not included in dependencies to avoid
-    // dependency array size changes between renders
-  }, [channelName, event, table, filter, isReady]);
+    return () => window.clearInterval(timer);
+  }, [channelName, event, table, filter]);
 }

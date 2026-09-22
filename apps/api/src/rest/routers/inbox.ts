@@ -10,7 +10,6 @@ import {
   inboxResponseSchema,
   updateInboxSchema,
 } from "@api/schemas/inbox";
-import { createAdminClient } from "@api/services/supabase";
 import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
 import { z } from "@hono/zod-openapi";
@@ -20,7 +19,7 @@ import {
   getInboxById,
   updateInbox,
 } from "@midday/db/queries";
-import { signedUrl } from "@midday/supabase/storage";
+import { signedUrl } from "@midday/db/storage";
 import { withRequiredScope } from "../middleware";
 
 const app = new OpenAPIHono<Context>();
@@ -183,14 +182,11 @@ app.openapi(
       return c.json({ error: "Attachment file path not available" }, 400);
     }
 
-    // Create admin supabase client
-    const supabase = await createAdminClient();
-
     // Generate the pre-signed URL with 60-second expiration
     const filePath = inboxItem.filePath.join("/");
     const expireIn = 60; // 60 seconds
 
-    const { data, error } = await signedUrl(supabase, {
+    const url = await signedUrl({
       bucket: "vault",
       path: filePath,
       expireIn,
@@ -199,15 +195,11 @@ app.openapi(
       },
     });
 
-    if (error || !data?.signedUrl) {
-      return c.json({ error: "Failed to generate pre-signed URL" }, 500);
-    }
-
     // Calculate expiration timestamp
     const expiresAt = new Date(Date.now() + expireIn * 1000).toISOString();
 
     const result = {
-      url: data.signedUrl,
+      url,
       expiresAt,
       fileName: inboxItem.fileName || inboxItem.filePath.at(-1) || null,
     };

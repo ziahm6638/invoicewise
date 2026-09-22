@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "migrate": "drizzle-kit migrate",
+    "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:matching": "bun test src/test/transaction-matching.test.ts",
     "test:performance": "bun test src/test/transaction-matching.performance.test.ts",
@@ -15,8 +16,10 @@
   "exports": {
     "./client": "./src/client.ts",
     "./job-client": "./src/job-client.ts",
+    "./legacy-client": "./src/legacy-client.ts",
     "./queries": "./src/queries/index.ts",
     "./schema": "./src/schema.ts",
+    "./storage": "./src/storage.ts",
     "./sql": "./src/sql.ts",
     "./utils/api-keys": "./src/utils/api-keys.ts",
     "./utils/search-query": "./src/utils/search-query.ts",

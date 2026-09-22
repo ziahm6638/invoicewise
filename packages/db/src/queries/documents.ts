@@ -370,13 +370,13 @@ export async function updateDocumentByPath(
 export type UpdateDocumentByFileNameParams = {
   fileName: string;
   teamId: string;
-  title?: string;
-  summary?: string;
+  title?: string | null;
+  summary?: string | null;
   content?: string;
   body?: string;
   tag?: string;
-  date?: string;
-  language?: string;
+  date?: string | null;
+  language?: string | null;
   processingStatus?: "pending" | "processing" | "completed" | "failed";
   metadata?: Record<string, unknown>;
 };
