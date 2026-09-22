@@ -18,26 +18,28 @@ const primaryPool = new Pool({
   ...connectionConfig,
 });
 
-const fraPool = new Pool({
-  connectionString: process.env.DATABASE_FRA_URL!,
-  ...connectionConfig,
-});
-
-const sjcPool = new Pool({
-  connectionString: process.env.DATABASE_SJC_URL!,
-  ...connectionConfig,
-});
-
-const iadPool = new Pool({
-  connectionString: process.env.DATABASE_IAD_URL!,
-  ...connectionConfig,
-});
-
 const hasReplicas = Boolean(
   process.env.DATABASE_FRA_URL &&
     process.env.DATABASE_SJC_URL &&
     process.env.DATABASE_IAD_URL,
 );
+
+const replicaPools = hasReplicas
+  ? {
+      fra: new Pool({
+        connectionString: process.env.DATABASE_FRA_URL!,
+        ...connectionConfig,
+      }),
+      sjc: new Pool({
+        connectionString: process.env.DATABASE_SJC_URL!,
+        ...connectionConfig,
+      }),
+      iad: new Pool({
+        connectionString: process.env.DATABASE_IAD_URL!,
+        ...connectionConfig,
+      }),
+    }
+  : null;
 
 // Connection pool monitoring function
 export const getConnectionPoolStats = () => {
@@ -70,10 +72,10 @@ export const getConnectionPoolStats = () => {
   };
 
   // Only add replica pools if they're configured
-  if (hasReplicas) {
-    pools.fra = getPoolStats(fraPool, "fra");
-    pools.sjc = getPoolStats(sjcPool, "sjc");
-    pools.iad = getPoolStats(iadPool, "iad");
+  if (replicaPools) {
+    pools.fra = getPoolStats(replicaPools.fra, "fra");
+    pools.sjc = getPoolStats(replicaPools.sjc, "sjc");
+    pools.iad = getPoolStats(replicaPools.iad, "iad");
   }
 
   const poolArray = Object.values(pools);
@@ -130,24 +132,27 @@ const getReplicaIndexForRegion = () => {
 
 // Create the database instance once and export it
 const replicaIndex = getReplicaIndexForRegion();
+const replicaDatabases = replicaPools
+  ? [
+      drizzle(replicaPools.fra, {
+        schema,
+        casing: "snake_case",
+      }),
+      drizzle(replicaPools.iad, {
+        schema,
+        casing: "snake_case",
+      }),
+      drizzle(replicaPools.sjc, {
+        schema,
+        casing: "snake_case",
+      }),
+    ]
+  : [];
 
 export const db = withReplicas(
   primaryDb,
-  [
-    // Order of replicas is important
-    drizzle(fraPool, {
-      schema,
-      casing: "snake_case",
-    }),
-    drizzle(iadPool, {
-      schema,
-      casing: "snake_case",
-    }),
-    drizzle(sjcPool, {
-      schema,
-      casing: "snake_case",
-    }),
-  ],
+  // Order is important: fra, iad, sjc matches getReplicaIndexForRegion.
+  replicaDatabases,
   (replicas) => replicas[replicaIndex]!,
 );
 

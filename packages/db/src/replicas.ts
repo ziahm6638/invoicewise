@@ -26,12 +26,13 @@ export const withReplicas = <
   >,
 >(
   primary: Q,
-  replicas: [Q, ...Q[]],
+  replicas: Q[],
   getReplica: (replicas: Q[]) => Q = () =>
     replicas[Math.floor(Math.random() * replicas.length)]!,
 ): ReplicatedDatabase<Q> => {
   const createDatabase = (usePrimary = false): ReplicatedDatabase<Q> => {
-    const getDbForRead = () => (usePrimary ? primary : getReplica(replicas));
+    const getDbForRead = () =>
+      usePrimary || replicas.length === 0 ? primary : getReplica(replicas);
 
     const executeOnReplica = async <
       TRow extends Record<string, unknown> = Record<string, unknown>,
