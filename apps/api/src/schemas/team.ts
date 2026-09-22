@@ -90,18 +90,6 @@ export const updateTeamByIdSchema = z.object({
     description: "Country code for the team",
     example: "US",
   }),
-  exportSettings: z
-    .object({
-      csvDelimiter: z.string(),
-      includeCSV: z.boolean(),
-      includeXLSX: z.boolean(),
-      sendEmail: z.boolean(),
-      accountantEmail: z.string().optional(),
-    })
-    .optional()
-    .openapi({
-      description: "Export settings for transactions",
-    }),
 });
 
 export const createTeamSchema = z.object({
@@ -210,14 +198,6 @@ export const deleteTeamInviteSchema = z.object({
   id: z.string().openapi({
     description: "Unique identifier of the team invitation to delete",
     example: "invite-123abc456def",
-  }),
-});
-
-export const updateBaseCurrencySchema = z.object({
-  baseCurrency: z.string().openapi({
-    description:
-      "New base currency for the team in ISO 4217 format (3-letter currency code)",
-    example: "EUR",
   }),
 });
 

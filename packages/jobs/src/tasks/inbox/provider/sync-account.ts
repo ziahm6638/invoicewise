@@ -6,7 +6,7 @@ import { isAuthenticationError } from "@midday/inbox/utils";
 import { createClient } from "@midday/supabase/job";
 import { getExistingInboxAttachmentsQuery } from "@midday/supabase/queries";
 import { ensureFileExtension } from "@midday/utils";
-import { logger, schemaTask, tasks } from "@trigger.dev/sdk";
+import { logger, schemaTask } from "@trigger.dev/sdk";
 import { z } from "zod";
 import { processAttachment } from "../process-attachment";
 
@@ -48,6 +48,10 @@ export const syncInboxAccount = schemaTask({
     if (!accountRow) {
       // TODO: Unregister inbox account scheduler by deduplication key?
       throw new Error("Account not found");
+    }
+
+    if (accountRow.provider !== "gmail") {
+      throw new Error(`Unsupported inbox provider: ${accountRow.provider}`);
     }
 
     const connector = new InboxConnector(accountRow.provider, getDb());
@@ -175,15 +179,6 @@ export const syncInboxAccount = schemaTask({
         });
 
         await processAttachment.batchTriggerAndWait(uploadedAttachments);
-
-        // Send notification for new inbox items
-        await tasks.trigger("notification", {
-          type: "inbox_new",
-          teamId: accountRow.teamId,
-          totalCount: uploadedAttachments.length,
-          inboxType: "sync",
-          provider: accountRow.provider,
-        });
       }
 
       // Update account with successful sync - mark as connected and clear errors

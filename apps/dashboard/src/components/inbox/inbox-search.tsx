@@ -19,10 +19,8 @@ import { useHotkeys } from "react-hotkeys-hook";
 
 const statusFilters = [
   { id: "all", name: "All" },
-  { id: "done", name: "Matched" },
-  { id: "pending", name: "Pending" },
-  { id: "suggested_match", name: "Suggested Match" },
-  { id: "no_match", name: "Unmatched" },
+  { id: "done", name: "Reviewed" },
+  { id: "pending", name: "Pending review" },
 ];
 
 export function InboxSearch() {
@@ -106,13 +104,7 @@ export function InboxSearch() {
                   onValueChange={(value) =>
                     setParams({
                       status:
-                        value === "all"
-                          ? null
-                          : (value as
-                              | "done"
-                              | "pending"
-                              | "suggested_match"
-                              | "no_match"),
+                        value === "all" ? null : (value as "done" | "pending"),
                     })
                   }
                 >

@@ -161,13 +161,13 @@ app.doc("/openapi", {
   openapi: "3.1.0",
   info: {
     version: "0.0.1",
-    title: "Midday API",
+    title: "InvoiceWise API",
     description:
-      "Midday is a platform for Invoicing, Time tracking, File reconciliation, Storage, Financial Overview & your own Assistant.",
+      "Invoice middleware for extracting and delivering structured invoice data.",
     contact: {
-      name: "Midday Support",
-      email: "engineer@midday.ai",
-      url: "https://midday.ai",
+      name: "InvoiceWise Support",
+      email: "support@invoicewise.uk",
+      url: "https://invoicewise.uk",
     },
     license: {
       name: "AGPL-3.0 license",
@@ -176,7 +176,7 @@ app.doc("/openapi", {
   },
   servers: [
     {
-      url: "https://api.midday.ai",
+      url: "https://api.invoicewise.uk",
       description: "Production API",
     },
   ],
@@ -193,12 +193,12 @@ app.openAPIRegistry.registerComponent("securitySchemes", "token", {
   type: "http",
   scheme: "bearer",
   description: "Default authentication mechanism",
-  "x-speakeasy-example": "MIDDAY_API_KEY",
+  "x-speakeasy-example": "INVOICEWISE_API_KEY",
 });
 
 app.get(
   "/",
-  Scalar({ url: "/openapi", pageTitle: "Midday API", theme: "saturn" }),
+  Scalar({ url: "/openapi", pageTitle: "InvoiceWise API", theme: "saturn" }),
 );
 
 app.route("/", routers);

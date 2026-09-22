@@ -9,10 +9,8 @@ import {
 import { getTeamById } from "@midday/db/queries";
 import { DocumentClient } from "@midday/documents";
 import { createClient } from "@midday/supabase/job";
-import { logger, schemaTask, tasks } from "@trigger.dev/sdk";
+import { logger, schemaTask } from "@trigger.dev/sdk";
 import { convertHeic } from "../document/convert-heic";
-import { processDocument } from "../document/process-document";
-import { embedInbox } from "./embed-inbox";
 
 export const processAttachment = schemaTask({
   id: "process-attachment",
@@ -130,45 +128,16 @@ export const processAttachment = schemaTask({
 
       await updateInboxWithProcessedData(getDb(), {
         id: inboxData.id,
-        amount: result.amount,
-        currency: result.currency,
-        displayName: result.name,
-        website: result.website,
-        date: result.date,
-        taxAmount: result.tax_amount,
-        taxRate: result.tax_rate,
-        taxType: result.tax_type,
+        amount: result.amount ?? undefined,
+        currency: result.currency ?? undefined,
+        displayName: result.name ?? undefined,
+        website: result.website ?? undefined,
+        date: result.date ?? undefined,
+        taxAmount: result.tax_amount ?? undefined,
+        taxRate: result.tax_rate ?? undefined,
+        taxType: result.tax_type ?? undefined,
         type: result.type as "invoice" | "expense" | null | undefined,
-        status: "analyzing", // Keep analyzing until matching is complete
-      });
-
-      // NOTE: Process documents and images for classification
-      await processDocument.trigger({
-        mimetype,
-        filePath,
-        teamId,
-      });
-
-      // Create embedding and wait for completion
-      await embedInbox.triggerAndWait({
-        inboxId: inboxData.id,
-        teamId,
-      });
-
-      logger.info("Inbox embedding completed", {
-        inboxId: inboxData.id,
-        teamId,
-      });
-
-      // After embedding is complete, trigger efficient matching
-      await tasks.trigger("batch-process-matching", {
-        teamId,
-        inboxIds: [inboxData.id],
-      });
-
-      logger.info("Triggered efficient inbox matching", {
-        inboxId: inboxData.id,
-        teamId,
+        status: "pending",
       });
     } catch (error) {
       logger.error("Document processing failed", {

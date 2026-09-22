@@ -1,8 +1,6 @@
 import "@/styles/globals.css";
 import { cn } from "@midday/ui/cn";
 import "@midday/ui/globals.css";
-import { DesktopHeader } from "@/components/desktop-header";
-import { isDesktopApp } from "@/utils/desktop";
 import { Provider as Analytics } from "@midday/events/client";
 import { Toaster } from "@midday/ui/toaster";
 import { GeistMono } from "geist/font/mono";
@@ -14,45 +12,21 @@ import type { ReactElement } from "react";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://app.midday.ai"),
-  title: "Midday | Run your business smarter",
+  metadataBase: new URL("https://invoicewise.uk"),
+  title: "InvoiceWise",
   description:
-    "Automate financial tasks, stay organized, and make informed decisions effortlessly.",
+    "Turn incoming invoices into structured data ready for your accounting systems.",
   twitter: {
-    title: "Midday | Run your business smarter",
+    title: "InvoiceWise",
     description:
-      "Automate financial tasks, stay organized, and make informed decisions effortlessly.",
-    images: [
-      {
-        url: "https://cdn.midday.ai/opengraph-image.jpg",
-        width: 800,
-        height: 600,
-      },
-      {
-        url: "https://cdn.midday.ai/opengraph-image.jpg",
-        width: 1800,
-        height: 1600,
-      },
-    ],
+      "Turn incoming invoices into structured data ready for your accounting systems.",
   },
   openGraph: {
-    title: "Midday | Run your business smarter",
+    title: "InvoiceWise",
     description:
-      "Automate financial tasks, stay organized, and make informed decisions effortlessly.",
-    url: "https://app.midday.ai",
-    siteName: "Midday",
-    images: [
-      {
-        url: "https://cdn.midday.ai/opengraph-image.jpg",
-        width: 800,
-        height: 600,
-      },
-      {
-        url: "https://cdn.midday.ai/opengraph-image.jpg",
-        width: 1800,
-        height: 1600,
-      },
-    ],
+      "Turn incoming invoices into structured data ready for your accounting systems.",
+    url: "https://invoicewise.uk",
+    siteName: "InvoiceWise",
     locale: "en_US",
     type: "website",
   },
@@ -84,22 +58,14 @@ export default async function Layout({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  const isDesktop = await isDesktopApp();
-
   return (
-    <html
-      lang={locale}
-      suppressHydrationWarning
-      className={cn(isDesktop && "desktop")}
-    >
+    <html lang={locale} suppressHydrationWarning>
       <body
         className={cn(
           `${GeistSans.variable} ${GeistMono.variable} ${lora.variable} font-sans`,
           "whitespace-pre-line overscroll-none antialiased",
         )}
       >
-        <DesktopHeader />
-
         <NuqsAdapter>
           <Providers locale={locale}>{children}</Providers>
           <Toaster />

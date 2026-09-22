@@ -7,7 +7,6 @@ import {
   deleteTeamSchema,
   inviteTeamMembersSchema,
   leaveTeamSchema,
-  updateBaseCurrencySchema,
   updateTeamByIdSchema,
   updateTeamMemberSchema,
 } from "@api/schemas/team";
@@ -20,8 +19,6 @@ import {
   deleteTeam,
   deleteTeamInvite,
   deleteTeamMember,
-  getAvailablePlans,
-  getBankConnections,
   getInvitesByEmail,
   getTeamById,
   getTeamInvites,
@@ -31,11 +28,7 @@ import {
   updateTeamById,
   updateTeamMember,
 } from "@midday/db/queries";
-import type {
-  DeleteTeamPayload,
-  InviteTeamMembersPayload,
-  UpdateBaseCurrencyPayload,
-} from "@midday/jobs/schema";
+import type { InviteTeamMembersPayload } from "@midday/jobs/schema";
 import { tasks } from "@trigger.dev/sdk";
 import { TRPCError } from "@trpc/server";
 
@@ -160,20 +153,7 @@ export const teamRouter = createTRPCRouter({
         });
       }
 
-      const bankConnections = await getBankConnections(db, {
-        teamId: data.id,
-      });
-
-      if (bankConnections.length > 0) {
-        await tasks.trigger("delete-team", {
-          teamId: input.teamId!,
-          connections: bankConnections.map((connection) => ({
-            accessToken: connection.accessToken,
-            provider: connection.provider,
-            referenceId: connection.referenceId,
-          })),
-        } satisfies DeleteTeamPayload);
-      }
+      return data;
     }),
 
   deleteMember: protectedProcedure
@@ -249,20 +229,5 @@ export const teamRouter = createTRPCRouter({
         teamId: teamId!,
         id: input.id,
       });
-    }),
-
-  availablePlans: protectedProcedure.query(async ({ ctx: { db, teamId } }) => {
-    return getAvailablePlans(db, teamId!);
-  }),
-
-  updateBaseCurrency: protectedProcedure
-    .input(updateBaseCurrencySchema)
-    .mutation(async ({ ctx: { teamId }, input }) => {
-      const event = await tasks.trigger("update-base-currency", {
-        teamId: teamId!,
-        baseCurrency: input.baseCurrency,
-      } satisfies UpdateBaseCurrencyPayload);
-
-      return event;
     }),
 });

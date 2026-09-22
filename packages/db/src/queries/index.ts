@@ -37,4 +37,3 @@ export * from "./users";
 export * from "./users-on-team";
 export * from "./oauth-flow";
 export * from "./oauth-applications";
-export * from "./notification-settings";

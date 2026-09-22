@@ -3,12 +3,7 @@ import { createLoader, parseAsString, parseAsStringLiteral } from "nuqs/server";
 
 export const inboxFilterParamsSchema = {
   q: parseAsString,
-  status: parseAsStringLiteral([
-    "done",
-    "pending",
-    "suggested_match",
-    "no_match",
-  ]),
+  status: parseAsStringLiteral(["done", "pending"]),
 };
 
 export function useInboxFilterParams() {
