@@ -4,9 +4,10 @@ import { trpcServer } from "@hono/trpc-server";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { closeDatabase, db, getConnectionPoolStats } from "@midday/db/client";
 import { download, verifySignedUrl } from "@midday/db/storage";
+import { WorkflowRuntimeLive, runWorkflows } from "@midday/jobs/runner";
 import { Scalar } from "@scalar/hono-api-reference";
 import { sql } from "drizzle-orm";
-import { Config, Effect } from "effect";
+import { Config, Effect, Logger } from "effect";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { invoiceHttp } from "./effect/invoice-http";
@@ -257,6 +258,12 @@ const main = Effect.gen(function* () {
 
   yield* Effect.addFinalizer(() => Effect.promise(invoiceHttp.dispose));
   yield* Effect.addFinalizer(() => Effect.promise(closeDatabase));
+  yield* Effect.forkScoped(
+    runWorkflows.pipe(
+      Effect.provide(WorkflowRuntimeLive),
+      Effect.provide(Logger.json),
+    ),
+  );
 
   const server = yield* HttpServer.HttpServer;
   yield* server.serve(
@@ -275,5 +282,5 @@ main.pipe(
     ),
   ),
   Effect.scoped,
-  BunRuntime.runMain,
+  BunRuntime.runMain({ disablePrettyLogger: true }),
 );

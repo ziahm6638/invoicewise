@@ -3,26 +3,29 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "trigger dev",
-    "deploy": "trigger deploy",
+    "worker": "bun run src/worker.ts",
+    "status": "bun run src/status.ts",
     "typecheck": "tsc --noEmit",
-    "verify:typesafe": "bun run src/verify-typesafe-pipeline.ts"
+    "test": "bun test src",
+    "verify": "bun run src/verify-workflows.ts"
   },
   "exports": {
+    ".": "./src/client.ts",
+    "./runner": "./src/runner.ts",
     "./schema": "./src/schema.ts"
   },
   "dependencies": {
+    "@effect/platform-bun": "^0.91.2",
     "@midday/db": "workspace:*",
     "@midday/documents": "workspace:*",
     "@midday/email": "workspace:*",
     "@midday/inbox": "workspace:*",
     "@midday/utils": "workspace:*",
+    "effect": "^3.22.2",
     "heic-convert": "1.2.4",
     "nanoid": "^5.1.5",
     "resend": "^4.6.0",
-    "sharp": "0.34.1",
-    "trigger.dev": "4.0.1",
-    "zod": "3.25.64"
+    "sharp": "0.34.1"
   },
   "devDependencies": {
     "@types/bun": "latest",

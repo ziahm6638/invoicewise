@@ -76,7 +76,7 @@ Forked from [Midday](https://github.com/midday-ai/midday), an open-source busine
 - Postgres + Drizzle (database)
 - Local filesystem storage for development; production object storage is deferred
 - Supabase Auth (temporary; replacement is a separate roadmap item)
-- Trigger.dev (background jobs)
+- Effect Workflows with a Postgres-backed queue
 - Nango (accounting integrations) — replacing GoCardless/Plaid bank connections
 
 ## Development

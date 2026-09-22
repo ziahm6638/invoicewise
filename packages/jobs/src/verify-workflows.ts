@@ -4,15 +4,19 @@ import {
   createInbox,
   createUserQuestion,
   deleteUserQuestion,
+  getInboxByFilePath,
   getUserQuestions,
+  getWorkflowJob,
   updateInboxWithProcessedData,
   updateUserQuestion,
 } from "@midday/db/queries";
-import { teams, users } from "@midday/db/schema";
+import { inbox, teams, users } from "@midday/db/schema";
 import { createStorageClientFromEnv } from "@midday/db/storage";
 import type { InvoiceExtraction } from "@midday/documents";
 import { eq } from "drizzle-orm";
-import { processDocumentAttachment } from "./tasks/inbox/process-document";
+import { Effect, Logger } from "effect";
+import { enqueueWorkflow, workflowKey } from "./client";
+import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -138,7 +142,19 @@ const priorExtraction: InvoiceExtraction = {
   purchaseOrderReference: "PO-7788",
 };
 
+const runBatch = () =>
+  Effect.runPromise(
+    runWorkflowBatch.pipe(
+      Effect.provide(WorkflowRuntimeLive),
+      Effect.provide(Logger.json),
+      Effect.scoped,
+    ),
+  );
+
 async function main() {
+  process.env.WORKFLOW_RETRY_BASE_MS = "50";
+  process.env.WORKFLOW_RETRY_MAX_MS = "50";
+
   const database = createDatabaseClient({
     primaryUrl: required("DATABASE_PRIMARY_URL"),
     isDevelopment: true,
@@ -151,12 +167,13 @@ async function main() {
     ),
   );
   const bytes = Buffer.from(await fixture.arrayBuffer());
+  const suffix = crypto.randomUUID();
   const typeSafeStub = startTypeSafeStub();
   process.env.TYPESAFE_API_KEY = "verification-key";
   process.env.TYPESAFE_BASE_URL = `http://127.0.0.1:${typeSafeStub.port}`;
   let teamId: string | undefined;
   let userId: string | undefined;
-  let uploadedPath: string[] | undefined;
+  const filePath = ["verification", suffix, "synthetic-invoice.pdf"];
   try {
     const [team] = await database.db
       .insert(teams)
@@ -263,30 +280,50 @@ async function main() {
       status: "pending",
     });
 
-    const filePath = [teamId, "inbox", "synthetic-invoice.pdf"];
-    uploadedPath = filePath;
-    await storage.upload({ bucket: "vault", path: filePath, file: bytes });
-    const stored = await storage.download({ bucket: "vault", path: filePath });
-    const storedBytes = Buffer.from(await stored.arrayBuffer());
-    const current = await createInbox(database.db, {
-      displayName: "synthetic-invoice.pdf",
+    const input = {
+      name: "process-attachment" as const,
       teamId,
-      filePath,
-      fileName: "synthetic-invoice.pdf",
-      contentType: "application/pdf",
-      size: bytes.length,
-      status: "processing",
-    });
-    if (!current) throw new Error("Unable to create current invoice");
+      idempotencyKey: workflowKey.attachment(teamId, filePath),
+      payload: {
+        filePath,
+        size: bytes.length,
+        mimetype: "application/pdf",
+        teamId,
+      },
+    };
+    const enqueued = await enqueueWorkflow(database.db, input);
 
-    const { record } = await processDocumentAttachment(database.db, {
-      inboxId: current.id,
+    await runBatch();
+    const afterFailure = await getWorkflowJob(database.db, {
+      id: enqueued.id,
       teamId,
-      documentUrl: `data:application/pdf;base64,${storedBytes.toString("base64")}`,
-      mimetype: "application/pdf",
-      companyName: "InvoiceWise Ltd",
     });
-    const judgments = record?.judgments ?? [];
+    if (afterFailure?.status !== "queued" || afterFailure.attempts !== 1) {
+      throw new Error("Expected the missing attachment to be queued for retry");
+    }
+
+    await storage.upload({ bucket: "vault", path: filePath, file: bytes });
+    const waitMs = Math.max(
+      0,
+      new Date(afterFailure.runAt).getTime() - Date.now() + 10,
+    );
+    await Bun.sleep(waitMs);
+    await runBatch();
+
+    const completed = await getWorkflowJob(database.db, {
+      id: enqueued.id,
+      teamId,
+    });
+    const invoice = await getInboxByFilePath(database.db, { filePath, teamId });
+    const [persisted] = invoice
+      ? await database.db
+          .select()
+          .from(inbox)
+          .where(eq(inbox.id, invoice.id))
+          .limit(1)
+      : [];
+    const repeated = await enqueueWorkflow(database.db, input);
+    const judgments = persisted?.judgments ?? [];
     const defaultJudgments = judgments.filter(
       (judgment) => judgment.source === "default",
     );
@@ -298,34 +335,36 @@ async function main() {
     const failedJudgment = judgments.find(
       (judgment) => judgment.status === "failed",
     );
+
     if (
-      record?.status !== "pending" ||
+      completed?.status !== "succeeded" ||
+      completed.attempts !== 2 ||
+      !persisted?.extraction ||
+      persisted.status !== "pending" ||
       defaultJudgments.length !== 4 ||
       !approvalJudgment ||
-      !failedJudgment
+      !failedJudgment ||
+      !repeated.deduplicated ||
+      repeated.id !== enqueued.id
     ) {
-      throw new Error(
-        "Pipeline verification did not persist expected judgments",
-      );
+      throw new Error("Workflow verification did not reach the expected state");
     }
 
     console.log(
-      JSON.stringify(
-        {
-          id: record?.id,
-          status: record?.status,
-          filePath: record?.filePath,
-          extraction: record?.extraction,
-          judgments,
-        },
-        null,
-        2,
-      ),
+      JSON.stringify({
+        event: "workflow_verification_succeeded",
+        workflowId: completed.id,
+        attempts: completed.attempts,
+        persistedInvoiceId: persisted.id,
+        judgmentCount: judgments.length,
+        defaultJudgmentCount: defaultJudgments.length,
+        configuredJudgmentAnswered: true,
+        configuredJudgmentFailed: true,
+        idempotentRepeat: repeated.deduplicated,
+      }),
     );
   } finally {
-    if (uploadedPath) {
-      await storage.remove({ bucket: "vault", path: uploadedPath });
-    }
+    await storage.remove({ bucket: "vault", path: filePath });
     if (teamId) await database.db.delete(teams).where(eq(teams.id, teamId));
     if (userId) await database.db.delete(users).where(eq(users.id, userId));
     typeSafeStub.stop(true);

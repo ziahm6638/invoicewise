@@ -20,6 +20,7 @@ export class ReceiptProcessor {
       generateObject({
         model: mistral("mistral-medium-latest"),
         schema: receiptSchema,
+        output: "object",
         temperature: 0.1,
         abortSignal: AbortSignal.timeout(20000), // 20s
         messages: [
@@ -45,7 +46,7 @@ export class ReceiptProcessor {
       }),
     );
 
-    return result.object;
+    return result.object as ReturnType<typeof receiptSchema.parse>;
   }
 
   #getWebsite({
