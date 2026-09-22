@@ -1,18 +1,22 @@
+import { HttpApp, HttpServer } from "@effect/platform";
+import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
 import { trpcServer } from "@hono/trpc-server";
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { getConnectionPoolStats } from "@midday/db/client";
-import { db } from "@midday/db/client";
+import { closeDatabase, db, getConnectionPoolStats } from "@midday/db/client";
 import { download, verifySignedUrl } from "@midday/db/storage";
 import { Scalar } from "@scalar/hono-api-reference";
 import { sql } from "drizzle-orm";
+import { Config, Effect } from "effect";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
+import { invoiceHttp } from "./effect/invoice-http";
 import { routers } from "./rest/routers";
 import type { Context } from "./rest/types";
 import { createTRPCContext } from "./trpc/init";
 import { appRouter } from "./trpc/routers/_app";
 import { checkHealth } from "./utils/health";
 
+const allowedOrigins: string[] = [];
 const app = new OpenAPIHono<Context>();
 
 app.use(secureHeaders());
@@ -20,7 +24,7 @@ app.use(secureHeaders());
 app.use(
   "*",
   cors({
-    origin: process.env.ALLOWED_API_ORIGINS?.split(",") ?? [],
+    origin: allowedOrigins,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allowHeaders: [
       "Authorization",
@@ -243,8 +247,32 @@ app.get(
 
 app.route("/", routers);
 
-export default {
-  port: process.env.PORT ? Number.parseInt(process.env.PORT) : 3000,
-  fetch: app.fetch,
-  host: "::", // Listen on all interfaces
-};
+const main = Effect.gen(function* () {
+  const configuredOrigins = yield* Config.string("ALLOWED_API_ORIGINS").pipe(
+    Config.withDefault(""),
+    Config.map((value) => value.split(",").filter(Boolean)),
+  );
+  allowedOrigins.push(...configuredOrigins);
+
+  yield* Effect.addFinalizer(() => Effect.promise(invoiceHttp.dispose));
+  yield* Effect.addFinalizer(() => Effect.promise(closeDatabase));
+
+  const server = yield* HttpServer.HttpServer;
+  yield* server.serve(
+    HttpApp.fromWebHandler((request) => Promise.resolve(app.fetch(request))),
+  );
+  yield* Effect.never;
+});
+
+main.pipe(
+  Effect.provide(
+    BunHttpServer.layerConfig(
+      Config.unwrap({
+        port: Config.integer("PORT").pipe(Config.withDefault(3000)),
+        hostname: Config.succeed("::"),
+      }),
+    ),
+  ),
+  Effect.scoped,
+  BunRuntime.runMain,
+);

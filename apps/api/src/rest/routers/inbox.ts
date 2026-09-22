@@ -1,3 +1,4 @@
+import { invoiceHttp } from "@api/effect/invoice-http";
 import type { Context } from "@api/rest/types";
 import {
   deleteInboxResponseSchema,
@@ -13,16 +14,20 @@ import {
 import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
 import { z } from "@hono/zod-openapi";
-import {
-  deleteInbox,
-  getInbox,
-  getInboxById,
-  updateInbox,
-} from "@midday/db/queries";
-import { signedUrl } from "@midday/db/storage";
+import { deleteInbox, updateInbox } from "@midday/db/queries";
 import { withRequiredScope } from "../middleware";
 
 const app = new OpenAPIHono<Context>();
+const effectErrorSchema = z.object({
+  _tag: z.string(),
+  error: z.string(),
+});
+
+const forwardToEffect = (request: Request, teamId: string) => {
+  const headers = new Headers(request.headers);
+  headers.set("x-invoicewise-team-id", teamId);
+  return invoiceHttp.handler(new Request(request, { headers }));
+};
 
 app.openapi(
   createRoute({
@@ -46,23 +51,17 @@ app.openapi(
           },
         },
       },
+      500: {
+        description: "Invoice read failed",
+        content: {
+          "application/json": { schema: effectErrorSchema },
+        },
+      },
     },
     middleware: [withRequiredScope("inbox.read")],
   }),
   async (c) => {
-    const db = c.get("db");
-    const teamId = c.get("teamId");
-    const { pageSize, cursor, order, ...filter } = c.req.valid("query");
-
-    const result = await getInbox(db, {
-      teamId,
-      pageSize,
-      cursor,
-      order,
-      ...filter,
-    });
-
-    return c.json(validateResponse(result, inboxResponseSchema));
+    return (await forwardToEffect(c.req.raw, c.get("teamId"))) as never;
   },
 );
 
@@ -88,20 +87,23 @@ app.openapi(
           },
         },
       },
+      404: {
+        description: "Inbox item not found",
+        content: {
+          "application/json": { schema: effectErrorSchema },
+        },
+      },
+      500: {
+        description: "Invoice read failed",
+        content: {
+          "application/json": { schema: effectErrorSchema },
+        },
+      },
     },
     middleware: [withRequiredScope("inbox.read")],
   }),
   async (c) => {
-    const db = c.get("db");
-    const teamId = c.get("teamId");
-    const { id } = c.req.valid("param");
-
-    const result = await getInboxById(db, {
-      id,
-      teamId,
-    });
-
-    return c.json(validateResponse(result, inboxItemResponseSchema));
+    return (await forwardToEffect(c.req.raw, c.get("teamId"))) as never;
   },
 );
 
@@ -132,9 +134,7 @@ app.openapi(
         description: "Bad request - Attachment file path not available",
         content: {
           "application/json": {
-            schema: z.object({
-              error: z.string(),
-            }),
+            schema: effectErrorSchema,
           },
         },
       },
@@ -142,9 +142,7 @@ app.openapi(
         description: "Inbox item not found",
         content: {
           "application/json": {
-            schema: z.object({
-              error: z.string(),
-            }),
+            schema: effectErrorSchema,
           },
         },
       },
@@ -153,9 +151,7 @@ app.openapi(
           "Internal server error - Failed to generate pre-signed URL",
         content: {
           "application/json": {
-            schema: z.object({
-              error: z.string(),
-            }),
+            schema: effectErrorSchema,
           },
         },
       },
@@ -163,48 +159,7 @@ app.openapi(
     middleware: [withRequiredScope("inbox.read")],
   }),
   async (c) => {
-    const db = c.get("db");
-    const teamId = c.get("teamId");
-    const { id } = c.req.valid("param");
-    const { download = true } = c.req.valid("query");
-
-    // First, verify the inbox item exists and belongs to the team
-    const inboxItem = await getInboxById(db, {
-      id,
-      teamId,
-    });
-
-    if (!inboxItem) {
-      return c.json({ error: "Inbox item not found" }, 404);
-    }
-
-    if (!inboxItem.filePath || inboxItem.filePath.length === 0) {
-      return c.json({ error: "Attachment file path not available" }, 400);
-    }
-
-    // Generate the pre-signed URL with 60-second expiration
-    const filePath = inboxItem.filePath.join("/");
-    const expireIn = 60; // 60 seconds
-
-    const url = await signedUrl({
-      bucket: "vault",
-      path: filePath,
-      expireIn,
-      options: {
-        download,
-      },
-    });
-
-    // Calculate expiration timestamp
-    const expiresAt = new Date(Date.now() + expireIn * 1000).toISOString();
-
-    const result = {
-      url,
-      expiresAt,
-      fileName: inboxItem.fileName || inboxItem.filePath.at(-1) || null,
-    };
-
-    return c.json(validateResponse(result, inboxPreSignedUrlResponseSchema));
+    return (await forwardToEffect(c.req.raw, c.get("teamId"))) as never;
   },
 );
 
