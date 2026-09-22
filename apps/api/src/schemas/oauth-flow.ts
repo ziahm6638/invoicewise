@@ -17,7 +17,7 @@ export const oauthAuthorizationRequestSchema = z.object({
   }),
   scope: z.string().openapi({
     description: "Space-separated list of requested scopes",
-    example: "transactions.read invoices.read",
+    example: "inbox.read teams.read",
   }),
   // SECURITY: Enhanced state parameter validation for CSRF protection
   state: z
@@ -44,7 +44,7 @@ export const oauthAuthorizationResponseSchema = z.object({
   authorize_url: z.string().url().openapi({
     description: "URL to redirect user for authorization",
     example:
-      "https://app.midday.ai/oauth/authorize?client_id=mid_abcdef123456789&...",
+      "https://invoicewise.uk/oauth/authorize?client_id=mid_abcdef123456789&...",
   }),
 });
 
@@ -103,7 +103,7 @@ export const oauthRefreshTokenRequestSchema = z.object({
   }),
   scope: z.string().optional().openapi({
     description: "Space-separated list of requested scopes (optional)",
-    example: "transactions.read invoices.read",
+    example: "inbox.read teams.read",
   }),
 });
 
@@ -127,7 +127,7 @@ export const oauthTokenResponseSchema = z.object({
   }),
   scope: z.string().openapi({
     description: "Space-separated list of granted scopes",
-    example: "transactions.read invoices.read",
+    example: "inbox.read teams.read",
   }),
 });
 
@@ -198,7 +198,7 @@ export const oauthAuthorizationDecisionSchema = z.object({
   }),
   scopes: z.array(z.enum(SCOPES)).openapi({
     description: "Scopes the user has approved",
-    example: ["transactions.read", "invoices.read"],
+    example: ["inbox.read", "teams.read"],
   }),
   redirect_uri: z.string().url().openapi({
     description: "Redirect URI for OAuth callback",
@@ -240,12 +240,12 @@ export const oauthApplicationInfoSchema = z.object({
   }),
   description: z.string().nullable().openapi({
     description: "Application description",
-    example: "A Raycast extension for managing transactions",
+    example: "An integration for processing extracted invoices",
   }),
   overview: z.string().nullable().openapi({
     description: "Application overview",
     example:
-      "This application provides advanced transaction management features including:\n- Real-time sync\n- Advanced filtering",
+      "This application delivers extracted invoice data to an accounting system.",
   }),
   developerName: z.string().nullable().openapi({
     description: "The person or company developing this application",
@@ -276,7 +276,7 @@ export const oauthApplicationInfoSchema = z.object({
   }),
   scopes: z.array(z.string()).openapi({
     description: "Requested scopes",
-    example: ["transactions.read", "invoices.read"],
+    example: ["inbox.read", "teams.read"],
   }),
   redirectUri: z.string().url().openapi({
     description: "Redirect URI",

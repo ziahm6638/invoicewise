@@ -12,14 +12,9 @@ export async function GET(req: NextRequest) {
   const cookieStore = await cookies();
   const requestUrl = new URL(req.url);
   const code = requestUrl.searchParams.get("code");
-  const client = requestUrl.searchParams.get("client");
   const returnTo = requestUrl.searchParams.get("return_to");
   const provider = requestUrl.searchParams.get("provider");
   const mfaSetupVisited = cookieStore.has(Cookies.MfaSetupVisited);
-
-  if (client === "desktop") {
-    return NextResponse.redirect(`${requestUrl.origin}/verify?code=${code}`);
-  }
 
   if (provider) {
     cookieStore.set(Cookies.PreferredSignInProvider, provider, {

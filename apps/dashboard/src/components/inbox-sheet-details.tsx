@@ -2,7 +2,6 @@
 
 import { FileViewer } from "@/components/file-viewer";
 import { FormatAmount } from "@/components/format-amount";
-import { InboxActions } from "@/components/inbox/inbox-actions";
 import { useInboxParams } from "@/hooks/use-inbox-params";
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
@@ -57,8 +56,7 @@ export function InboxSheetDetails() {
     );
   }
 
-  const isProcessing =
-    data.status === "processing" || data.status === "analyzing";
+  const isProcessing = data.status === "processing";
   const logoUrl = getWebsiteLogo(data.website);
 
   return (
@@ -126,10 +124,6 @@ export function InboxSheetDetails() {
             />
           </div>
         )}
-
-        <div className="absolute bottom-4 z-10 left-4 right-4">
-          <InboxActions data={data} key={data.id} />
-        </div>
       </div>
 
       <Separator className="mb-4" />

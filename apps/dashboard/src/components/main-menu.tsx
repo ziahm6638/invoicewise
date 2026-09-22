@@ -7,75 +7,15 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 const icons = {
-  "/": () => <Icons.Overview size={20} />,
-  "/transactions": () => <Icons.Transactions size={20} />,
-  "/invoices": () => <Icons.Invoice size={20} />,
-  "/tracker": () => <Icons.Tracker size={20} />,
-  "/customers": () => <Icons.Customers size={20} />,
-  "/vault": () => <Icons.Vault size={20} />,
   "/settings": () => <Icons.Settings size={20} />,
-  "/apps": () => <Icons.Apps size={20} />,
   "/inbox": () => <Icons.Inbox2 size={20} />,
 } as const;
 
 const items = [
   {
-    path: "/",
-    name: "Overview",
-  },
-  {
     path: "/inbox",
     name: "Inbox",
     children: [{ path: "/inbox/settings", name: "Settings" }],
-  },
-  {
-    path: "/transactions",
-    name: "Transactions",
-    children: [
-      {
-        path: "/transactions/categories",
-        name: "Categories",
-      },
-      {
-        path: "/transactions?step=connect",
-        name: "Connect bank",
-      },
-      {
-        path: "/transactions?step=import&hide=true",
-        name: "Import",
-      },
-      { path: "/transactions?createTransaction=true", name: "Create new" },
-    ],
-  },
-  {
-    path: "/invoices",
-    name: "Invoices",
-    children: [
-      { path: "/invoices/products", name: "Products" },
-      { path: "/invoices?type=create", name: "Create new" },
-    ],
-  },
-  {
-    path: "/tracker",
-    name: "Tracker",
-    children: [{ path: "/tracker?create=true", name: "Create new" }],
-  },
-  {
-    path: "/customers",
-    name: "Customers",
-    children: [{ path: "/customers?createCustomer=true", name: "Create new" }],
-  },
-  {
-    path: "/vault",
-    name: "Vault",
-  },
-  {
-    path: "/apps",
-    name: "Apps",
-    children: [
-      { path: "/apps", name: "All" },
-      { path: "/apps?tab=installed", name: "Installed" },
-    ],
   },
   {
     path: "/settings",
@@ -83,9 +23,7 @@ const items = [
     children: [
       { path: "/settings", name: "General" },
       { path: "/settings/billing", name: "Billing" },
-      { path: "/settings/accounts", name: "Bank Connections" },
       { path: "/settings/members", name: "Members" },
-      { path: "/settings/notifications", name: "Notifications" },
       { path: "/settings/developer", name: "Developer" },
     ],
   },

@@ -19,7 +19,6 @@ export const GET = async (req: NextRequest) => {
   const plan = req.nextUrl.searchParams.get("plan");
   const redirectPath = req.nextUrl.searchParams.get("redirectPath") ?? "/";
   const teamId = req.nextUrl.searchParams.get("teamId");
-  const isDesktop = req.nextUrl.searchParams.get("isDesktop") === "true";
   const planType = req.nextUrl.searchParams.get("planType");
 
   const plans = getPlans();
@@ -40,10 +39,6 @@ export const GET = async (req: NextRequest) => {
 
   const successUrl = new URL("/api/checkout/success", req.nextUrl.origin);
   successUrl.searchParams.set("redirectPath", redirectPath);
-
-  if (isDesktop) {
-    successUrl.searchParams.set("isDesktop", "true");
-  }
 
   const checkout = await api.checkouts.create({
     products: [selectedPlan.id],

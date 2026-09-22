@@ -30,8 +30,7 @@ export function InboxGetStarted() {
               <h2 className="font-medium text-lg">Connect Your Gmail</h2>
               <p className="pb-6 text-sm text-[#878787]">
                 Connect your Gmail to automatically import receipts and
-                invoices. We'll extract the data and match it to your
-                transactions seamlessly.
+                invoices. We'll extract the data and prepare it for delivery.
               </p>
             </div>
 
@@ -61,7 +60,7 @@ export function InboxGetStarted() {
             <div className="text-center mt-8">
               <p className="text-xs text-[#878787]">
                 You can also just drag and drop files here for automatic
-                reconciliation.
+                extraction.
               </p>
             </div>
           </div>

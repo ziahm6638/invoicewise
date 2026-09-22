@@ -67,33 +67,3 @@ export function getPlanByProductId(productId: string) {
 
   return plan.key;
 }
-
-export function getPlanLimits(plan: string) {
-  switch (plan) {
-    case "starter":
-      return {
-        users: 1,
-        bankConnections: 1,
-        storage: 10 * 1024 * 1024 * 1024, // 10GB in bytes
-        inbox: 50,
-        invoices: 10,
-      };
-    case "trial":
-    case "pro":
-      return {
-        users: 10,
-        bankConnections: 10,
-        storage: 100, // 100GB in bytes
-        inbox: 500,
-        invoices: 30,
-      };
-    default:
-      return {
-        users: 1,
-        bankConnections: 1,
-        storage: 10 * 1024 * 1024 * 1024, // 10GB in bytes
-        inbox: 50,
-        invoices: 10,
-      };
-  }
-}

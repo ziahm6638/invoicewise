@@ -35,7 +35,6 @@ import { useEffect, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useCopyToClipboard } from "usehooks-ts";
 import { EditInboxModal } from "../modals/edit-inbox-modal";
-import { InboxActions } from "./inbox-actions";
 import { InboxDetailsSkeleton } from "./inbox-details-skeleton";
 
 export function InboxDetails() {
@@ -136,24 +135,6 @@ export function InboxDetails() {
         queryClient.invalidateQueries({
           queryKey: trpc.inbox.get.infiniteQueryKey(),
         });
-
-        queryClient.invalidateQueries({
-          queryKey: trpc.transactions.get.infiniteQueryKey(),
-        });
-      },
-    }),
-  );
-
-  const retryMatchingMutation = useMutation(
-    trpc.inbox.retryMatching.mutationOptions({
-      onSuccess: () => {
-        // Refresh queries after retry matching completes
-        queryClient.invalidateQueries({
-          queryKey: trpc.inbox.getById.queryKey({ id: data?.id }),
-        });
-        queryClient.invalidateQueries({
-          queryKey: trpc.inbox.get.infiniteQueryKey(),
-        });
       },
     }),
   );
@@ -161,17 +142,6 @@ export function InboxDetails() {
   const handleOnDelete = () => {
     if (data?.id) {
       deleteInboxMutation.mutate({ id: data.id });
-    }
-  };
-
-  const handleRetryMatching = () => {
-    if (data?.id) {
-      updateInboxMutation.mutate({
-        id: data.id,
-        status: "analyzing",
-      });
-
-      retryMatchingMutation.mutate({ id: data.id });
     }
   };
 
@@ -259,23 +229,6 @@ export function InboxDetails() {
                     <>
                       <Icons.Check className="mr-2 size-4" />
                       <span className="text-xs">Mark as done</span>
-                    </>
-                  )}
-                </DropdownMenuItem>
-
-                <DropdownMenuItem
-                  onClick={handleRetryMatching}
-                  disabled={retryMatchingMutation.isPending}
-                >
-                  {retryMatchingMutation.isPending ? (
-                    <>
-                      <Icons.Refresh className="mr-2 size-4 animate-spin" />
-                      <span className="text-xs">Processing...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Icons.Refresh className="mr-2 size-4" />
-                      <span className="text-xs">Retry Matching</span>
                     </>
                   )}
                 </DropdownMenuItem>
@@ -388,10 +341,6 @@ export function InboxDetails() {
           </div>
 
           <Separator />
-
-          <div className="absolute bottom-4 left-4 right-4 z-50">
-            <InboxActions data={data} key={data.id} />
-          </div>
 
           {data?.filePath && (
             <FileViewer
