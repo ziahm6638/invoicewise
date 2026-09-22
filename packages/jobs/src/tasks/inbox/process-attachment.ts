@@ -1,5 +1,6 @@
 import { getDb } from "@jobs/init";
 import { processAttachmentSchema } from "@jobs/schema";
+import { createClient } from "@midday/db/legacy-client";
 import {
   createInbox,
   getInboxByFilePath,
@@ -8,7 +9,6 @@ import {
 } from "@midday/db/queries";
 import { getTeamById } from "@midday/db/queries";
 import { DocumentClient } from "@midday/documents";
-import { createClient } from "@midday/supabase/job";
 import { logger, schemaTask } from "@trigger.dev/sdk";
 import { convertHeic } from "../document/convert-heic";
 
@@ -35,7 +35,7 @@ export const processAttachment = schemaTask({
     website,
     inboxAccountId,
   }) => {
-    const supabase = createClient();
+    const database = createClient();
 
     // If the file is a HEIC we need to convert it to a JPG
     if (mimetype === "image/heic") {
@@ -93,7 +93,7 @@ export const processAttachment = schemaTask({
       throw Error("Inbox data not found");
     }
 
-    const { data } = await supabase.storage
+    const { data } = await database.storage
       .from("vault")
       .createSignedUrl(filePath.join("/"), 60);
 

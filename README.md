@@ -73,7 +73,9 @@ Forked from [Midday](https://github.com/midday-ai/midday), an open-source busine
 - Bun
 - TypeScript
 - Next.js
-- Supabase (database, storage, auth)
+- Postgres + Drizzle (database)
+- Local filesystem storage for development; production object storage is deferred
+- Supabase Auth (temporary; replacement is a separate roadmap item)
 - Trigger.dev (background jobs)
 - Nango (accounting integrations) — replacing GoCardless/Plaid bank connections
 

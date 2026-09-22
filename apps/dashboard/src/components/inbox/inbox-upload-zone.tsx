@@ -3,7 +3,6 @@
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
 import { resumableUpload } from "@/utils/upload";
-import { createClient } from "@midday/supabase/client";
 import { cn } from "@midday/ui/cn";
 import { useToast } from "@midday/ui/use-toast";
 import { stripSpecialCharacters } from "@midday/utils";
@@ -30,7 +29,6 @@ type Props = {
 export function UploadZone({ children, onUploadComplete }: Props) {
   const trpc = useTRPC();
   const { data: user } = useUserQuery();
-  const supabase = createClient();
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState(0);
   const [showProgress, setShowProgress] = useState(false);
@@ -102,7 +100,7 @@ export function UploadZone({ children, onUploadComplete }: Props) {
 
       const results = (await Promise.all(
         files.map(async (file: File, idx: number) =>
-          resumableUpload(supabase, {
+          resumableUpload({
             bucket: "vault",
             path,
             file,

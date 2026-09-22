@@ -15,7 +15,6 @@
     "@midday/documents": "workspace:*",
     "@midday/email": "workspace:*",
     "@midday/inbox": "workspace:*",
-    "@midday/supabase": "workspace:*",
     "@midday/utils": "workspace:*",
     "heic-convert": "1.2.4",
     "nanoid": "^5.1.5",

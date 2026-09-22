@@ -1,9 +1,9 @@
-import { createClient } from "@midday/supabase/job";
+import { createClient } from "@midday/db/legacy-client";
 
 export async function shouldSendEmail(teamId: string) {
-  const supabase = createClient();
+  const database = createClient();
 
-  const { data, error } = await supabase
+  const { data, error } = await database
     .from("teams")
     .select("id")
     .eq("id", teamId)

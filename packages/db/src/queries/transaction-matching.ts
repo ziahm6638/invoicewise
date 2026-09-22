@@ -36,6 +36,7 @@ export type FindMatchesParams = {
 export type FindInboxMatchesParams = {
   teamId: string;
   transactionId: string;
+  includeAlreadyMatched?: boolean;
 };
 
 export type MatchResult = {

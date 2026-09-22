@@ -1,7 +1,8 @@
 # Local development
 
 This setup runs InvoiceWise's API and dashboard locally. Postgres and Redis run
-in Docker; the apps run with Bun. Redis is included because the API's auth,
+in Docker; the apps run with Bun. Product database reads and writes use Drizzle
+against this Postgres instance. Redis is included because the API's auth,
 team-permission, and read-after-write caches use `@midday/cache`.
 
 ## Prerequisites
@@ -27,8 +28,7 @@ bun run db:migrate
 
 The `--wait` flag waits for both `postgres` and `redis` to become healthy. The
 migration command applies `packages/db/migrations` to the database configured
-by `DATABASE_SESSION_POOLER` (falling back to `DATABASE_PRIMARY_URL`). There is
-no product-data seed in this repository.
+by `DATABASE_PRIMARY_URL`. There is no product-data seed in this repository.
 
 Local development sets only `DATABASE_PRIMARY_URL`. Leave
 `DATABASE_FRA_URL`, `DATABASE_SJC_URL`, and `DATABASE_IAD_URL` unset so
@@ -60,7 +60,8 @@ bun run dev:dashboard
 ```
 
 Open <http://localhost:3001/login>. The inherited dashboard still uses
-Supabase auth. The local placeholder Supabase values are enough to render its
+Supabase Auth only. Product data, file storage, and update polling no longer
+use Supabase. The local placeholder Supabase values are enough to render its
 logged-out page, but sign-in and authenticated pages require a real Supabase
 project until auth is replaced.
 
@@ -79,12 +80,17 @@ are split by the process that reads them:
 | --- | --- | --- |
 | `.env` | Docker Compose and database migration tooling | Postgres container settings and the migration connection URL |
 | `apps/api/.env` | Hono API | Postgres, Redis, local URLs, and placeholder secrets; provider keys are optional until their routes are used |
-| `apps/dashboard/.env` | Next.js dashboard | Local API URL and placeholder Supabase values for the logged-out page; external provider keys are optional |
+| `apps/dashboard/.env` | Next.js dashboard | Local database/API/storage values and placeholder Supabase Auth values for the logged-out page; external provider keys are optional |
 | `packages/jobs/.env` | Trigger.dev jobs | Only needed when running `bun run jobs:dashboard`; copy `packages/jobs/.env-template` and supply Trigger.dev/provider credentials |
 
-`DATABASE_PRIMARY_POOLER_URL` is retained for background jobs. The local API
-uses `DATABASE_PRIMARY_URL`; `DATABASE_SESSION_POOLER` is used only by
-Drizzle's migration command.
+The API, background jobs, dashboard server routes, and Drizzle migrations all
+use `DATABASE_PRIMARY_URL`.
+
+Files are stored under `LOCAL_STORAGE_PATH` and served by the API through
+short-lived HMAC-signed URLs. This is the proven local-development path; the
+production object-storage backend is intentionally deferred to a later lane.
+Dashboard realtime refreshes use five-second polling until a dedicated local
+event transport is selected.
 
 ## Stop local services
 

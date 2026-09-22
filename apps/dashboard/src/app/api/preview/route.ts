@@ -1,9 +1,11 @@
 import { getPdfImage } from "@/utils/pdf-to-img";
-import { createClient } from "@midday/supabase/server";
+import { db } from "@midday/db/client";
+import { getUserTeamId } from "@midday/db/queries";
+import { download } from "@midday/db/storage";
+import { getSession } from "@midday/supabase/cached-queries";
 import type { NextRequest } from "next/server";
 
 export async function GET(request: NextRequest) {
-  const supabase = await createClient({ admin: true });
   const { searchParams } = new URL(request.url);
   let filePath = searchParams.get("filePath");
 
@@ -16,11 +18,22 @@ export async function GET(request: NextRequest) {
     filePath = filePath.substring("vault/".length);
   }
 
-  const { data: pdfBlob, error: downloadError } = await supabase.storage
-    .from("vault")
-    .download(filePath);
+  const {
+    data: { session },
+  } = await getSession();
+  if (!session) {
+    return new Response("Unauthorized", { status: 401 });
+  }
 
-  if (downloadError) {
+  const teamId = await getUserTeamId(db, session.user.id);
+  if (!teamId || filePath.split("/")[0] !== teamId) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  let pdfBlob: Blob;
+  try {
+    pdfBlob = await download({ bucket: "vault", path: filePath });
+  } catch {
     return new Response("Error downloading file", { status: 500 });
   }
 

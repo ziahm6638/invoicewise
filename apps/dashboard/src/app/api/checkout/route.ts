@@ -1,13 +1,11 @@
 import { getDiscount, getPlans } from "@/utils/plans";
 import { api } from "@/utils/polar";
+import { db } from "@midday/db/client";
+import { getTeamById, hasTeamAccess } from "@midday/db/queries";
 import { getSession } from "@midday/supabase/cached-queries";
-import { getTeamByIdQuery } from "@midday/supabase/queries";
-import { createClient } from "@midday/supabase/server";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const GET = async (req: NextRequest) => {
-  const supabase = await createClient();
-
   const {
     data: { session },
   } = await getSession();
@@ -29,7 +27,11 @@ export const GET = async (req: NextRequest) => {
     throw new Error("Invalid plan");
   }
 
-  const { data: team } = await getTeamByIdQuery(supabase, teamId!);
+  if (!teamId || !(await hasTeamAccess(db, teamId, session.user.id))) {
+    throw new Error("Team not found");
+  }
+
+  const team = await getTeamById(db, teamId);
 
   if (!team) {
     throw new Error("Team not found");

@@ -1,4 +1,4 @@
-import { createClient } from "@midday/supabase/job";
+import { createClient } from "@midday/db/legacy-client";
 import { schemaTask } from "@trigger.dev/sdk";
 import convert from "heic-convert";
 import sharp from "sharp";
@@ -15,11 +15,11 @@ export const convertHeic = schemaTask({
     filePath: z.array(z.string()),
   }),
   run: async ({ filePath }) => {
-    const supabase = createClient();
+    const database = createClient();
 
     console.log("Converting HEIC to JPG");
 
-    const { data } = await supabase.storage
+    const { data } = await database.storage
       .from("vault")
       .download(filePath.join("/"));
 
@@ -43,7 +43,7 @@ export const convertHeic = schemaTask({
       .toBuffer();
 
     // Upload the converted image with .jpg extension
-    const { data: uploadedData } = await supabase.storage
+    const { data: uploadedData } = await database.storage
       .from("vault")
       .upload(filePath.join("/"), image, {
         contentType: "image/jpeg",

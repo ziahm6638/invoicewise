@@ -1,12 +1,12 @@
 import { onboardTeamSchema } from "@jobs/schema";
 import { shouldSendEmail } from "@jobs/utils/check-team-plan";
 import { resend } from "@jobs/utils/resend";
+import { createClient } from "@midday/db/legacy-client";
 import { GetStartedEmail } from "@midday/email/emails/get-started";
 import { TrialEndedEmail } from "@midday/email/emails/trial-ended";
 import { TrialExpiringEmail } from "@midday/email/emails/trial-expiring";
 import { WelcomeEmail } from "@midday/email/emails/welcome";
 import { render } from "@midday/email/render";
-import { createClient } from "@midday/supabase/job";
 import { logger, schemaTask, wait } from "@trigger.dev/sdk";
 
 export const onboardTeam = schemaTask({
@@ -14,9 +14,9 @@ export const onboardTeam = schemaTask({
   schema: onboardTeamSchema,
   maxDuration: 300,
   run: async ({ userId }) => {
-    const supabase = createClient();
+    const database = createClient();
 
-    const { data: user, error } = await supabase
+    const { data: user, error } = await database
       .from("users")
       .select("id, full_name, email, team_id")
       .eq("id", userId)
