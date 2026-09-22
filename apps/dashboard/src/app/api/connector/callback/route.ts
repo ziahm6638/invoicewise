@@ -1,6 +1,6 @@
 import { getQueryClient, trpc } from "@/trpc/server";
-import type { InitialInboxSetupPayload } from "@midday/jobs/schema";
-import { tasks } from "@trigger.dev/sdk";
+import { db } from "@midday/db/client";
+import { enqueueWorkflow, workflowKey } from "@midday/jobs";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
@@ -31,9 +31,11 @@ export async function GET(request: Request) {
       );
     }
 
-    await tasks.trigger("initial-inbox-setup", {
-      id: account.id,
-    } satisfies InitialInboxSetupPayload);
+    await enqueueWorkflow(db, {
+      name: "initial-inbox-setup",
+      idempotencyKey: workflowKey.inboxSetup(account.id),
+      payload: { id: account.id },
+    });
 
     return NextResponse.redirect(
       new URL(`/inbox?connected=true&provider=${state}`, request.url),

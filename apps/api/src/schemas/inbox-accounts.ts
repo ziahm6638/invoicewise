@@ -15,3 +15,5 @@ export const syncInboxAccountSchema = z.object({
   id: z.string(),
   manualSync: z.boolean().optional(),
 });
+
+export const workflowStatusSchema = z.object({ id: z.string().uuid() });

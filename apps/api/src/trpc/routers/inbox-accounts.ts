@@ -3,11 +3,12 @@ import {
   deleteInboxAccountSchema,
   exchangeCodeForAccountSchema,
   syncInboxAccountSchema,
+  workflowStatusSchema,
 } from "@api/schemas/inbox-accounts";
 import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
 import { deleteInboxAccount, getInboxAccounts } from "@midday/db/queries";
 import { InboxConnector } from "@midday/inbox/connector";
-import { schedules, tasks } from "@trigger.dev/sdk";
+import { enqueueWorkflow, getWorkflowStatus, workflowKey } from "@midday/jobs";
 import { TRPCError } from "@trpc/server";
 
 export const inboxAccountsRouter = createTRPCRouter({
@@ -60,21 +61,30 @@ export const inboxAccountsRouter = createTRPCRouter({
         teamId: teamId!,
       });
 
-      if (data?.scheduleId) {
-        await schedules.del(data.scheduleId);
-      }
-
       return data;
     }),
 
   sync: protectedProcedure
     .input(syncInboxAccountSchema)
-    .mutation(async ({ input }) => {
-      const event = await tasks.trigger("sync-inbox-account", {
-        id: input.id,
-        manualSync: input.manualSync || false,
+    .mutation(async ({ ctx: { db, teamId }, input }) => {
+      return enqueueWorkflow(db, {
+        name: "sync-inbox-account",
+        teamId: teamId!,
+        idempotencyKey: workflowKey.inboxSync(
+          input.id,
+          `manual:${Math.floor(Date.now() / 60_000)}`,
+        ),
+        payload: {
+          id: input.id,
+          manualSync: input.manualSync ?? false,
+          scheduleNext: false,
+        },
       });
+    }),
 
-      return event;
+  syncStatus: protectedProcedure
+    .input(workflowStatusSchema)
+    .query(async ({ ctx: { db, teamId }, input }) => {
+      return getWorkflowStatus(db, { id: input.id, teamId: teamId! });
     }),
 });

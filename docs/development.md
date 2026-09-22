@@ -22,13 +22,16 @@ bun install
 cp .env.example .env
 cp apps/api/.env-template apps/api/.env
 cp apps/dashboard/.env-example apps/dashboard/.env
-docker compose up -d --wait
+docker compose up -d --wait postgres redis minio
+docker compose run --rm minio-init
 docker compose ps
 bun run db:migrate
 ```
 
-The `--wait` flag waits for `postgres`, `redis`, and `minio` to become healthy;
-`minio-init` creates the private bucket and exits. The migration command applies
+The `--wait` flag waits for `postgres`, `redis`, and `minio` to become healthy.
+The one-shot `minio-init` command then creates the private bucket and exits;
+running it separately avoids Docker Compose treating that successful exit as a
+failed `--wait`. The migration command applies
 `packages/db/migrations` to the database configured by `DATABASE_PRIMARY_URL`.
 There is no product-data seed in this repository.
 
@@ -42,8 +45,9 @@ Local development sets only `DATABASE_PRIMARY_URL`. Leave
 bun run dev:api
 ```
 
-The API listens on <http://localhost:3003>. Effect's Bun HTTP server owns the
-process; inherited Hono and tRPC routes continue through its compatibility
+The API listens on <http://localhost:3003>. Effect's Bun HTTP server and the
+workflow runner share the process and shutdown scope, so background work starts
+with the API. Inherited Hono and tRPC routes continue through the compatibility
 handler while product paths are converted incrementally. In another terminal,
 verify the database-backed health route:
 
@@ -55,6 +59,35 @@ Expected response:
 
 ```json
 {"status":"ok"}
+```
+
+## Background workflows
+
+Product work is enqueued with `enqueueWorkflow` from `@midday/jobs`. The
+enqueue call writes a `workflow_jobs` row in Postgres and requires an
+idempotency key; repeating the same workflow name and key returns the existing
+row instead of scheduling duplicate work. The API-owned Effect runner claims
+due rows with `FOR UPDATE SKIP LOCKED` and runs at most
+`WORKFLOW_CONCURRENCY` jobs at once (default `4`).
+
+Failed work is retried three times by default with exponential backoff from 5
+seconds to 60 seconds. A running job has a renewable two-minute lease. If the
+process dies, another runner reclaims the job after that lease; a final expired
+lease is marked failed. Every start, retry, success, and terminal failure is
+written as a structured JSON log with the workflow ID, name, attempt, and
+outcome.
+
+The API starts the runner automatically. A second runner can safely be started
+against the same queue for local concurrency testing:
+
+```bash
+bun run jobs:worker
+```
+
+Inspect recent jobs and the `stuck` flag (a running row whose lease expired):
+
+```bash
+bun run jobs:status
 ```
 
 ## Run the dashboard
@@ -82,10 +115,10 @@ are split by the process that reads them:
 
 | File | Used by | Local requirements |
 | --- | --- | --- |
-| `.env` | Docker Compose and database migration tooling | Postgres/MinIO container settings, migration connection URL, and storage defaults |
-| `apps/api/.env` | Effect/Bun API, including inherited Hono and tRPC routes | Postgres, Redis, local URLs, storage selection, and the shared Better Auth secret; provider keys are optional until their routes are used |
+| `.env` | Docker Compose, database migrations, and the root workflow commands | Postgres/MinIO container settings, migration connection URL, storage selection, and TypeSafe credentials |
+| `apps/api/.env` | Effect/Bun API and its workflow runner, including inherited Hono and tRPC routes | Postgres, Redis, local URLs, storage selection, runner settings, and the shared Better Auth secret; provider keys are optional until their workflows run |
 | `apps/dashboard/.env` | Next.js dashboard | Postgres, local API/storage values, storage selection, the same Better Auth secret, and optional email/provider keys |
-| `packages/jobs/.env` | Background jobs | Copy `packages/jobs/.env-template`; use the same storage settings as the API and dashboard, then supply runner/provider credentials |
+| `packages/jobs/.env` | Direct package-level worker commands | Copy `packages/jobs/.env-template`; use the same database, storage, and provider settings as the API |
 
 The API, background jobs, dashboard server routes, Better Auth, and Drizzle
 migrations all use `DATABASE_PRIMARY_URL`. `BETTER_AUTH_SECRET` must be at
@@ -93,24 +126,29 @@ least 32 characters and identical in the dashboard and API environment files.
 When those apps run on sibling subdomains, set `BETTER_AUTH_COOKIE_DOMAIN` in
 both files to their shared parent domain (for example, `.invoicewise.uk`).
 
-Invoice extraction and its default judgments use TypeSafe. Set
-`TYPESAFE_API_KEY` in the root `.env` for the local verification command and in
-`packages/jobs/.env` when running Trigger.dev. `TYPESAFE_BASE_URL` and
-`TYPESAFE_MODEL` default to the values in the templates.
+Invoice extraction and its judgments use TypeSafe. Set `TYPESAFE_API_KEY` in
+the API or standalone worker environment for normal workflow processing.
+`TYPESAFE_BASE_URL` and `TYPESAFE_MODEL` have committed defaults. The local
+verification command starts a deterministic TypeSafe stub and does not require
+external credentials.
 
 To verify the stored-PDF-to-database path with the committed synthetic fixture:
 
 ```bash
-docker compose up -d --wait
+docker compose up -d --wait postgres redis minio
+docker compose run --rm minio-init
 bun run db:migrate
 cd packages/jobs
-bun --env-file=../../.env run verify:typesafe
+bun --env-file=../../.env run verify
 ```
 
-The command uploads `packages/documents/src/test/fixtures/synthetic-invoice.pdf`
-to the configured storage backend, runs the same processing function used by
-the attachment job, prints the persisted extraction and judgments, then removes
-its temporary team and invoice rows.
+The command uses the configured storage backend and first queues the synthetic
+PDF while it is missing to prove the retry path. It then uploads
+`packages/documents/src/test/fixtures/synthetic-invoice.pdf`, runs the real
+queued attachment workflow through TypeSafe extraction and judgments, checks
+the persisted invoice (including workspace questions), repeats the same
+idempotency key, prints the structured runner logs and a verification summary,
+and removes its temporary rows and file.
 
 ## Document storage
 
@@ -146,7 +184,8 @@ STORAGE_S3_FORCE_PATH_STYLE=true
 Then run the repeatable backend integration test:
 
 ```bash
-docker compose up -d --wait
+docker compose up -d --wait postgres redis minio
+docker compose run --rm minio-init
 STORAGE_BACKEND=s3 \
 STORAGE_SIGNING_SECRET=local-development-storage-secret \
 STORAGE_PUBLIC_URL=http://localhost:3003 \
@@ -182,8 +221,8 @@ Use the jurisdiction endpoint instead (for example,
 `https://<account-id>.eu.r2.cloudflarestorage.com`) when the R2 bucket has a
 jurisdiction. Do not enable an `r2.dev` public URL or public bucket access.
 
-Dashboard realtime refreshes use five-second polling until a dedicated local
-event transport is selected.
+Dashboard workflow status uses one-second polling until a dedicated local event
+transport is selected.
 
 ## Stop local services
 

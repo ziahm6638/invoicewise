@@ -7,9 +7,8 @@ import { getAllowedAttachments } from "@midday/documents";
 import { LogEvents } from "@midday/events/events";
 import { setupAnalytics } from "@midday/events/server";
 import { getInboxIdFromEmail, inboxWebhookPostSchema } from "@midday/inbox";
-import type { ProcessAttachmentPayload } from "@midday/jobs/schema";
+import { enqueueWorkflow, workflowKey } from "@midday/jobs";
 import { getExtensionFromMimeType } from "@midday/utils";
-import { tasks } from "@trigger.dev/sdk";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { headers } from "next/headers";
@@ -171,16 +170,20 @@ export async function POST(req: Request) {
 
     const insertData = await Promise.all(uploadedAttachments ?? []);
 
-    await tasks.batchTrigger(
-      "process-attachment",
-      insertData.map((item) => ({
-        payload: {
-          filePath: item.file_path!,
-          mimetype: item.content_type!,
-          size: item.size!,
-          teamId: teamId!,
-        } satisfies ProcessAttachmentPayload,
-      })),
+    await Promise.all(
+      insertData.map((item) =>
+        enqueueWorkflow(db, {
+          name: "process-attachment",
+          teamId,
+          idempotencyKey: workflowKey.attachment(teamId, item.file_path!),
+          payload: {
+            filePath: item.file_path!,
+            mimetype: item.content_type!,
+            size: item.size!,
+            teamId,
+          },
+        }),
+      ),
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

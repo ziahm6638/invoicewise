@@ -107,6 +107,12 @@ export const invoiceQuestionTypeEnum = pgEnum("invoice_question_type", [
   "choice",
   "score",
 ]);
+export const workflowStatusEnum = pgEnum("workflow_status", [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+]);
 export const invoiceDeliveryTypeEnum = pgEnum("invoice_delivery_type", [
   "create",
   "create_and_send",
@@ -1419,6 +1425,61 @@ export const userQuestions = pgTable(
       foreignColumns: [users.id],
       name: "user_questions_created_by_fkey",
     }).onDelete("set null"),
+  ],
+);
+
+export const workflowJobs = pgTable(
+  "workflow_jobs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    name: text().notNull(),
+    teamId: uuid("team_id"),
+    payload: jsonb().$type<Record<string, unknown>>().notNull(),
+    status: workflowStatusEnum().default("queued").notNull(),
+    attempts: integer().default(0).notNull(),
+    maxAttempts: integer("max_attempts").default(3).notNull(),
+    runAt: timestamp("run_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    lockedBy: text("locked_by"),
+    lockedAt: timestamp("locked_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    heartbeatAt: timestamp("heartbeat_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    leaseExpiresAt: timestamp("lease_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    finishedAt: timestamp("finished_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    result: jsonb().$type<Record<string, unknown>>(),
+    lastError: text("last_error"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "workflow_jobs_team_id_fkey",
+    }).onDelete("cascade"),
+    unique("workflow_jobs_idempotency_key").on(
+      table.name,
+      table.idempotencyKey,
+    ),
+    index("workflow_jobs_due_idx").on(table.status, table.runAt),
+    index("workflow_jobs_team_id_idx").on(table.teamId),
   ],
 );
 

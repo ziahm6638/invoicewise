@@ -29,8 +29,8 @@ import {
   updateTeamById,
   updateTeamMember,
 } from "@midday/db/queries";
+import { enqueueWorkflow, workflowKey } from "@midday/jobs";
 import type { InviteTeamMembersPayload } from "@midday/jobs/schema";
-import { tasks } from "@trigger.dev/sdk";
 import { TRPCError } from "@trpc/server";
 
 export const teamRouter = createTRPCRouter({
@@ -234,12 +234,21 @@ export const teamRouter = createTRPCRouter({
 
       // Only trigger email sending if there are valid invites
       if (invites.length > 0) {
-        await tasks.trigger("invite-team-members", {
+        const payload = {
           teamId: teamId!,
           invites,
           ip,
           locale: "en",
-        } satisfies InviteTeamMembersPayload);
+        } satisfies InviteTeamMembersPayload;
+        await enqueueWorkflow(db, {
+          name: "invite-team-members",
+          teamId: teamId!,
+          payload,
+          idempotencyKey: workflowKey.invitations(
+            teamId!,
+            invites.map(({ inviteCode }) => inviteCode),
+          ),
+        });
       }
 
       // Return information about the invitation process

@@ -1,8 +1,8 @@
 # Effect architecture
 
 InvoiceWise product code should be implemented as Effect services and assembled
-with `Layer`. Migration is incremental: inherited Hono, tRPC, and Trigger.dev
-surfaces remain available until their product paths are converted.
+with `Layer`. Migration is incremental: inherited Hono and tRPC surfaces remain
+available until their product paths are converted.
 
 ## Proven slice
 
@@ -92,15 +92,18 @@ Now Effect:
 - REST invoice list, detail, and attachment URL behavior
 - Drizzle and storage injection for that slice
 - typed errors and schema-driven request/response handling for that slice
+- Postgres-backed workflow queue, leases, retries, concurrency, idempotency, and
+  structured run logs
+- invoice attachment processing, inbox-provider sync, team invitations, and
+  onboarding workflows
 
 Still inherited:
 
 - Hono authentication, scopes, rate limiting, storage-file serving, health,
   OAuth, teams, and users routes
 - all tRPC routers, including the dashboard's current inbox transport
-- Trigger.dev jobs and unconverted package-level async functions
+- unconverted package-level async functions
 
-Convert next in dependency order: TypeSafe extraction services and jobs,
-user-defined question judgments, delivery integrations/webhooks, then the
+Convert next in dependency order: delivery integrations/webhooks, then the
 remaining REST/tRPC endpoints. Move authentication into Effect only after the
 parallel auth lane establishes its replacement contract.

@@ -5,7 +5,12 @@
     "PORT",
     "TYPESAFE_API_KEY",
     "TYPESAFE_BASE_URL",
-    "TYPESAFE_MODEL"
+    "TYPESAFE_MODEL",
+    "WORKFLOW_CONCURRENCY",
+    "WORKFLOW_POLL_MS",
+    "WORKFLOW_LEASE_MS",
+    "WORKFLOW_RETRY_BASE_MS",
+    "WORKFLOW_RETRY_MAX_MS"
   ],
   "ui": "stream",
   "tasks": {
