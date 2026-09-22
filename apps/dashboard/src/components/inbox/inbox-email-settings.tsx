@@ -14,7 +14,7 @@ export function InboxEmailSettings() {
       <CardHeader>
         <CardTitle>Email Address</CardTitle>
         <CardDescription>
-          Use this unique email address for online purchases and receipts.
+          Forward supplier invoices to this address for automatic processing.
           Emails sent to this address will automatically appear in your inbox
           and will be extracted automatically.
         </CardDescription>

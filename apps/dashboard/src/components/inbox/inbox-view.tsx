@@ -11,7 +11,6 @@ import {
   useQueryClient,
   useSuspenseInfiniteQuery,
 } from "@tanstack/react-query";
-import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useInView } from "react-intersection-observer";
@@ -28,214 +27,85 @@ export function InboxView() {
   const { data: user } = useUserQuery();
   const { params, setParams } = useInboxParams();
   const { params: filter, hasFilter } = useInboxFilterParams();
-
-  const allSeenIdsRef = useRef(new Set<string>());
   const itemRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
-  const scrollAreaViewportRef = useRef<HTMLDivElement | null>(null);
 
-  const infiniteQueryOptions = trpc.inbox.get.infiniteQueryOptions(
-    {
-      order: params.order,
-      sort: params.sort,
-      ...filter,
-    },
-    {
-      getNextPageParam: ({ meta }) => meta?.cursor,
-    },
+  const options = trpc.inbox.get.infiniteQueryOptions(
+    { order: params.order, sort: params.sort, ...filter },
+    { getNextPageParam: ({ meta }) => meta?.cursor },
   );
-
   const { data, fetchNextPage, hasNextPage, refetch } =
-    useSuspenseInfiniteQuery(infiniteQueryOptions);
-
-  const tableData = useMemo(() => {
-    return data?.pages.flatMap((page) => page.data) ?? [];
-  }, [data]);
-
-  const performRefresh = () => {
+    useSuspenseInfiniteQuery(options);
+  const invoices = useMemo(
+    () => data.pages.flatMap((page) => page.data),
+    [data],
+  );
+  const refresh = useDebounceCallback(() => {
     refetch();
-
     queryClient.invalidateQueries({
       queryKey: trpc.inbox.getById.queryKey(),
     });
-  };
-
-  const debouncedRefresh = useDebounceCallback(() => {
-    performRefresh();
   }, 200);
 
   useRealtime({
     channelName: "realtime_inbox",
     table: "inbox",
     filter: `team_id=eq.${user?.teamId}`,
-    onEvent: (payload) => {
-      if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
-        debouncedRefresh();
-      }
+    onEvent: ({ eventType }) => {
+      if (eventType === "INSERT" || eventType === "UPDATE") refresh();
     },
   });
 
   useEffect(() => {
-    if (inView) {
-      fetchNextPage();
-    }
-  }, [inView]);
-
-  const newItemIds = useMemo(() => {
-    const newIds = new Set<string>();
-
-    for (const item of tableData) {
-      if (!allSeenIdsRef.current.has(item.id)) {
-        newIds.add(item.id);
-        allSeenIdsRef.current.add(item.id);
-      }
-    }
-
-    return newIds;
-  }, [tableData]);
+    if (inView && hasNextPage) fetchNextPage();
+  }, [fetchNextPage, hasNextPage, inView]);
 
   useEffect(() => {
-    if (!params.inboxId && tableData.length > 0) {
-      setParams({
-        ...params,
-        inboxId: tableData.at(0)?.id,
-      });
+    if (!params.inboxId && invoices[0]) {
+      setParams({ inboxId: invoices[0].id });
     }
-  }, [tableData, params.inboxId, setParams]);
+  }, [invoices, params.inboxId, setParams]);
 
-  // Arrow key navigation
-  useHotkeys(
-    "up",
-    (event) => {
-      event.preventDefault();
-      const currentIndex = tableData.findIndex(
-        (item) => item.id === params.inboxId,
-      );
+  const selectOffset = (offset: number) => {
+    const current = invoices.findIndex(({ id }) => id === params.inboxId);
+    const next = invoices[current + offset];
+    if (!next) return;
+    setParams({ inboxId: next.id });
+    requestAnimationFrame(() =>
+      itemRefs.current.get(next.id)?.scrollIntoView({ block: "nearest" }),
+    );
+  };
 
-      if (currentIndex > 0) {
-        const prevItem = tableData[currentIndex - 1];
-        setParams({
-          ...params,
-          inboxId: prevItem?.id,
-        });
-      }
-    },
-    [tableData, params, setParams],
-  );
+  useHotkeys("up", (event) => {
+    event.preventDefault();
+    selectOffset(-1);
+  });
+  useHotkeys("down", (event) => {
+    event.preventDefault();
+    selectOffset(1);
+  });
 
-  useHotkeys(
-    "down",
-    (event) => {
-      event.preventDefault();
-      const currentIndex = tableData.findIndex(
-        (item) => item.id === params.inboxId,
-      );
-
-      if (currentIndex < tableData.length - 1) {
-        const nextItem = tableData[currentIndex + 1];
-        setParams({
-          ...params,
-          inboxId: nextItem?.id,
-        });
-      }
-    },
-    [tableData, params, setParams],
-  );
-
-  // Scroll selected inbox item to center of viewport
-  useEffect(() => {
-    const inboxId = params.inboxId;
-    if (!inboxId) return;
-
-    // Use requestAnimationFrame to ensure DOM is ready
-    requestAnimationFrame(() => {
-      const itemElement = itemRefs.current.get(inboxId);
-      const viewport = scrollAreaViewportRef.current;
-      if (!itemElement || !viewport) return;
-
-      // Calculate position relative to viewport
-      const viewportRect = viewport.getBoundingClientRect();
-      const itemRect = itemElement.getBoundingClientRect();
-
-      // Calculate current scroll position
-      const itemTop = itemRect.top - viewportRect.top + viewport.scrollTop;
-      const itemHeight = itemRect.height;
-      const viewportHeight = viewport.clientHeight;
-
-      // Center the item in the viewport
-      const scrollPosition = itemTop - viewportHeight / 2 + itemHeight / 2;
-
-      // Scroll the viewport directly (not the window)
-      viewport.scrollTo({
-        top: Math.max(0, scrollPosition),
-        behavior: "smooth",
-      });
-    });
-  }, [params.inboxId, tableData]);
-
-  // If user is connected, and we don't have any data, we need to show a skeleton
-  if (params.connected && !tableData?.length) {
-    return <InboxViewSkeleton />;
-  }
-
-  if (hasFilter && !tableData?.length) {
-    return <NoResults />;
-  }
+  if (params.connected && !invoices.length) return <InboxViewSkeleton />;
+  if (hasFilter && !invoices.length) return <NoResults />;
 
   return (
-    <div className="flex flex-row space-x-8 mt-4">
-      <div className="w-full h-full">
-        <ScrollArea
-          ref={(node) => {
-            scrollAreaViewportRef.current = node as HTMLDivElement | null;
-          }}
-          className="relative w-full h-[calc(100vh-180px)] overflow-hidden"
-          hideScrollbar
-        >
-          <AnimatePresence initial={false}>
-            <div className="m-0 h-full space-y-4">
-              {tableData.map((item, index) => {
-                const isNewItem = newItemIds.has(item.id);
-
-                return (
-                  <motion.div
-                    key={item.id}
-                    initial={
-                      isNewItem ? { opacity: 0, y: -30, scale: 0.95 } : false
-                    }
-                    animate={
-                      isNewItem ? { opacity: 1, y: 0, scale: 1 } : "visible"
-                    }
-                    transition={
-                      isNewItem
-                        ? {
-                            duration: 0.4,
-                            ease: [0.23, 1, 0.32, 1],
-                            delay: index < 5 ? index * 0.05 : 0,
-                          }
-                        : undefined
-                    }
-                    exit="exit"
-                  >
-                    <InboxItem
-                      ref={(el) => {
-                        if (el) {
-                          itemRefs.current.set(item.id, el);
-                        } else {
-                          itemRefs.current.delete(item.id);
-                        }
-                      }}
-                      item={item}
-                      index={index}
-                    />
-                  </motion.div>
-                );
-              })}
-            </div>
-          </AnimatePresence>
-
-          <LoadMore ref={ref} hasNextPage={hasNextPage} />
-        </ScrollArea>
-      </div>
+    <div className="grid h-[calc(100vh-138px)] min-h-0 gap-4 lg:grid-cols-[minmax(300px,360px)_minmax(0,1fr)]">
+      <ScrollArea className="min-h-0 overflow-hidden border" hideScrollbar>
+        <ul aria-label="Invoices">
+          {invoices.map((item, index) => (
+            <li key={item.id}>
+              <InboxItem
+                ref={(node) => {
+                  if (node) itemRefs.current.set(item.id, node);
+                  else itemRefs.current.delete(item.id);
+                }}
+                item={item}
+                index={index}
+              />
+            </li>
+          ))}
+        </ul>
+        <LoadMore ref={ref} hasNextPage={hasNextPage} />
+      </ScrollArea>
 
       <InboxDetails />
     </div>

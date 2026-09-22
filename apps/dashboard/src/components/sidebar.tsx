@@ -26,8 +26,17 @@ export function Sidebar() {
           isExpanded ? "w-full" : "w-[69px]",
         )}
       >
-        <Link href="/" className="absolute left-[22px] transition-none">
+        <Link
+          href="/invoices"
+          aria-label="InvoiceWise invoices"
+          className="absolute left-[20px] flex items-center transition-none"
+        >
           <Icons.LogoSmall />
+          {isExpanded && (
+            <span className="ml-3 text-sm font-semibold tracking-tight">
+              InvoiceWise
+            </span>
+          )}
         </Link>
       </div>
 

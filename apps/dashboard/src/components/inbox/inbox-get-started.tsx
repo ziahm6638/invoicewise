@@ -18,7 +18,7 @@ export function InboxGetStarted() {
   const router = useRouter();
 
   const handleUpload = () => {
-    router.push("/inbox?connected=true", { scroll: false });
+    router.push("/invoices?connected=true", { scroll: false });
   };
 
   return (
@@ -27,10 +27,13 @@ export function InboxGetStarted() {
         <div className="relative z-20 m-auto flex w-full max-w-[380px] flex-col">
           <div className="flex w-full flex-col relative">
             <div className="pb-4 text-center">
-              <h2 className="font-medium text-lg">Connect Your Gmail</h2>
+              <h2 className="font-medium text-lg">
+                Bring in your first invoice
+              </h2>
               <p className="pb-6 text-sm text-[#878787]">
-                Connect your Gmail to automatically import receipts and
-                invoices. We'll extract the data and prepare it for delivery.
+                Connect Gmail to collect invoices automatically. InvoiceWise
+                will extract the fields, run your checks, and keep the source
+                document beside the result.
               </p>
             </div>
 
@@ -59,8 +62,7 @@ export function InboxGetStarted() {
 
             <div className="text-center mt-8">
               <p className="text-xs text-[#878787]">
-                You can also just drag and drop files here for automatic
-                extraction.
+                Or drag and drop a PDF here to process it now.
               </p>
             </div>
           </div>

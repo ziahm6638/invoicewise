@@ -14,6 +14,7 @@ import {
   getInboxById,
   updateInbox,
 } from "@midday/db/queries";
+import { signedUrl } from "@midday/db/storage";
 import { enqueueWorkflow, workflowKey } from "@midday/jobs";
 
 export const inboxRouter = createTRPCRouter({
@@ -29,10 +30,23 @@ export const inboxRouter = createTRPCRouter({
   getById: protectedProcedure
     .input(getInboxByIdSchema)
     .query(async ({ ctx: { db, teamId }, input }) => {
-      return getInboxById(db, {
+      const item = await getInboxById(db, {
         id: input.id,
         teamId: teamId!,
       });
+
+      if (!item) return item;
+
+      return {
+        ...item,
+        attachmentUrl: item.filePath?.length
+          ? await signedUrl({
+              bucket: "vault",
+              path: item.filePath,
+              expireIn: 60 * 60,
+            }).catch(() => null)
+          : null,
+      };
     }),
 
   delete: protectedProcedure

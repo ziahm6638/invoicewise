@@ -6,6 +6,8 @@ export const getInboxSchema = z.object({
   sort: z.string().nullable().optional(),
   pageSize: z.coerce.number().min(1).max(100).optional(),
   q: z.string().nullable().optional(),
+  dateFrom: z.string().date().nullable().optional(),
+  dateTo: z.string().date().nullable().optional(),
   status: z.enum(["done", "pending"]).nullable().optional(),
 });
 

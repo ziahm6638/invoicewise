@@ -5,26 +5,22 @@ import { Skeleton } from "@midday/ui/skeleton";
 
 export function InboxDetailsSkeleton() {
   return (
-    <div className="h-[calc(100vh-120px)] overflow-hidden flex-col border w-[614px] hidden md:flex shrink-0 -mt-[54px]">
-      <div className="flex items-center p-2 h-[52px] w-full" />
+    <div className="hidden h-full min-h-0 overflow-hidden border lg:flex lg:flex-col">
+      <div className="h-[72px] w-full p-5">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="mt-2 h-3 w-56" />
+      </div>
 
       <Separator />
       <div className="flex flex-1 flex-col">
-        <div className="flex items-start p-4">
-          <div className="flex items-start gap-4 text-sm">
-            <Skeleton className="h-[40px] w-[40px] rounded-full" />
-            <div className="grid gap-1 space-y-1">
-              <Skeleton className="h-4 w-[120px]" />
-              <Skeleton className="h-3 w-[50px]" />
-            </div>
+        <div className="grid min-h-0 flex-1 xl:grid-cols-2">
+          <Skeleton className="m-5" />
+          <div className="space-y-4 border-l p-5">
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-20 w-full" />
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-32 w-full" />
           </div>
-          <div className="grid gap-1 ml-auto text-right">
-            <Skeleton className="h-3 w-[70px] ml-auto" />
-          </div>
-        </div>
-        <Separator />
-        <div className="relative h-full">
-          <Skeleton className="h-full w-full" />
         </div>
       </div>
     </div>

@@ -9,8 +9,8 @@ import {
 export const inboxParamsSchema = {
   inboxId: parseAsString,
   type: parseAsStringLiteral(["list", "details"]),
-  order: parseAsStringLiteral(["asc", "desc"]).withDefault("asc"),
-  sort: parseAsStringLiteral(["date", "alphabetical"]).withDefault("date"),
+  order: parseAsStringLiteral(["asc", "desc"]).withDefault("desc"),
+  sort: parseAsStringLiteral(["date", "amount"]).withDefault("date"),
   connected: parseAsBoolean,
 };
 

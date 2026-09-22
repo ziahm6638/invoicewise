@@ -26,7 +26,7 @@ export async function GET(request: Request) {
 
     if (!account) {
       return NextResponse.redirect(
-        new URL("/inbox?connected=failed", request.url),
+        new URL("/invoices?connected=failed", request.url),
         { status: 302 },
       );
     }
@@ -38,7 +38,7 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.redirect(
-      new URL(`/inbox?connected=true&provider=${state}`, request.url),
+      new URL(`/invoices?connected=true&provider=${state}`, request.url),
       {
         status: 302,
       },
@@ -46,7 +46,7 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error(error);
     return NextResponse.redirect(
-      new URL("/inbox?connected=false", request.url),
+      new URL("/invoices?connected=false", request.url),
       { status: 302 },
     );
   }

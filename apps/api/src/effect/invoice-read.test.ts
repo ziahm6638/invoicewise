@@ -54,7 +54,7 @@ const RepositoryTest = Layer.succeed(InvoiceRepository, {
         hasPreviousPage: false,
         hasNextPage: false,
       },
-      data: [{ ...invoice, extraction: undefined, judgments: undefined }],
+      data: [invoice],
     });
   },
   findById: (id, teamId) => {
@@ -132,6 +132,8 @@ describe("Effect invoice read HTTP slice", () => {
           createdAt: invoice.createdAt,
           website: invoice.website,
           description: invoice.description,
+          extraction: invoice.extraction,
+          judgments: invoice.judgments,
           transaction: null,
         },
       ],

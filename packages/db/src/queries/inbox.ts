@@ -73,6 +73,8 @@ export type GetInboxParams = {
   sort?: string | null;
   pageSize?: number;
   q?: string | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
   status?:
     | "new"
     | "archived"
@@ -86,7 +88,17 @@ export type GetInboxParams = {
 };
 
 export async function getInbox(db: Database, params: GetInboxParams) {
-  const { teamId, cursor, order, sort, pageSize = 20, q, status } = params;
+  const {
+    teamId,
+    cursor,
+    order,
+    sort,
+    pageSize = 20,
+    q,
+    dateFrom,
+    dateTo,
+    status,
+  } = params;
 
   const whereConditions: SQL[] = [
     eq(inbox.teamId, teamId),
@@ -96,6 +108,16 @@ export async function getInbox(db: Database, params: GetInboxParams) {
   // Apply status filter
   if (status) {
     whereConditions.push(eq(inbox.status, status));
+  }
+
+  if (dateFrom) {
+    whereConditions.push(sql`${inbox.createdAt} >= ${dateFrom}::date`);
+  }
+
+  if (dateTo) {
+    whereConditions.push(
+      sql`${inbox.createdAt} < (${dateTo}::date + interval '1 day')`,
+    );
   }
 
   // Apply search query filter
@@ -133,6 +155,8 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       createdAt: inbox.createdAt,
       website: inbox.website,
       description: inbox.description,
+      extraction: inbox.extraction,
+      judgments: inbox.judgments,
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
         id: inboxAccounts.id,
@@ -153,19 +177,17 @@ export async function getInbox(db: Database, params: GetInboxParams) {
     .where(and(...whereConditions));
 
   // Apply sorting
-  if (sort === "alphabetical") {
-    if (order === "desc") {
-      query.orderBy(desc(inbox.displayName));
-    } else {
-      query.orderBy(asc(inbox.displayName));
-    }
+  if (sort === "amount") {
+    query.orderBy(
+      order === "asc"
+        ? sql`${inbox.amount} asc nulls last`
+        : sql`${inbox.amount} desc nulls last`,
+      desc(inbox.createdAt),
+    );
   } else {
-    // Default to date sorting
-    if (order === "desc") {
-      query.orderBy(asc(inbox.createdAt)); // Reverse order for desc
-    } else {
-      query.orderBy(desc(inbox.createdAt)); // Default is descending
-    }
+    query.orderBy(
+      order === "asc" ? asc(inbox.createdAt) : desc(inbox.createdAt),
+    );
   }
 
   // Apply pagination
