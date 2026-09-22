@@ -1,71 +1,32 @@
-"use client";
-
-import type { RouterOutputs } from "@api/trpc/routers/_app";
-import { Icons } from "@midday/ui/icons";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@midday/ui/tooltip";
+  type InvoiceState,
+  invoiceStateLabel,
+} from "@/components/inbox/invoice-state";
+import { Badge } from "@midday/ui/badge";
+import { cn } from "@midday/ui/cn";
 
-type Props = {
-  item: RouterOutputs["inbox"]["get"]["data"][number];
+const styles: Record<InvoiceState, string> = {
+  processing:
+    "border-amber-300/70 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300",
+  extracted:
+    "border-blue-300/70 bg-blue-50 text-blue-800 dark:bg-blue-950/30 dark:text-blue-300",
+  judged:
+    "border-violet-300/70 bg-violet-50 text-violet-800 dark:bg-violet-950/30 dark:text-violet-300",
+  delivered:
+    "border-emerald-300/70 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300",
+  failed: "border-destructive/40 bg-destructive/5 text-destructive",
 };
 
-export function InboxStatus({ item }: Props) {
-  // Don't show status for processing items - let skeleton handle the visual feedback
-  if (item.status === "processing" || item.status === "new") {
-    return null;
-  }
-
-  if (item.status === "pending") {
-    return (
-      <TooltipProvider delayDuration={0}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="p-1 text-[10px] px-1.5 py-0.5 cursor-default font-mono inline-block border">
-              <span>Pending</span>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent sideOffset={10} className="text-xs">
-            <p>This invoice is ready for review.</p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    );
-  }
-
-  if (item.status === "done") {
-    return (
-      <TooltipProvider delayDuration={0}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="flex space-x-1 items-center px-1.5 py-0.5 text-[10px] cursor-default font-mono border">
-              <Icons.Check className="size-3.5 mt-[1px]" />
-              <span>Reviewed</span>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent sideOffset={10} className="text-xs">
-            <p>This invoice has been reviewed.</p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    );
-  }
-
+export function InboxStatus({ state }: { state: InvoiceState }) {
   return (
-    <TooltipProvider delayDuration={0}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div className="flex space-x-1 items-center px-1.5 py-0.5 text-[10px] cursor-default font-mono border">
-            <span>{item.status}</span>
-          </div>
-        </TooltipTrigger>
-        <TooltipContent sideOffset={10} className="text-xs">
-          <p>This invoice is awaiting review.</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Badge
+      variant="outline"
+      className={cn(
+        "rounded-full px-2 py-0.5 font-sans text-[10px]",
+        styles[state],
+      )}
+    >
+      {invoiceStateLabel[state]}
+    </Badge>
   );
 }

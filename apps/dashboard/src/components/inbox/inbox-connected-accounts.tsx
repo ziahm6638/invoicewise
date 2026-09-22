@@ -74,8 +74,7 @@ function InboxAccountItem({ account }: { account: InboxAccount }) {
     if (isSyncing) {
       toast({
         title: "Syncing...",
-        description:
-          "We're scanning for PDF attachments and receipts, please wait.",
+        description: "We're scanning for invoice PDF attachments, please wait.",
         duration: Number.POSITIVE_INFINITY,
         variant: "spinner",
       });

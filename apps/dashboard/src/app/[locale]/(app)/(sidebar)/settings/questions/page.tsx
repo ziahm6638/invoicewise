@@ -1,12 +1,5 @@
-import { QuestionSettings } from "@/components/question-settings";
-import { prefetch, trpc } from "@/trpc/server";
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "Questions | InvoiceWise",
-};
-
-export default function QuestionsPage() {
-  prefetch(trpc.questions.list.queryOptions());
-  return <QuestionSettings />;
+export default function QuestionsRedirect() {
+  redirect("/questions");
 }

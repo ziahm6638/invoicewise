@@ -6,7 +6,7 @@ import { getQueryClient } from "@/trpc/server";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Billing | Midday",
+  title: "Billing | InvoiceWise",
 };
 
 export default async function Billing() {

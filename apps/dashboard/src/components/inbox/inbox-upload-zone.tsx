@@ -204,7 +204,7 @@ export function UploadZone({ children, onUploadComplete }: Props) {
         >
           <input {...getInputProps()} id="upload-files" />
           <p className="text-xs">
-            Drop your receipts here. <br />
+            Drop your invoices here. <br />
             Maximum of 25 files at a time.
           </p>
         </div>

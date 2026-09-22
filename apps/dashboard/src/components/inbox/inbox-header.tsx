@@ -3,24 +3,21 @@
 import { InboxOrdering } from "@/components/inbox/inbox-ordering";
 import { InboxSearch } from "@/components/inbox/inbox-search";
 import { Button } from "@midday/ui/button";
-import { Icons } from "@midday/ui/icons";
+import { Upload } from "lucide-react";
 
 export function InboxHeader() {
   return (
-    <div className="flex justify-center items-center space-x-4 mb-4 mt-6 w-full pr-[647px]">
+    <div className="mb-3 mt-4 flex w-full items-center gap-3">
       <InboxSearch />
-
-      <div className="flex space-x-2">
-        <InboxOrdering />
-
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() => document.getElementById("upload-files")?.click()}
-        >
-          <Icons.Add size={17} />
-        </Button>
-      </div>
+      <InboxOrdering />
+      <Button
+        className="shrink-0"
+        onClick={() => document.getElementById("upload-files")?.click()}
+      >
+        <Upload aria-hidden className="mr-2 size-4" />
+        <span className="hidden sm:inline">Upload invoice</span>
+        <span className="sm:hidden">Upload</span>
+      </Button>
     </div>
   );
 }

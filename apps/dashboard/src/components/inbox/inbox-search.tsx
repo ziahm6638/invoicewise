@@ -1,124 +1,129 @@
+"use client";
+
 import { useInboxFilterParams } from "@/hooks/use-inbox-filter-params";
+import { Button } from "@midday/ui/button";
 import { cn } from "@midday/ui/cn";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuPortal,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@midday/ui/dropdown-menu";
-import { Icons } from "@midday/ui/icons";
 import { Input } from "@midday/ui/input";
+import { CalendarDays, Search, SlidersHorizontal, X } from "lucide-react";
 import { useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 
-const statusFilters = [
-  { id: "all", name: "All" },
-  { id: "done", name: "Reviewed" },
-  { id: "pending", name: "Pending review" },
-];
-
 export function InboxSearch() {
   const [isOpen, setIsOpen] = useState(false);
-  const { params: filterParams, setParams, hasFilter } = useInboxFilterParams();
+  const { params, setParams, hasFilter } = useInboxFilterParams();
 
   useHotkeys("esc", () => setParams({ q: null }), {
     enableOnFormTags: true,
-    enabled: Boolean(filterParams.q),
+    enabled: Boolean(params.q),
   });
 
-  const handleSearch = (evt: React.ChangeEvent<HTMLInputElement>) => {
-    const value = evt.target.value;
-
-    if (value) {
-      setParams({ q: value });
-    } else {
-      setParams({ q: null });
-    }
-  };
-
   return (
-    <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-      <div className="flex space-x-4 items-center w-full">
-        <form
-          className="relative w-full"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setIsOpen(false);
-          }}
-        >
-          <Icons.Search className="absolute pointer-events-none left-3 top-[11px]" />
-          <Input
-            placeholder="Search or filter"
-            className="pl-9 w-full"
-            value={filterParams.q ?? ""}
-            onChange={handleSearch}
-            autoComplete="off"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck="false"
-          />
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      <form
+        className="relative w-full max-w-xl"
+        onSubmit={(event) => event.preventDefault()}
+      >
+        <Search
+          aria-hidden
+          className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+        />
+        <Input
+          aria-label="Search invoices by supplier"
+          placeholder="Search suppliers"
+          className="pl-9 pr-10"
+          value={params.q ?? ""}
+          onChange={(event) => setParams({ q: event.target.value || null })}
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck="false"
+        />
 
+        <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
           <DropdownMenuTrigger asChild>
             <button
-              onClick={() => setIsOpen((prev) => !prev)}
               type="button"
+              aria-label="Filter invoices by received date"
               className={cn(
-                "absolute z-10 right-3 top-[10px] opacity-50 transition-opacity duration-300 hover:opacity-100",
-                hasFilter && "opacity-100",
-                isOpen && "opacity-100",
+                "absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center text-muted-foreground transition-colors hover:text-foreground",
+                (params.dateFrom || params.dateTo) && "text-foreground",
               )}
             >
-              <Icons.Filter />
+              <SlidersHorizontal aria-hidden className="size-4" />
             </button>
           </DropdownMenuTrigger>
-        </form>
-      </div>
-
-      <DropdownMenuContent
-        className="w-[350px]"
-        align="end"
-        sideOffset={19}
-        alignOffset={-11}
-        side="bottom"
-      >
-        <DropdownMenuGroup>
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <Icons.ProjectStatus className="mr-2 h-4 w-4 rotate-180" />
-              <span>Status</span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuPortal>
-              <DropdownMenuSubContent
-                sideOffset={14}
-                alignOffset={-4}
-                className="p-0"
+          <DropdownMenuContent align="end" className="w-72 p-4" sideOffset={8}>
+            <div className="mb-3 flex items-center gap-2">
+              <CalendarDays
+                aria-hidden
+                className="size-4 text-muted-foreground"
+              />
+              <p className="text-sm font-medium">Date received</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label
+                htmlFor="received-from"
+                className="space-y-1.5 text-xs text-muted-foreground"
               >
-                <DropdownMenuRadioGroup
-                  value={filterParams.status ?? "all"}
-                  onValueChange={(value) =>
-                    setParams({
-                      status:
-                        value === "all" ? null : (value as "done" | "pending"),
-                    })
+                From
+                <Input
+                  id="received-from"
+                  type="date"
+                  value={params.dateFrom ?? ""}
+                  onChange={(event) =>
+                    setParams({ dateFrom: event.target.value || null })
                   }
-                >
-                  {statusFilters.map(({ id, name }) => (
-                    <DropdownMenuRadioItem key={id} value={id}>
-                      {name}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuSubContent>
-            </DropdownMenuPortal>
-          </DropdownMenuSub>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+                  onKeyDown={(event) => event.stopPropagation()}
+                />
+              </label>
+              <label
+                htmlFor="received-to"
+                className="space-y-1.5 text-xs text-muted-foreground"
+              >
+                To
+                <Input
+                  id="received-to"
+                  type="date"
+                  value={params.dateTo ?? ""}
+                  onChange={(event) =>
+                    setParams({ dateTo: event.target.value || null })
+                  }
+                  onKeyDown={(event) => event.stopPropagation()}
+                />
+              </label>
+            </div>
+            {(params.dateFrom || params.dateTo) && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="mt-3 w-full"
+                onClick={() => setParams({ dateFrom: null, dateTo: null })}
+              >
+                <X aria-hidden className="mr-2 size-3.5" />
+                Clear dates
+              </Button>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </form>
+
+      {hasFilter && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="hidden shrink-0 sm:flex"
+          onClick={() => setParams(null)}
+        >
+          Clear
+        </Button>
+      )}
+    </div>
   );
 }

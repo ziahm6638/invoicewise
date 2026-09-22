@@ -1,58 +1,100 @@
-type Judgment = {
-  questionId: string;
-  label: string;
-  status?: "answered" | "failed";
-  type: "boolean" | "choice" | "score";
-  answer?: boolean | string | number;
-  probability?: number;
-  confidence?: number;
-  error?: string;
-};
+import type { InvoiceJudgment } from "@midday/documents";
+import { Badge } from "@midday/ui/badge";
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
+
+function answerFor(judgment: InvoiceJudgment) {
+  if (judgment.status === "failed") return "Could not answer";
+  if (judgment.type === "boolean") return judgment.answer ? "Yes" : "No";
+  if (judgment.type === "score") {
+    return judgment.levels[String(judgment.answer)] ?? String(judgment.answer);
+  }
+  return judgment.answer;
+}
+
+function confidenceFor(judgment: InvoiceJudgment) {
+  if (judgment.status === "failed") return null;
+  if (judgment.type === "boolean") {
+    return judgment.answer ? judgment.probability : 1 - judgment.probability;
+  }
+  return judgment.confidence;
+}
 
 export function JudgmentResults({
   judgments,
 }: {
   judgments?: Record<string, unknown>[] | null;
 }) {
-  if (!judgments?.length) return null;
+  if (!judgments?.length) {
+    return (
+      <p className="py-5 text-sm text-muted-foreground">
+        Checks have not completed for this invoice yet.
+      </p>
+    );
+  }
 
   return (
-    <section className="max-h-64 overflow-y-auto border-b px-4 py-4">
-      <h3 className="mb-3 text-sm font-medium">Checks</h3>
-      <div className="space-y-3">
-        {(judgments as Judgment[]).map((judgment) => (
-          <div key={`${judgment.questionId}-${judgment.label}`}>
-            <div className="flex items-start justify-between gap-4 text-sm">
-              <span className="text-muted-foreground">{judgment.label}</span>
-              {judgment.status === "failed" ? (
-                <span className="font-medium text-destructive">Failed</span>
-              ) : (
-                <span className="text-right font-medium">
-                  {typeof judgment.answer === "boolean"
-                    ? judgment.answer
-                      ? "Yes"
-                      : "No"
-                    : judgment.answer}
-                </span>
-              )}
+    <div className="divide-y border-t">
+      {(judgments as InvoiceJudgment[]).map((judgment) => {
+        const confidence = confidenceFor(judgment);
+
+        return (
+          <div
+            key={`${judgment.questionId}-${judgment.questionVersionId ?? "current"}`}
+            className="py-4"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  {judgment.status === "failed" ? (
+                    <AlertTriangle
+                      aria-hidden
+                      className="size-4 text-destructive"
+                    />
+                  ) : (
+                    <CheckCircle2
+                      aria-hidden
+                      className="size-4 text-emerald-600 dark:text-emerald-400"
+                    />
+                  )}
+                  <p className="text-sm font-medium">{judgment.label}</p>
+                  {judgment.source === "custom" && (
+                    <Badge variant="tag">Your question</Badge>
+                  )}
+                </div>
+                {judgment.question !== judgment.label && (
+                  <p className="mt-1.5 max-w-[65ch] text-xs leading-5 text-muted-foreground">
+                    {judgment.question}
+                  </p>
+                )}
+              </div>
+              <div className="shrink-0 text-right">
+                <p
+                  className={
+                    judgment.status === "failed"
+                      ? "text-sm font-medium text-destructive"
+                      : "text-sm font-semibold"
+                  }
+                >
+                  {answerFor(judgment)}
+                </p>
+                {confidence !== null && (
+                  <p className="mt-1 text-xs tabular-nums text-muted-foreground">
+                    {percent(confidence)} confidence
+                  </p>
+                )}
+              </div>
             </div>
-            {judgment.status === "failed" ? (
-              <p className="mt-1 text-xs text-destructive">{judgment.error}</p>
-            ) : (
-              <p className="mt-1 text-right text-xs text-muted-foreground">
-                {judgment.type === "boolean" &&
-                  judgment.probability !== undefined &&
-                  `${percent(judgment.probability)} yes probability`}
-                {judgment.type !== "boolean" &&
-                  judgment.confidence !== undefined &&
-                  `${percent(judgment.confidence)} confidence`}
+            {judgment.status === "failed" && (
+              <p className="mt-2 text-xs leading-5 text-destructive">
+                {judgment.error ||
+                  "InvoiceWise could not produce a reliable answer."}
               </p>
             )}
           </div>
-        ))}
-      </div>
-    </section>
+        );
+      })}
+    </div>
   );
 }

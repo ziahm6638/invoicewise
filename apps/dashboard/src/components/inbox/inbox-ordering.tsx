@@ -8,7 +8,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@midday/ui/dropdown-menu";
-import { Icons } from "@midday/ui/icons";
+import { ArrowUpDown } from "lucide-react";
 
 export function InboxOrdering() {
   const { params, setParams } = useInboxParams();
@@ -16,32 +16,34 @@ export function InboxOrdering() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon">
-          <Icons.Sort size={16} />
+        <Button variant="outline" size="icon" aria-label="Sort invoices">
+          <ArrowUpDown aria-hidden className="size-4" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent>
-        <DropdownMenuCheckboxItem
-          checked={params.sort === "date" && params.order === "asc"}
-          onCheckedChange={() => setParams({ sort: "date", order: "asc" })}
-        >
-          Most recent
-        </DropdownMenuCheckboxItem>
-
+      <DropdownMenuContent align="end">
         <DropdownMenuCheckboxItem
           checked={params.sort === "date" && params.order === "desc"}
           onCheckedChange={() => setParams({ sort: "date", order: "desc" })}
         >
-          Oldest first
+          Newest received
         </DropdownMenuCheckboxItem>
-
         <DropdownMenuCheckboxItem
-          checked={params.sort === "alphabetical"}
-          onCheckedChange={() =>
-            setParams({ sort: "alphabetical", order: "asc" })
-          }
+          checked={params.sort === "date" && params.order === "asc"}
+          onCheckedChange={() => setParams({ sort: "date", order: "asc" })}
         >
-          Alphabetically
+          Oldest received
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={params.sort === "amount" && params.order === "desc"}
+          onCheckedChange={() => setParams({ sort: "amount", order: "desc" })}
+        >
+          Highest amount
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={params.sort === "amount" && params.order === "asc"}
+          onCheckedChange={() => setParams({ sort: "amount", order: "asc" })}
+        >
+          Lowest amount
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>

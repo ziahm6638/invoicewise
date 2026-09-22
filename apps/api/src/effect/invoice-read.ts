@@ -73,6 +73,8 @@ export const InvoiceListQuery = Schema.Struct({
     { default: () => 20 },
   ),
   q: Schema.optional(Schema.String),
+  dateFrom: Schema.optional(Schema.String),
+  dateTo: Schema.optional(Schema.String),
   status: Schema.optional(Schema.Literal("done", "pending")),
 });
 
