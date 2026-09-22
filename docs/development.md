@@ -40,8 +40,10 @@ Local development sets only `DATABASE_PRIMARY_URL`. Leave
 bun run dev:api
 ```
 
-The API listens on <http://localhost:3003>. In another terminal, verify its
-database-backed health route:
+The API listens on <http://localhost:3003>. Effect's Bun HTTP server owns the
+process; inherited Hono and tRPC routes continue through its compatibility
+handler while product paths are converted incrementally. In another terminal,
+verify the database-backed health route:
 
 ```bash
 curl --fail --silent http://localhost:3003/health
@@ -79,7 +81,7 @@ are split by the process that reads them:
 | File | Used by | Local requirements |
 | --- | --- | --- |
 | `.env` | Docker Compose and database migration tooling | Postgres container settings and the migration connection URL |
-| `apps/api/.env` | Hono API | Postgres, Redis, local URLs, and placeholder secrets; provider keys are optional until their routes are used |
+| `apps/api/.env` | Effect/Bun API, including inherited Hono and tRPC routes | Postgres, Redis, local URLs, and placeholder secrets; provider keys are optional until their routes are used |
 | `apps/dashboard/.env` | Next.js dashboard | Local database/API/storage values and placeholder Supabase Auth values for the logged-out page; external provider keys are optional |
 | `packages/jobs/.env` | Trigger.dev jobs | Only needed when running `bun run jobs:dashboard`; copy `packages/jobs/.env-template` and supply Trigger.dev/provider credentials |
 
