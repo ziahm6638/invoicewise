@@ -1,12 +1,10 @@
-import { tmpdir } from "node:os";
-import { resolve } from "node:path";
 import { type Database, createDatabaseClient } from "@midday/db/client";
 import {
   type GetInboxParams,
   getInbox,
   getInboxById,
 } from "@midday/db/queries";
-import { createStorageClient } from "@midday/db/storage";
+import { createStorageClientFromEnv } from "@midday/db/storage";
 import {
   Config,
   Context,
@@ -159,7 +157,7 @@ class InvoiceDatabase extends Context.Tag("invoicewise/InvoiceDatabase")<
 
 class StorageClient extends Context.Tag("invoicewise/StorageClient")<
   StorageClient,
-  { readonly client: ReturnType<typeof createStorageClient> }
+  { readonly client: ReturnType<typeof createStorageClientFromEnv> }
 >() {}
 
 const optionalRedacted = (name: string) => Config.option(Config.redacted(name));
@@ -202,27 +200,9 @@ const DatabaseLive = Layer.scoped(
   ).pipe(Effect.map((client) => ({ db: client.db }))),
 );
 
-const StorageClientLive = Layer.effect(
-  StorageClient,
-  Config.all({
-    rootPath: Config.string("LOCAL_STORAGE_PATH").pipe(
-      Config.withDefault(resolve(tmpdir(), "invoicewise-storage")),
-    ),
-    publicUrl: Config.string("STORAGE_PUBLIC_URL").pipe(
-      Config.orElse(() => Config.string("NEXT_PUBLIC_API_URL")),
-      Config.withDefault("http://localhost:3003"),
-    ),
-    signingSecret: Config.redacted("LOCAL_STORAGE_SIGNING_SECRET"),
-  }).pipe(
-    Effect.map((config) => ({
-      client: createStorageClient({
-        rootPath: config.rootPath,
-        publicUrl: config.publicUrl,
-        signingSecret: Redacted.value(config.signingSecret),
-      }),
-    })),
-  ),
-);
+const StorageClientLive = Layer.sync(StorageClient, () => ({
+  client: createStorageClientFromEnv(),
+}));
 
 export const InvoiceRepositoryLive = Layer.effect(
   InvoiceRepository,

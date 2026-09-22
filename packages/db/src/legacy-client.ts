@@ -333,11 +333,16 @@ export function createClient() {
           async upload(
             path: string,
             file: Blob | Buffer | Uint8Array | ArrayBuffer,
-            _options?: { contentType?: string; upsert?: boolean },
+            options?: { contentType?: string; upsert?: boolean },
           ) {
             try {
               return {
-                data: await uploadFile({ bucket, path, file }),
+                data: await uploadFile({
+                  bucket,
+                  path,
+                  file,
+                  contentType: options?.contentType,
+                }),
                 error: null,
               };
             } catch (error) {
