@@ -45,6 +45,12 @@ export const OnboardTeamPayload = Schema.Struct({
 });
 export type OnboardTeamPayload = typeof OnboardTeamPayload.Type;
 
+export const DeliverWebhookPayload = Schema.Struct({
+  deliveryId: Schema.String,
+  teamId: Schema.String,
+});
+export type DeliverWebhookPayload = typeof DeliverWebhookPayload.Type;
+
 export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("process-attachment"),
@@ -65,6 +71,10 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("onboard-team"),
     payload: OnboardTeamPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("deliver-webhook"),
+    payload: DeliverWebhookPayload,
   }),
 );
 export type WorkflowRequest = typeof WorkflowRequest.Type;

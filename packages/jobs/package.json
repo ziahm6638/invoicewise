@@ -12,13 +12,15 @@
   "exports": {
     ".": "./src/client.ts",
     "./runner": "./src/runner.ts",
-    "./schema": "./src/schema.ts"
+    "./schema": "./src/schema.ts",
+    "./webhooks": "./src/webhooks.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "^0.91.2",
     "@midday/db": "workspace:*",
     "@midday/documents": "workspace:*",
     "@midday/email": "workspace:*",
+    "@midday/encryption": "workspace:*",
     "@midday/inbox": "workspace:*",
     "@midday/utils": "workspace:*",
     "effect": "^3.22.2",

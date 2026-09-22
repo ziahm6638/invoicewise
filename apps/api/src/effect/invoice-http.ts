@@ -3,6 +3,7 @@ import {
   HttpApiBuilder,
   HttpApiEndpoint,
   HttpApiGroup,
+  HttpApiSchema,
   HttpServer,
 } from "@effect/platform";
 import { Effect, Layer } from "effect";
@@ -10,6 +11,8 @@ import {
   AttachmentQuery,
   AttachmentUnavailable,
   AttachmentUrl,
+  DeliveryStatus,
+  InvoiceDetail,
   InvoiceHeaders,
   InvoiceItem,
   InvoiceListQuery,
@@ -46,6 +49,40 @@ const invoiceReadGroup = HttpApiGroup.make("invoiceRead")
       .addError(AttachmentUnavailable, { status: 400 })
       .addError(InvoiceNotFound, { status: 404 })
       .addError(InvoiceReadError, { status: 500 }),
+  )
+  .add(
+    HttpApiEndpoint.get("listInvoices", "/invoices")
+      .setHeaders(InvoiceHeaders)
+      .setUrlParams(InvoiceListQuery)
+      .addSuccess(InvoicePage)
+      .addError(InvoiceReadError, { status: 500 }),
+  )
+  .add(
+    HttpApiEndpoint.get("exportInvoices", "/invoices/export.csv")
+      .setHeaders(InvoiceHeaders)
+      .addSuccess(
+        HttpApiSchema.Text({ contentType: "text/csv; charset=utf-8" }),
+      )
+      .addError(InvoiceReadError, { status: 500 }),
+  )
+  .add(
+    HttpApiEndpoint.get("invoiceDetail", "/invoices/:id")
+      .setHeaders(InvoiceHeaders)
+      .setPath(InvoicePath)
+      .addSuccess(InvoiceDetail)
+      .addError(InvoiceNotFound, { status: 404 })
+      .addError(InvoiceReadError, { status: 500 }),
+  )
+  .add(
+    HttpApiEndpoint.get(
+      "invoiceDeliveryStatus",
+      "/invoices/:id/delivery-status",
+    )
+      .setHeaders(InvoiceHeaders)
+      .setPath(InvoicePath)
+      .addSuccess(DeliveryStatus)
+      .addError(InvoiceNotFound, { status: 404 })
+      .addError(InvoiceReadError, { status: 500 }),
   );
 
 export class InvoiceApi extends HttpApi.make("invoiceApi").add(
@@ -71,6 +108,18 @@ const InvoiceReadHandlers = HttpApiBuilder.group(
             headers["x-invoicewise-team-id"],
             urlParams.download,
           ),
+        )
+        .handle("listInvoices", ({ headers, urlParams }) =>
+          invoices.list(headers["x-invoicewise-team-id"], urlParams),
+        )
+        .handle("exportInvoices", ({ headers }) =>
+          invoices.exportCsv(headers["x-invoicewise-team-id"]),
+        )
+        .handle("invoiceDetail", ({ headers, path }) =>
+          invoices.detail(path.id, headers["x-invoicewise-team-id"]),
+        )
+        .handle("invoiceDeliveryStatus", ({ headers, path }) =>
+          invoices.deliveryStatus(path.id, headers["x-invoicewise-team-id"]),
         );
     }),
 );

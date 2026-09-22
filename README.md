@@ -83,6 +83,8 @@ Forked from [Midday](https://github.com/midday-ai/midday), an open-source busine
 
 See [docs/development.md](docs/development.md) for the complete local setup,
 including Docker services, database migrations, and app-specific commands.
+See [docs/delivery.md](docs/delivery.md) for REST, MCP, webhook signing and
+retry behavior, and CSV export.
 
 ## License
 

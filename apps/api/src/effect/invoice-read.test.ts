@@ -21,8 +21,21 @@ const invoice = {
   createdAt: "2026-09-20T12:00:00.000Z",
   website: "https://acme.example",
   description: "September services",
-  extraction: null,
-  judgments: null,
+  extraction: {
+    supplierName: "Acme Ltd",
+    invoiceNumber: "INV-42",
+    lineItems: [
+      {
+        description: "September services",
+        quantity: 1,
+        unitPrice: 125.5,
+        total: 125.5,
+      },
+    ],
+  },
+  judgments: [
+    { questionId: "known_supplier", label: "Known supplier", answer: true },
+  ],
   inboxAccountId: null,
   inboxAccount: null,
   transaction: null,
@@ -46,8 +59,30 @@ const RepositoryTest = Layer.succeed(InvoiceRepository, {
   },
   findById: (id, teamId) => {
     requestedTeamId = teamId;
-    return Effect.succeed(id === invoice.id ? invoice : undefined);
+    return Effect.succeed(
+      id === invoice.id && teamId === "team-123" ? invoice : undefined,
+    );
   },
+  deliveryStatus: (invoiceId, teamId) =>
+    Effect.succeed(
+      invoiceId === invoice.id && teamId === "team-123"
+        ? [
+            {
+              id: "delivery-1",
+              endpointId: "endpoint-1",
+              endpointUrl: "https://customer.example/webhooks",
+              event: "invoice.processed",
+              status: "succeeded" as const,
+              attempts: 1,
+              lastError: null,
+              deliveredAt: "2026-09-20T12:01:00.000Z",
+              createdAt: "2026-09-20T12:00:30.000Z",
+            },
+          ]
+        : [],
+    ),
+  exportRows: (teamId) =>
+    Effect.succeed(teamId === "team-123" ? [invoice] : []),
 });
 
 const StorageTest = Layer.succeed(InvoiceStorage, {
@@ -129,5 +164,52 @@ describe("Effect invoice read HTTP slice", () => {
     expect(body.url).toBe("http://localhost:3003/storage/vault/invoice.pdf");
     expect(body.fileName).toBe("invoice.pdf");
     expect(Number.isNaN(Date.parse(body.expiresAt))).toBe(false);
+  });
+
+  test("returns a complete invoice with line items and a signed document URL", async () => {
+    const response = await request(`/invoices/${invoice.id}`);
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body.extraction).toEqual(invoice.extraction);
+    expect(body.judgments).toEqual(invoice.judgments);
+    expect(body.lineItems).toEqual(invoice.extraction.lineItems);
+    expect(body.documentUrl).toBe(
+      "http://localhost:3003/storage/vault/invoice.pdf",
+    );
+  });
+
+  test("refuses an invoice owned by another workspace", async () => {
+    const response = await request(`/invoices/${invoice.id}`, {
+      headers: { "x-invoicewise-team-id": "team-other" },
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  test("returns delivery status for the workspace invoice", async () => {
+    const response = await request(`/invoices/${invoice.id}/delivery-status`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      data: [
+        expect.objectContaining({
+          id: "delivery-1",
+          status: "succeeded",
+          attempts: 1,
+        }),
+      ],
+    });
+  });
+
+  test("exports invoice data and dynamic judgment columns as CSV", async () => {
+    const response = await request("/invoices/export.csv");
+    const csv = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/csv");
+    expect(csv).toContain("known_supplier");
+    expect(csv).toContain("INV-42");
+    expect(csv).toContain("true");
   });
 });

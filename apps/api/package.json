@@ -2,6 +2,8 @@
   "name": "@midday/api",
   "scripts": {
     "dev": "TZ=UTC PORT=3003 bun run --hot src/index.ts",
+    "mcp": "bun run src/mcp/server.ts",
+    "verify:delivery": "bun run src/verify-delivery.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
@@ -14,9 +16,10 @@
     "./trpc/routers/_app": "./src/trpc/routers/_app.ts"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.7.5",
+    "@effect/ai": "0.37.0",
     "@effect/platform": "^0.97.2",
     "@effect/platform-bun": "^0.91.2",
-    "@better-auth/drizzle-adapter": "^1.7.5",
     "@hono/trpc-server": "^0.4.0",
     "@hono/zod-openapi": "^0.19.8",
     "@midday/cache": "workspace:*",
@@ -29,12 +32,12 @@
     "@polar-sh/sdk": "^0.34.9",
     "@scalar/hono-api-reference": "^0.9.4",
     "@trpc/server": "^11.5.0",
+    "bcryptjs": "^3.0.2",
+    "better-auth": "^1.7.5",
     "drizzle-orm": "^0.44.6",
     "effect": "^3.22.2",
     "hono": "^4.8.12",
     "hono-rate-limiter": "^0.4.2",
-    "bcryptjs": "^3.0.2",
-    "better-auth": "^1.7.5",
     "resend": "^4.6.0",
     "superjson": "^2.2.2",
     "zod": "3.25.64"

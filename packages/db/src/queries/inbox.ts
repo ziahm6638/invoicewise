@@ -275,6 +275,29 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
   return result;
 }
 
+export function getInvoiceExportRows(db: Database, teamId: string) {
+  return db
+    .select({
+      id: inbox.id,
+      fileName: inbox.fileName,
+      filePath: inbox.filePath,
+      displayName: inbox.displayName,
+      amount: inbox.amount,
+      currency: inbox.currency,
+      contentType: inbox.contentType,
+      date: inbox.date,
+      status: inbox.status,
+      createdAt: inbox.createdAt,
+      website: inbox.website,
+      description: inbox.description,
+      extraction: inbox.extraction,
+      judgments: inbox.judgments,
+    })
+    .from(inbox)
+    .where(and(eq(inbox.teamId, teamId), ne(inbox.status, "deleted")))
+    .orderBy(desc(inbox.createdAt));
+}
+
 export type DeleteInboxParams = {
   id: string;
   teamId: string;
@@ -1148,6 +1171,7 @@ export async function createInbox(db: Database, params: CreateInboxParams) {
     })
     .returning({
       id: inbox.id,
+      teamId: inbox.teamId,
       fileName: inbox.fileName,
       filePath: inbox.filePath,
       displayName: inbox.displayName,
@@ -1203,6 +1227,7 @@ export async function updateInboxWithProcessedData(
     .where(eq(inbox.id, id))
     .returning({
       id: inbox.id,
+      teamId: inbox.teamId,
       fileName: inbox.fileName,
       filePath: inbox.filePath,
       displayName: inbox.displayName,
