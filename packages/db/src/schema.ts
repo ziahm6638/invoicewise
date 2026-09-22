@@ -1865,6 +1865,8 @@ export const inbox = pgTable(
     forwardedTo: text("forwarded_to"),
     referenceId: text("reference_id"),
     meta: json(),
+    extraction: jsonb("extraction").$type<Record<string, unknown>>(),
+    judgments: jsonb("judgments").$type<Record<string, unknown>[]>(),
     status: inboxStatusEnum().default("new"),
     website: text(),
     displayName: text("display_name"),

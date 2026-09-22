@@ -88,6 +88,25 @@ are split by the process that reads them:
 The API, background jobs, dashboard server routes, and Drizzle migrations all
 use `DATABASE_PRIMARY_URL`.
 
+Invoice extraction and its default judgments use TypeSafe. Set
+`TYPESAFE_API_KEY` in the root `.env` for the local verification command and in
+`packages/jobs/.env` when running Trigger.dev. `TYPESAFE_BASE_URL` and
+`TYPESAFE_MODEL` default to the values in the templates.
+
+To verify the stored-PDF-to-database path with the committed synthetic fixture:
+
+```bash
+docker compose up -d --wait
+bun run db:migrate
+cd packages/jobs
+bun --env-file=../../.env run verify:typesafe
+```
+
+The command uploads `packages/documents/src/test/fixtures/synthetic-invoice.pdf`
+to local storage, runs the same processing function used by the attachment job,
+prints the persisted extraction and judgments, then removes its temporary team
+and invoice rows.
+
 Files are stored under `LOCAL_STORAGE_PATH` and served by the API through
 short-lived HMAC-signed URLs. This is the proven local-development path; the
 production object-storage backend is intentionally deferred to a later lane.

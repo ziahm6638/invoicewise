@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "trigger dev",
     "deploy": "trigger deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:typesafe": "bun run src/verify-typesafe-pipeline.ts"
   },
   "exports": {
     "./schema": "./src/schema.ts"
