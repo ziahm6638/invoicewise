@@ -15,6 +15,7 @@ import {
   hasTeamAccess,
   updateTeamById,
 } from "@midday/db/queries";
+import { HTTPException } from "hono/http-exception";
 import { withRequiredScope } from "../middleware";
 
 const app = new OpenAPIHono<Context>();
@@ -82,7 +83,7 @@ app.openapi(
     // First verify the user has access to this team
     const hasAccess = await hasTeamAccess(db, teamId, session.user.id);
     if (!hasAccess) {
-      throw new Error("Team not found or access denied");
+      throw new HTTPException(404, { message: "Team not found" });
     }
 
     const result = await getTeamById(db, teamId);
@@ -131,7 +132,7 @@ app.openapi(
 
     const hasAccess = await hasTeamAccess(db, teamId, session.user.id);
     if (!hasAccess) {
-      throw new Error("Team not found or access denied");
+      throw new HTTPException(404, { message: "Team not found" });
     }
 
     const result = await updateTeamById(db, {
@@ -175,7 +176,7 @@ app.openapi(
     // First verify the user has access to this team
     const hasAccess = await hasTeamAccess(db, teamId, session.user.id);
     if (!hasAccess) {
-      throw new Error("Team not found or access denied");
+      throw new HTTPException(404, { message: "Team not found" });
     }
 
     const result = await getTeamMembers(db, teamId);

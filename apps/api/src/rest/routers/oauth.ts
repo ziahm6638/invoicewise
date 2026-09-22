@@ -11,7 +11,7 @@ import {
   oauthTokenResponseSchema,
 } from "@api/schemas/oauth-flow";
 import { resend } from "@api/services/resend";
-import { verifyAccessToken } from "@api/utils/auth";
+import { getAuthSession } from "@api/utils/auth";
 import { validateClientCredentials } from "@api/utils/oauth";
 import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
@@ -189,7 +189,6 @@ app.openapi(
   }),
   async (c) => {
     const db = c.get("db");
-    const authHeader = c.req.header("Authorization");
     const body = c.req.valid("json");
 
     const {
@@ -203,8 +202,7 @@ app.openapi(
     } = body;
 
     // Verify user authentication
-    const accessToken = authHeader?.split(" ")[1];
-    const session = await verifyAccessToken(accessToken);
+    const session = await getAuthSession(c.req.raw.headers);
 
     if (!session) {
       throw new HTTPException(401, {

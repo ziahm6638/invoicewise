@@ -33,6 +33,7 @@ export async function getUserInvites(db: Database, email: string) {
 type AcceptTeamInviteParams = {
   id: string;
   userId: string;
+  email: string;
 };
 
 export async function acceptTeamInvite(
@@ -40,7 +41,10 @@ export async function acceptTeamInvite(
   params: AcceptTeamInviteParams,
 ) {
   const inviteData = await db.query.userInvites.findFirst({
-    where: and(eq(userInvites.id, params.id)),
+    where: and(
+      eq(userInvites.id, params.id),
+      eq(userInvites.email, params.email),
+    ),
     columns: {
       id: true,
       role: true,

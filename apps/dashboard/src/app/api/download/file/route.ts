@@ -1,11 +1,8 @@
-import { db } from "@midday/db/client";
-import { getUserTeamId } from "@midday/db/queries";
+import { getSession } from "@/lib/auth";
 import { download } from "@midday/db/storage";
-import { createClient } from "@midday/supabase/server";
 import type { NextRequest } from "next/server";
 
 export async function GET(req: NextRequest) {
-  const supabase = await createClient();
   const requestUrl = new URL(req.url);
   const path = requestUrl.searchParams.get("path");
   const filename = requestUrl.searchParams.get("filename");
@@ -14,16 +11,13 @@ export async function GET(req: NextRequest) {
     return new Response("Path is required", { status: 400 });
   }
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const session = await getSession();
 
   if (!session) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const teamId = await getUserTeamId(db, session.user.id);
-  if (!teamId || path.split("/")[0] !== teamId) {
+  if (!session.teamId || path.split("/")[0] !== session.teamId) {
     return new Response("Forbidden", { status: 403 });
   }
 

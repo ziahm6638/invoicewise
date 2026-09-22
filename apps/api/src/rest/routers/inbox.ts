@@ -15,6 +15,7 @@ import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
 import { z } from "@hono/zod-openapi";
 import { deleteInbox, updateInbox } from "@midday/db/queries";
+import { HTTPException } from "hono/http-exception";
 import { withRequiredScope } from "../middleware";
 
 const app = new OpenAPIHono<Context>();
@@ -198,6 +199,10 @@ app.openapi(
       teamId,
     });
 
+    if (!result) {
+      throw new HTTPException(404, { message: "Inbox item not found" });
+    }
+
     return c.json(validateResponse(result, deleteInboxResponseSchema));
   },
 );
@@ -243,6 +248,10 @@ app.openapi(
     const body = c.req.valid("json");
 
     const result = await updateInbox(db, { ...body, id, teamId });
+
+    if (!result) {
+      throw new HTTPException(404, { message: "Inbox item not found" });
+    }
 
     return c.json(validateResponse(result, inboxItemResponseSchema));
   },

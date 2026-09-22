@@ -1,7 +1,7 @@
 "use client";
 
+import { authClient } from "@/lib/auth-client";
 import { useTRPC } from "@/trpc/client";
-import { createClient } from "@midday/supabase/client";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,14 +29,13 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export function DeleteAccount() {
-  const supabase = createClient();
   const trpc = useTRPC();
   const router = useRouter();
 
   const deleteUserMutation = useMutation(
     trpc.user.delete.mutationOptions({
       onSuccess: async () => {
-        await supabase.auth.signOut();
+        await authClient.signOut();
         router.push("/");
       },
     }),

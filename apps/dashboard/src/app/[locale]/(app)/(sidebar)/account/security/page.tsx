@@ -1,16 +1,10 @@
-import { MfaSettingsList } from "@/components/mfa-settings-list";
-import { AddNewDeviceModal } from "@/components/modals/add-new-device";
+import { ChangePassword } from "@/components/change-password";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Security | Midday",
+  title: "Security | InvoiceWise",
 };
 
-export default async function Security() {
-  return (
-    <div className="space-y-12">
-      <MfaSettingsList />
-      <AddNewDeviceModal />
-    </div>
-  );
+export default function Security() {
+  return <ChangePassword />;
 }

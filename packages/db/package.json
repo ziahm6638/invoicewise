@@ -18,6 +18,7 @@
     "./job-client": "./src/job-client.ts",
     "./legacy-client": "./src/legacy-client.ts",
     "./queries": "./src/queries/index.ts",
+    "./queries/teams": "./src/queries/teams.ts",
     "./schema": "./src/schema.ts",
     "./storage": "./src/storage.ts",
     "./sql": "./src/sql.ts",

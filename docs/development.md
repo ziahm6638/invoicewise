@@ -61,11 +61,11 @@ Expected response:
 bun run dev:dashboard
 ```
 
-Open <http://localhost:3001/login>. The inherited dashboard still uses
-Supabase Auth only. Product data, file storage, and update polling no longer
-use Supabase. The local placeholder Supabase values are enough to render its
-logged-out page, but sign-in and authenticated pages require a real Supabase
-project until auth is replaced.
+Open <http://localhost:3001/signup> to create a local account and workspace.
+Better Auth stores users, credentials, sessions, memberships, and invitations
+in the same Postgres database as product data. In local development,
+verification and password-reset links are printed in the dashboard terminal
+when `RESEND_API_KEY` has the placeholder value from the template.
 
 If port 3001 is already in use, the dashboard script accepts an override:
 
@@ -81,12 +81,15 @@ are split by the process that reads them:
 | File | Used by | Local requirements |
 | --- | --- | --- |
 | `.env` | Docker Compose and database migration tooling | Postgres container settings and the migration connection URL |
-| `apps/api/.env` | Effect/Bun API, including inherited Hono and tRPC routes | Postgres, Redis, local URLs, and placeholder secrets; provider keys are optional until their routes are used |
-| `apps/dashboard/.env` | Next.js dashboard | Local database/API/storage values and placeholder Supabase Auth values for the logged-out page; external provider keys are optional |
+| `apps/api/.env` | Effect/Bun API, including inherited Hono and tRPC routes | Postgres, Redis, local URLs, and the shared Better Auth secret; provider keys are optional until their routes are used |
+| `apps/dashboard/.env` | Next.js dashboard | Postgres, local API/storage values, the same Better Auth secret, and optional email/provider keys |
 | `packages/jobs/.env` | Trigger.dev jobs | Only needed when running `bun run jobs:dashboard`; copy `packages/jobs/.env-template` and supply Trigger.dev/provider credentials |
 
-The API, background jobs, dashboard server routes, and Drizzle migrations all
-use `DATABASE_PRIMARY_URL`.
+The API, background jobs, dashboard server routes, Better Auth, and Drizzle
+migrations all use `DATABASE_PRIMARY_URL`. `BETTER_AUTH_SECRET` must be at
+least 32 characters and identical in the dashboard and API environment files.
+When those apps run on sibling subdomains, set `BETTER_AUTH_COOKIE_DOMAIN` in
+both files to their shared parent domain (for example, `.invoicewise.uk`).
 
 Invoice extraction and its default judgments use TypeSafe. Set
 `TYPESAFE_API_KEY` in the root `.env` for the local verification command and in

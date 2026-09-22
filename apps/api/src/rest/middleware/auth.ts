@@ -1,3 +1,4 @@
+import { getAuthSession } from "@api/utils/auth";
 import { expandScopes } from "@api/utils/scopes";
 import { isValidApiKeyFormat } from "@db/utils/api-keys";
 import { apiKeyCache } from "@midday/cache/api-key-cache";
@@ -16,7 +17,17 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
   const authHeader = c.req.header("Authorization");
 
   if (!authHeader) {
-    throw new HTTPException(401, { message: "Authorization header required" });
+    const session = await getAuthSession(c.req.raw.headers).catch(() => null);
+
+    if (!session) {
+      throw new HTTPException(401, { message: "Authentication required" });
+    }
+
+    c.set("session", session);
+    c.set("teamId", session.teamId);
+    c.set("scopes", expandScopes(["apis.all"]));
+    await next();
+    return;
   }
 
   const [scheme, token] = authHeader.split(" ");
@@ -27,6 +38,20 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
 
   if (!token) {
     throw new HTTPException(401, { message: "Token required" });
+  }
+
+  if (!token.startsWith("mid_") && token.includes(".")) {
+    const session = await getAuthSession(c.req.raw.headers).catch(() => null);
+
+    if (!session) {
+      throw new HTTPException(401, { message: "Invalid session token" });
+    }
+
+    c.set("session", session);
+    c.set("teamId", session.teamId);
+    c.set("scopes", expandScopes(["apis.all"]));
+    await next();
+    return;
   }
 
   const db = c.get("db");

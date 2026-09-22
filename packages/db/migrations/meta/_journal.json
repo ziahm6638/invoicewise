@@ -15,6 +15,13 @@
       "when": 1790080000000,
       "tag": "0001_typesafe_extraction",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790084250606,
+      "tag": "0002_better_auth",
+      "breakpoints": true
     }
   ]
 }
