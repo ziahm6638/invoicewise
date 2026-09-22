@@ -8,6 +8,7 @@ import {
   DocumentClient,
   type InvoiceJudgmentQuestion,
 } from "@midday/documents";
+import { emitInvoiceProcessedWebhooks } from "./webhooks";
 
 export async function processDocumentAttachment(
   db: Database,
@@ -97,6 +98,8 @@ export async function processDocumentAttachment(
     judgments: result.judgments,
     status: "pending",
   });
+
+  if (record) await emitInvoiceProcessedWebhooks(db, record);
 
   return { record, result };
 }

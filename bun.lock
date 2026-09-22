@@ -15,6 +15,7 @@
       "name": "@midday/api",
       "dependencies": {
         "@better-auth/drizzle-adapter": "^1.7.5",
+        "@effect/ai": "0.37.0",
         "@effect/platform": "^0.97.2",
         "@effect/platform-bun": "^0.91.2",
         "@hono/trpc-server": "^0.4.0",
@@ -263,6 +264,7 @@
         "@midday/db": "workspace:*",
         "@midday/documents": "workspace:*",
         "@midday/email": "workspace:*",
+        "@midday/encryption": "workspace:*",
         "@midday/inbox": "workspace:*",
         "@midday/utils": "workspace:*",
         "effect": "^3.22.2",
@@ -518,6 +520,8 @@
     "@date-fns/utc": ["@date-fns/utc@2.1.1", "", {}, "sha512-SlJDfG6RPeEX8wEVv6ZB3kak4MmbtyiI2qX/5zuKdordbrhB/iaJ58GVMZgJ6P1sJaM1gMgENFYYeg1JWrCFrA=="],
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
+
+    "@effect/ai": ["@effect/ai@0.37.0", "", { "dependencies": { "find-my-way-ts": "^0.1.6" }, "peerDependencies": { "@effect/experimental": "^0.61.0", "@effect/platform": "^0.97.0", "@effect/rpc": "^0.76.0", "effect": "^3.22.0" } }, "sha512-tHkDg/p2tNxKhXZATOokl5vGGqrV7K5FA/qdIExRTjFUOEVvKCWoVxqtUuj+NAp9BeSVuysJMPrHB9XjFPsUiQ=="],
 
     "@effect/cluster": ["@effect/cluster@0.60.2", "", { "dependencies": { "kubernetes-types": "^1.30.0" }, "peerDependencies": { "@effect/platform": "^0.97.1", "@effect/rpc": "^0.76.2", "@effect/sql": "^0.52.1", "@effect/workflow": "^0.19.1", "effect": "^3.22.1" } }, "sha512-GEODN5kvFJ0L0XSkANcS8s6lfhjrrA8x/ezYUV/lXerqCHf5xo3ZTPUanGMHu5Byvikng0mZDcyNvke2sGjfSQ=="],
 

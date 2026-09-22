@@ -113,6 +113,12 @@ export const workflowStatusEnum = pgEnum("workflow_status", [
   "succeeded",
   "failed",
 ]);
+export const webhookDeliveryStatusEnum = pgEnum("webhook_delivery_status", [
+  "queued",
+  "delivering",
+  "succeeded",
+  "failed",
+]);
 export const invoiceDeliveryTypeEnum = pgEnum("invoice_delivery_type", [
   "create",
   "create_and_send",
@@ -2075,6 +2081,126 @@ export const inbox = pgTable(
   ],
 );
 
+export const webhookEndpoints = pgTable(
+  "webhook_endpoints",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    url: text("url").notNull(),
+    secretEncrypted: text("secret_encrypted").notNull(),
+    events: text("events").array().notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdBy: uuid("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("webhook_endpoints_team_id_idx").on(table.teamId),
+    unique("webhook_endpoints_team_url_key").on(table.teamId, table.url),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "webhook_endpoints_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.createdBy],
+      foreignColumns: [users.id],
+      name: "webhook_endpoints_created_by_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    endpointId: uuid("endpoint_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    invoiceId: uuid("invoice_id"),
+    event: text("event").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: webhookDeliveryStatusEnum().default("queued").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    lastError: text("last_error"),
+    deliveredAt: timestamp("delivered_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("webhook_deliveries_endpoint_id_idx").on(table.endpointId),
+    index("webhook_deliveries_invoice_id_idx").on(table.invoiceId),
+    index("webhook_deliveries_team_id_idx").on(table.teamId),
+    index("webhook_deliveries_status_idx").on(table.status),
+    foreignKey({
+      columns: [table.endpointId],
+      foreignColumns: [webhookEndpoints.id],
+      name: "webhook_deliveries_endpoint_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "webhook_deliveries_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [inbox.id],
+      name: "webhook_deliveries_invoice_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export const webhookDeliveryAttempts = pgTable(
+  "webhook_delivery_attempts",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    deliveryId: uuid("delivery_id").notNull(),
+    endpointId: uuid("endpoint_id").notNull(),
+    teamId: uuid("team_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    statusCode: integer("status_code"),
+    error: text("error"),
+    durationMs: integer("duration_ms").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("webhook_delivery_attempts_delivery_id_idx").on(table.deliveryId),
+    index("webhook_delivery_attempts_endpoint_id_idx").on(table.endpointId),
+    index("webhook_delivery_attempts_team_id_idx").on(table.teamId),
+    unique("webhook_delivery_attempts_delivery_attempt_key").on(
+      table.deliveryId,
+      table.attempt,
+    ),
+    foreignKey({
+      columns: [table.deliveryId],
+      foreignColumns: [webhookDeliveries.id],
+      name: "webhook_delivery_attempts_delivery_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.endpointId],
+      foreignColumns: [webhookEndpoints.id],
+      name: "webhook_delivery_attempts_endpoint_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "webhook_delivery_attempts_team_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
 export const transactionEmbeddings = pgTable(
   "transaction_embeddings",
   {
@@ -2866,6 +2992,7 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   oauthApplications: many(oauthApplications),
   oauthAuthorizationCodes: many(oauthAuthorizationCodes),
   oauthAccessTokens: many(oauthAccessTokens),
+  webhookEndpoints: many(webhookEndpoints),
   team: one(teams, {
     fields: [users.teamId],
     references: [teams.id],
@@ -2924,6 +3051,9 @@ export const teamsRelations = relations(teams, ({ many }) => ({
   documentTagAssignments: many(documentTagAssignments),
   usersOnTeams: many(usersOnTeam),
   transactionCategories: many(transactionCategories),
+  webhookEndpoints: many(webhookEndpoints),
+  webhookDeliveries: many(webhookDeliveries),
+  webhookDeliveryAttempts: many(webhookDeliveryAttempts),
 }));
 
 export const bankAccountsRelations = relations(

@@ -37,5 +37,6 @@ export * from "./users";
 export * from "./user-questions";
 export * from "./users-on-team";
 export * from "./workflows";
+export * from "./webhooks";
 export * from "./oauth-flow";
 export * from "./oauth-applications";

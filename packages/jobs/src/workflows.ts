@@ -45,6 +45,7 @@ import sharp from "sharp";
 import { workflowKey } from "./client";
 import { processDocumentAttachment } from "./process-document";
 import {
+  type DeliverWebhookPayload,
   type InitialInboxSetupPayload,
   type InviteTeamMembersPayload,
   type OnboardTeamPayload,
@@ -52,6 +53,13 @@ import {
   type SyncInboxAccountPayload,
   WorkflowRequest,
 } from "./schema";
+import {
+  WebhookDeliveryRepository,
+  WebhookTransport,
+  WebhookTransportLive,
+  deliverWebhook,
+  makeWebhookDeliveryRepository,
+} from "./webhooks";
 
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const HEIC_MAX_WIDTH = 1500;
@@ -721,6 +729,27 @@ export const WorkflowHandlerLive = Layer.effect(
     const initialInboxSetup = makeInitialInboxSetup(db);
     const inviteTeamMembers = makeInviteTeamMembers(mailer);
     const onboardTeam = makeOnboardTeam(db, mailer);
+    const webhookRepository = makeWebhookDeliveryRepository(db);
+    const deliverWebhookJob = (
+      job: WorkflowJob,
+      payload: DeliverWebhookPayload,
+    ) =>
+      deliverWebhook({
+        deliveryId: payload.deliveryId,
+        teamId: payload.teamId,
+        attempt: job.attempts,
+        maxAttempts: job.maxAttempts,
+      }).pipe(
+        Effect.provideService(WebhookDeliveryRepository, webhookRepository),
+        Effect.provideService(WebhookTransport, WebhookTransportLive),
+        Effect.mapError(
+          (error) =>
+            new WorkflowExecutionError({
+              reason: error.reason,
+              retryable: error.retryable,
+            }),
+        ),
+      );
 
     return {
       handle: (job: WorkflowJob) =>
@@ -740,6 +769,8 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* inviteTeamMembers(job, request.payload);
             case "onboard-team":
               return yield* onboardTeam(job, request.payload);
+            case "deliver-webhook":
+              return yield* deliverWebhookJob(job, request.payload);
           }
         }) as Effect.Effect<Record<string, unknown>, WorkflowExecutionError>,
     };
