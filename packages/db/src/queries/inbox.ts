@@ -10,7 +10,7 @@ import {
 } from "@db/schema";
 import { buildSearchQuery } from "@midday/db/utils/search-query";
 import { logger } from "@midday/logger";
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm/sql/sql";
 
 // Scoring functions for suggestion ranking
@@ -1057,6 +1057,25 @@ export async function getInboxByFilePath(
   return result;
 }
 
+export async function getProcessedInvoiceHistory(
+  db: Database,
+  params: { teamId: string; excludeId: string; limit?: number },
+) {
+  return db
+    .select({ id: inbox.id, extraction: inbox.extraction })
+    .from(inbox)
+    .where(
+      and(
+        eq(inbox.teamId, params.teamId),
+        ne(inbox.id, params.excludeId),
+        eq(inbox.type, "invoice"),
+        isNotNull(inbox.extraction),
+      ),
+    )
+    .orderBy(desc(inbox.createdAt))
+    .limit(params.limit ?? 50);
+}
+
 export async function getExistingInboxAttachments(
   db: Database,
   referenceIds: string[],
@@ -1148,6 +1167,9 @@ export type UpdateInboxWithProcessedDataParams = {
   taxAmount?: number | null;
   taxRate?: number | null;
   taxType?: string | null;
+  description?: string | null;
+  extraction?: Record<string, unknown> | null;
+  judgments?: Record<string, unknown>[] | null;
   type?: "invoice" | "expense" | null;
   status?:
     | "pending"
@@ -1189,6 +1211,8 @@ export async function updateInboxWithProcessedData(
       taxRate: inbox.taxRate,
       taxType: inbox.taxType,
       type: inbox.type,
+      extraction: inbox.extraction,
+      judgments: inbox.judgments,
     });
 
   return result;

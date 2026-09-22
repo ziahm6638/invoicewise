@@ -5,12 +5,11 @@ import {
   createInbox,
   getInboxByFilePath,
   updateInbox,
-  updateInboxWithProcessedData,
 } from "@midday/db/queries";
 import { getTeamById } from "@midday/db/queries";
-import { DocumentClient } from "@midday/documents";
 import { logger, schemaTask } from "@trigger.dev/sdk";
 import { convertHeic } from "../document/convert-heic";
+import { processDocumentAttachment } from "./process-document";
 
 export const processAttachment = schemaTask({
   id: "process-attachment",
@@ -102,10 +101,8 @@ export const processAttachment = schemaTask({
     }
 
     try {
-      // Fetch team data to provide context for OCR extraction
+      // Fetch team data so extraction can distinguish supplier from recipient.
       const teamData = await getTeamById(getDb(), teamId);
-
-      const document = new DocumentClient();
 
       logger.info("Starting document processing", {
         inboxId: inboxData.id,
@@ -114,7 +111,9 @@ export const processAttachment = schemaTask({
         teamName: teamData?.name,
       });
 
-      const result = await document.getInvoiceOrReceipt({
+      const { result } = await processDocumentAttachment(getDb(), {
+        inboxId: inboxData.id,
+        teamId,
         documentUrl: data?.signedUrl,
         mimetype,
         companyName: teamData?.name,
@@ -124,20 +123,6 @@ export const processAttachment = schemaTask({
         inboxId: inboxData.id,
         resultType: result.type,
         hasAmount: !!result.amount,
-      });
-
-      await updateInboxWithProcessedData(getDb(), {
-        id: inboxData.id,
-        amount: result.amount ?? undefined,
-        currency: result.currency ?? undefined,
-        displayName: result.name ?? undefined,
-        website: result.website ?? undefined,
-        date: result.date ?? undefined,
-        taxAmount: result.tax_amount ?? undefined,
-        taxRate: result.tax_rate ?? undefined,
-        taxType: result.tax_type ?? undefined,
-        type: result.type as "invoice" | "expense" | null | undefined,
-        status: "pending",
       });
     } catch (error) {
       logger.error("Document processing failed", {

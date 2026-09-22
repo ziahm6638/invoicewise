@@ -1,0 +1,25 @@
+ACME SUPPLIES LTD
+10 Market Street, London, EC1A 1AA
+VAT number: GB123456789
+
+INVOICE
+Invoice number: INV-2026-0042
+Invoice date: 2026-09-01
+Due date: 2026-09-30
+Currency: GBP
+Bill to: InvoiceWise Ltd
+Purchase order reference: PO-7788
+Description: September consulting services
+
+Consulting services | 2 | GBP 500.00 | GBP 1,000.00
+
+Net total: GBP 1,000.00
+VAT: GBP 200.00
+Gross total: GBP 1,200.00
+
+Payment details
+Account name: ACME SUPPLIES LTD
+Account number: 12345678
+Sort code: 12-34-56
+IBAN: GB12 ACME 1234 5678 9012 34
+BIC: ACMEGB2L

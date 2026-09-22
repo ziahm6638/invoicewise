@@ -190,6 +190,7 @@
         "@mistralai/mistralai": "^1.9.18",
         "ai": "5.0.28",
         "canvas": "^3.1.2",
+        "effect": "^3.22.2",
         "mammoth": "^1.9.1",
         "officeparser": "5.1.1",
         "unpdf": "^1.1.0",
