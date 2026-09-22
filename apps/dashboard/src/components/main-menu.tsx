@@ -22,6 +22,7 @@ const items = [
     name: "Settings",
     children: [
       { path: "/settings", name: "General" },
+      { path: "/settings/questions", name: "Questions" },
       { path: "/settings/billing", name: "Billing" },
       { path: "/settings/members", name: "Members" },
       { path: "/settings/developer", name: "Developer" },

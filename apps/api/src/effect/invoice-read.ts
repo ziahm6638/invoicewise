@@ -36,6 +36,8 @@ export const InvoiceItem = Schema.Struct({
   createdAt: Schema.String,
   website: Schema.NullOr(Schema.String),
   description: Schema.NullOr(Schema.String),
+  extraction: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  judgments: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
   transaction: Schema.NullOr(Transaction),
 });
 

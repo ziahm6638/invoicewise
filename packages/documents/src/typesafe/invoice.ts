@@ -40,54 +40,68 @@ export type InvoiceExtraction = {
 export type InvoiceJudgmentQuestion =
   | {
       id: string;
+      versionId?: string;
       label: string;
       type: "boolean";
       question: string;
+      context?: string | null;
       criteria?: { yes?: string; no?: string };
     }
   | {
       id: string;
+      versionId?: string;
       label: string;
-      type: "enum";
+      type: "choice";
       question: string;
-      options: Record<string, string | null>;
+      context?: string | null;
+      options: readonly string[];
     }
   | {
       id: string;
+      versionId?: string;
       label: string;
-      type: "number";
+      type: "score";
       question: string;
+      context?: string | null;
       levels: readonly string[];
     };
 
+type InvoiceJudgmentDetails = {
+  questionId: string;
+  questionVersionId?: string;
+  label: string;
+  question: string;
+  context?: string | null;
+  source: "default" | "custom";
+};
+
 export type InvoiceJudgment =
-  | {
-      questionId: string;
-      label: string;
-      source: "default" | "custom";
+  | (InvoiceJudgmentDetails & {
+      status: "answered";
       type: "boolean";
       answer: boolean;
       probability: number;
-    }
-  | {
-      questionId: string;
-      label: string;
-      source: "default" | "custom";
-      type: "enum";
+    })
+  | (InvoiceJudgmentDetails & {
+      status: "answered";
+      type: "choice";
       answer: string;
       probabilities: Record<string, number>;
       confidence: number;
-    }
-  | {
-      questionId: string;
-      label: string;
-      source: "default" | "custom";
-      type: "number";
+    })
+  | (InvoiceJudgmentDetails & {
+      status: "answered";
+      type: "score";
       answer: number;
       levels: Record<string, string>;
       probabilities: Record<string, number>;
       confidence: number;
-    };
+    })
+  | (InvoiceJudgmentDetails & {
+      status: "failed";
+      type: InvoiceJudgmentQuestion["type"];
+      error: string;
+    });
 
 export type PreviousInvoice = {
   id: string;
@@ -633,6 +647,9 @@ export const extractInvoiceText = (
 const toTypeSafeQuestion = (
   question: InvoiceJudgmentQuestion,
 ): TypeSafeQuestion => {
+  const instructions = question.context
+    ? { question: question.question, context: question.context }
+    : question.question;
   if (question.type === "boolean") {
     const criteria = {
       true: question.criteria?.yes,
@@ -641,27 +658,41 @@ const toTypeSafeQuestion = (
     return question.criteria
       ? {
           type: "noul",
-          instructions: question.question,
+          instructions,
           criteria,
         }
       : {
           type: "noul",
-          instructions: question.question,
+          instructions,
         };
   }
-  if (question.type === "enum") {
+  if (question.type === "choice") {
     return {
       type: "choice",
-      instructions: question.question,
-      criteria: question.options,
+      instructions,
+      criteria: Object.fromEntries(
+        question.options.map((option, index) => [`option_${index}`, option]),
+      ),
     };
   }
   return {
     type: "score",
-    instructions: question.question,
+    instructions,
     criteria: question.levels,
   };
 };
+
+const judgmentDetails = (
+  question: InvoiceJudgmentQuestion,
+  source: "default" | "custom",
+): InvoiceJudgmentDetails => ({
+  questionId: question.id,
+  questionVersionId: question.versionId,
+  label: question.label,
+  question: question.question,
+  context: question.context,
+  source,
+});
 
 const toJudgment = (
   question: InvoiceJudgmentQuestion,
@@ -670,31 +701,36 @@ const toJudgment = (
 ): InvoiceJudgment | null => {
   if (question.type === "boolean" && answer.type === "noul") {
     return {
-      questionId: question.id,
-      label: question.label,
-      source,
+      ...judgmentDetails(question, source),
+      status: "answered",
       type: "boolean",
       answer: answer.noul >= 0.5,
       probability: answer.noul,
     };
   }
-  if (question.type === "enum" && answer.type === "choice") {
+  if (question.type === "choice" && answer.type === "choice") {
+    const optionIndex = Number.parseInt(answer.choice.replace("option_", ""));
+    const selected = question.options[optionIndex];
+    if (selected === undefined) return null;
     return {
-      questionId: question.id,
-      label: question.label,
-      source,
-      type: "enum",
-      answer: answer.choice,
-      probabilities: answer.probabilities,
+      ...judgmentDetails(question, source),
+      status: "answered",
+      type: "choice",
+      answer: selected,
+      probabilities: Object.fromEntries(
+        Object.entries(answer.probabilities).map(([key, probability]) => {
+          const index = Number.parseInt(key.replace("option_", ""));
+          return [question.options[index] ?? key, probability];
+        }),
+      ),
       confidence: answer.confidence,
     };
   }
-  if (question.type === "number" && answer.type === "score") {
+  if (question.type === "score" && answer.type === "score") {
     return {
-      questionId: question.id,
-      label: question.label,
-      source,
-      type: "number",
+      ...judgmentDetails(question, source),
+      status: "answered",
+      type: "score",
       answer: answer.score,
       levels: answer.legend,
       probabilities: answer.probabilities,
@@ -704,15 +740,27 @@ const toJudgment = (
   return null;
 };
 
+const failedJudgment = (
+  question: InvoiceJudgmentQuestion,
+  source: "default" | "custom",
+  error: string,
+): InvoiceJudgment => ({
+  ...judgmentDetails(question, source),
+  status: "failed",
+  type: question.type,
+  error,
+});
+
 export const judgeInvoice = (
   extraction: InvoiceExtraction,
   previousInvoices: readonly PreviousInvoice[],
   customQuestions: readonly InvoiceJudgmentQuestion[] = [],
+  defaultQuestions: readonly InvoiceJudgmentQuestion[] = DEFAULT_INVOICE_JUDGMENTS,
 ): Effect.Effect<InvoiceJudgment[], TypeSafeError, TypeSafe> =>
   Effect.gen(function* () {
     const typeSafe = yield* TypeSafe;
     const configured = [
-      ...DEFAULT_INVOICE_JUDGMENTS.map((question) => ({
+      ...defaultQuestions.map((question) => ({
         question,
         source: "default" as const,
       })),
@@ -734,29 +782,25 @@ export const judgeInvoice = (
         ]),
       ),
     });
-    if (wireIds.some((id) => response.answers[id] === undefined)) {
-      return yield* Effect.fail(
-        new TypeSafeError({
-          reason: "TypeSafe omitted an invoice judgment answer",
-          retryable: false,
-        }),
-      );
-    }
-    const judgments = configured.flatMap(({ question, source }, index) => {
+    return configured.map(({ question, source }, index) => {
       const answer = response.answers[wireIds[index]!];
-      if (!answer) return [];
+      if (!answer) {
+        return failedJudgment(
+          question,
+          source,
+          "TypeSafe omitted this invoice judgment answer",
+        );
+      }
       const judgment = toJudgment(question, answer, source);
-      return judgment ? [judgment] : [];
-    });
-    if (judgments.length !== configured.length) {
-      return yield* Effect.fail(
-        new TypeSafeError({
-          reason: "TypeSafe returned the wrong invoice judgment type",
-          retryable: false,
-        }),
+      return (
+        judgment ??
+        failedJudgment(
+          question,
+          source,
+          "TypeSafe returned the wrong answer type for this question",
+        )
       );
-    }
-    return judgments;
+    });
   });
 
 const loadPdfText = (documentUrl: string) =>
@@ -798,10 +842,29 @@ export const processInvoice = (
             }),
           );
     const extraction = yield* extractInvoiceText(text, request.companyName);
+    const defaultQuestions =
+      request.defaultJudgmentQuestions ?? DEFAULT_INVOICE_JUDGMENTS;
+    const configuredQuestions = [
+      ...defaultQuestions,
+      ...(request.judgmentQuestions ?? []),
+    ];
     const judgments = yield* judgeInvoice(
       extraction,
       request.previousInvoices ?? [],
       request.judgmentQuestions ?? [],
+      defaultQuestions,
+    ).pipe(
+      Effect.catchAll((error) =>
+        Effect.succeed(
+          configuredQuestions.map((question) =>
+            failedJudgment(
+              question,
+              defaultQuestions.includes(question) ? "default" : "custom",
+              error.reason,
+            ),
+          ),
+        ),
+      ),
     );
     return { extraction, judgments };
   });

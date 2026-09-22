@@ -36,6 +36,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { useCopyToClipboard } from "usehooks-ts";
 import { EditInboxModal } from "../modals/edit-inbox-modal";
 import { InboxDetailsSkeleton } from "./inbox-details-skeleton";
+import { JudgmentResults } from "./judgment-results";
 
 export function InboxDetails() {
   const { setParams, params } = useInboxParams();
@@ -341,6 +342,8 @@ export function InboxDetails() {
           </div>
 
           <Separator />
+
+          <JudgmentResults judgments={data.judgments} />
 
           {data?.filePath && (
             <FileViewer

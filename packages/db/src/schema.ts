@@ -102,6 +102,11 @@ export const inboxStatusEnum = pgEnum("inbox_status", [
 ]);
 
 export const inboxTypeEnum = pgEnum("inbox_type", ["invoice", "expense"]);
+export const invoiceQuestionTypeEnum = pgEnum("invoice_question_type", [
+  "boolean",
+  "choice",
+  "score",
+]);
 export const invoiceDeliveryTypeEnum = pgEnum("invoice_delivery_type", [
   "create",
   "create_and_send",
@@ -1371,6 +1376,49 @@ export const teams = pgTable(
       for: "update",
       to: ["public"],
     }),
+  ],
+);
+
+export const userQuestions = pgTable(
+  "user_questions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    questionKey: text("question_key").notNull(),
+    teamId: uuid("team_id").notNull(),
+    version: integer().notNull(),
+    label: text().notNull(),
+    question: text().notNull(),
+    type: invoiceQuestionTypeEnum().notNull(),
+    options: jsonb().$type<string[]>(),
+    context: text(),
+    enabled: boolean().default(true).notNull(),
+    isDefault: boolean("is_default").default(false).notNull(),
+    deletedAt: timestamp("deleted_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("user_questions_team_id_idx").on(table.teamId),
+    unique("user_questions_team_key_version_key").on(
+      table.teamId,
+      table.questionKey,
+      table.version,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "user_questions_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.createdBy],
+      foreignColumns: [users.id],
+      name: "user_questions_created_by_fkey",
+    }).onDelete("set null"),
   ],
 );
 

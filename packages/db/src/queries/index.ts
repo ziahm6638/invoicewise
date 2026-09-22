@@ -34,6 +34,7 @@ export * from "./transaction-tags";
 export * from "./transactions";
 export * from "./user-invites";
 export * from "./users";
+export * from "./user-questions";
 export * from "./users-on-team";
 export * from "./oauth-flow";
 export * from "./oauth-applications";

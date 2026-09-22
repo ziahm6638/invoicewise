@@ -5,6 +5,7 @@ import { billingRouter } from "./billing";
 import { inboxRouter } from "./inbox";
 import { inboxAccountsRouter } from "./inbox-accounts";
 import { oauthApplicationsRouter } from "./oauth-applications";
+import { questionsRouter } from "./questions";
 import { teamRouter } from "./team";
 import { userRouter } from "./user";
 
@@ -16,6 +17,7 @@ export const appRouter = createTRPCRouter({
   team: teamRouter,
   user: userRouter,
   apiKeys: apiKeysRouter,
+  questions: questionsRouter,
 });
 
 // export type definition of API

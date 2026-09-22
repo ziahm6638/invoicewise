@@ -11,6 +11,7 @@ export type GetDocumentRequest = {
   mimetype: string;
   companyName?: string | null;
   previousInvoices?: readonly PreviousInvoice[];
+  defaultJudgmentQuestions?: readonly InvoiceJudgmentQuestion[];
   judgmentQuestions?: readonly InvoiceJudgmentQuestion[];
 };
 

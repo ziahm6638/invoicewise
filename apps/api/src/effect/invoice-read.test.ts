@@ -21,6 +21,8 @@ const invoice = {
   createdAt: "2026-09-20T12:00:00.000Z",
   website: "https://acme.example",
   description: "September services",
+  extraction: null,
+  judgments: null,
   inboxAccountId: null,
   inboxAccount: null,
   transaction: null,
@@ -39,7 +41,7 @@ const RepositoryTest = Layer.succeed(InvoiceRepository, {
         hasPreviousPage: false,
         hasNextPage: false,
       },
-      data: [invoice],
+      data: [{ ...invoice, extraction: undefined, judgments: undefined }],
     });
   },
   findById: (id, teamId) => {
