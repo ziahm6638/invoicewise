@@ -1,14 +1,12 @@
+import { getSession } from "@/lib/auth";
 import { getDiscount, getPlans } from "@/utils/plans";
 import { api } from "@/utils/polar";
 import { db } from "@midday/db/client";
-import { getTeamById, hasTeamAccess } from "@midday/db/queries";
-import { getSession } from "@midday/supabase/cached-queries";
+import { getTeamById } from "@midday/db/queries";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const GET = async (req: NextRequest) => {
-  const {
-    data: { session },
-  } = await getSession();
+  const session = await getSession();
 
   if (!session?.user?.id) {
     throw new Error("You must be logged in");
@@ -27,7 +25,7 @@ export const GET = async (req: NextRequest) => {
     throw new Error("Invalid plan");
   }
 
-  if (!teamId || !(await hasTeamAccess(db, teamId, session.user.id))) {
+  if (!teamId || teamId !== session.teamId) {
     throw new Error("Team not found");
   }
 

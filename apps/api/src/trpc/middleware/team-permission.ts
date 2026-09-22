@@ -1,6 +1,7 @@
 import type { Session } from "@api/utils/auth";
 import { teamCache } from "@midday/cache/team-cache";
 import type { Database } from "@midday/db/client";
+import { hasTeamAccess } from "@midday/db/queries";
 import { TRPCError } from "@trpc/server";
 
 export const withTeamPermission = async <TReturn>(opts: {
@@ -27,26 +28,7 @@ export const withTeamPermission = async <TReturn>(opts: {
     });
   }
 
-  const result = await ctx.db.query.users.findFirst({
-    with: {
-      usersOnTeams: {
-        columns: {
-          id: true,
-          teamId: true,
-        },
-      },
-    },
-    where: (users, { eq }) => eq(users.id, userId),
-  });
-
-  if (!result) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "User not found",
-    });
-  }
-
-  const teamId = result.teamId;
+  const teamId = ctx.session?.teamId ?? null;
 
   // If teamId is null, user has no team assigned but this is now allowed
   if (teamId !== null) {
@@ -54,9 +36,7 @@ export const withTeamPermission = async <TReturn>(opts: {
     let hasAccess = await teamCache.get(cacheKey);
 
     if (hasAccess === undefined) {
-      hasAccess = result.usersOnTeams.some(
-        (membership) => membership.teamId === teamId,
-      );
+      hasAccess = await hasTeamAccess(ctx.db, teamId, userId);
 
       await teamCache.set(cacheKey, hasAccess);
     }

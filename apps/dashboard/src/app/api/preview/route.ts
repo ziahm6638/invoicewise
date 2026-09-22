@@ -1,8 +1,6 @@
+import { getSession } from "@/lib/auth";
 import { getPdfImage } from "@/utils/pdf-to-img";
-import { db } from "@midday/db/client";
-import { getUserTeamId } from "@midday/db/queries";
 import { download } from "@midday/db/storage";
-import { getSession } from "@midday/supabase/cached-queries";
 import type { NextRequest } from "next/server";
 
 export async function GET(request: NextRequest) {
@@ -18,15 +16,12 @@ export async function GET(request: NextRequest) {
     filePath = filePath.substring("vault/".length);
   }
 
-  const {
-    data: { session },
-  } = await getSession();
+  const session = await getSession();
   if (!session) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const teamId = await getUserTeamId(db, session.user.id);
-  if (!teamId || filePath.split("/")[0] !== teamId) {
+  if (!session.teamId || filePath.split("/")[0] !== session.teamId) {
     return new Response("Forbidden", { status: 403 });
   }
 

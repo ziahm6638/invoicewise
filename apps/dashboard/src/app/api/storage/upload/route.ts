@@ -1,16 +1,11 @@
-import { db } from "@midday/db/client";
-import { getUserById } from "@midday/db/queries";
+import { getSession } from "@/lib/auth";
 import { signedUrl, upload } from "@midday/db/storage";
-import { getSession } from "@midday/supabase/cached-queries";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
-  const {
-    data: { session },
-  } = await getSession();
+  const session = await getSession();
   if (!session) return new NextResponse("Unauthorized", { status: 401 });
 
-  const user = await getUserById(db, session.user.id);
   const formData = await request.formData();
   const file = formData.get("file");
   const bucket = formData.get("bucket");
@@ -34,8 +29,8 @@ export async function POST(request: Request) {
   if (
     !Array.isArray(path) ||
     path.some((part) => typeof part !== "string") ||
-    !user?.teamId ||
-    path[0] !== user.teamId
+    !session.teamId ||
+    path[0] !== session.teamId
   ) {
     return new NextResponse("Invalid storage path", { status: 403 });
   }

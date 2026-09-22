@@ -2,7 +2,6 @@ import "server-only";
 
 import type { AppRouter } from "@midday/api/trpc/routers/_app";
 import { getCountryCode, getLocale, getTimezone } from "@midday/location";
-import { createClient } from "@midday/supabase/server";
 import { HydrationBoundary } from "@tanstack/react-query";
 import { dehydrate } from "@tanstack/react-query";
 import { createTRPCClient, httpBatchLink, loggerLink } from "@trpc/client";
@@ -10,6 +9,7 @@ import {
   type TRPCQueryOptions,
   createTRPCOptionsProxy,
 } from "@trpc/tanstack-react-query";
+import { headers } from "next/headers";
 import { cache } from "react";
 import superjson from "superjson";
 import { makeQueryClient } from "./query-client";
@@ -26,14 +26,10 @@ export const trpc = createTRPCOptionsProxy<AppRouter>({
         url: `${process.env.NEXT_PUBLIC_API_URL}/trpc`,
         transformer: superjson,
         async headers() {
-          const supabase = await createClient();
-
-          const {
-            data: { session },
-          } = await supabase.auth.getSession();
+          const requestHeaders = await headers();
 
           return {
-            Authorization: `Bearer ${session?.access_token}`,
+            cookie: requestHeaders.get("cookie") ?? "",
             "x-user-timezone": await getTimezone(),
             "x-user-locale": await getLocale(),
             "x-user-country": await getCountryCode(),

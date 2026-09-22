@@ -1117,8 +1117,15 @@ export const userInvites = pgTable(
     teamId: uuid("team_id"),
     email: text(),
     role: teamRolesEnum(),
-    code: text().default("nanoid(24)"),
+    code: text().default(sql`gen_random_uuid()::text`),
     invitedBy: uuid("invited_by"),
+    status: text().default("pending").notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "date",
+    })
+      .default(sql`now() + interval '2 days'`)
+      .notNull(),
   },
   (table) => [
     index("user_invites_team_id_idx").using(
@@ -1314,8 +1321,12 @@ export const teams = pgTable(
       .defaultNow()
       .notNull(),
     name: text(),
+    slug: text().default(sql`gen_random_uuid()::text`).notNull(),
     logoUrl: text("logo_url"),
-    inboxId: text("inbox_id").default("generate_inbox(10)"),
+    metadata: text(),
+    inboxId: text("inbox_id").default(
+      sql`substr(replace(gen_random_uuid()::text, '-', ''), 1, 10)`,
+    ),
     email: text(),
     inboxEmail: text("inbox_email"),
     inboxForwarding: boolean("inbox_forwarding").default(true),
@@ -1332,6 +1343,7 @@ export const teams = pgTable(
     exportSettings: jsonb("export_settings"),
   },
   (table) => [
+    unique("teams_slug_key").on(table.slug),
     unique("teams_inbox_id_key").on(table.inboxId),
     pgPolicy("Enable insert for authenticated users only", {
       as: "permissive",
@@ -1716,15 +1728,22 @@ export const transactionEnrichments = pgTable(
 export const users = pgTable(
   "users",
   {
-    id: uuid().primaryKey().notNull(),
+    id: uuid().defaultRandom().primaryKey().notNull(),
     fullName: text("full_name"),
     avatarUrl: text("avatar_url"),
     email: text(),
+    emailVerified: boolean("email_verified").default(false).notNull(),
     teamId: uuid("team_id"),
     createdAt: timestamp("created_at", {
       withTimezone: true,
       mode: "string",
     }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "date",
+    })
+      .defaultNow()
+      .notNull(),
     locale: text().default("en"),
     weekStartsOnMonday: boolean("week_starts_on_monday").default(false),
     timezone: text(),
@@ -1733,6 +1752,7 @@ export const users = pgTable(
     dateFormat: text("date_format"),
   },
   (table) => [
+    uniqueIndex("users_email_key").on(table.email),
     index("users_team_id_idx").using(
       "btree",
       table.teamId.asc().nullsLast().op("uuid_ops"),
@@ -2182,6 +2202,7 @@ export const usersOnTeam = pgTable(
     }).defaultNow(),
   },
   (table) => [
+    unique("users_on_team_id_key").on(table.id),
     index("users_on_team_team_id_idx").using(
       "btree",
       table.teamId.asc().nullsLast().op("uuid_ops"),
@@ -2283,87 +2304,122 @@ export const transactionCategories = pgTable(
   ],
 );
 
-export const usersInAuth = pgTable(
-  "auth.users",
+export const authSessions = pgTable(
+  "auth_sessions",
   {
-    instanceId: uuid("instance_id"),
-    id: uuid("id").notNull(),
-    aud: varchar("aud", { length: 255 }),
-    role: varchar("role", { length: 255 }),
-    email: varchar("email", { length: 255 }),
-    encryptedPassword: varchar("encrypted_password", { length: 255 }),
-    emailConfirmedAt: timestamp("email_confirmed_at", { withTimezone: true }),
-    invitedAt: timestamp("invited_at", { withTimezone: true }),
-    confirmationToken: varchar("confirmation_token", { length: 255 }),
-    confirmationSentAt: timestamp("confirmation_sent_at", {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    token: text().notNull(),
+    expiresAt: timestamp("expires_at", {
       withTimezone: true,
-    }),
-    recoveryToken: varchar("recovery_token", { length: 255 }),
-    recoverySentAt: timestamp("recovery_sent_at", { withTimezone: true }),
-    emailChangeTokenNew: varchar("email_change_token_new", { length: 255 }),
-    emailChange: varchar("email_change", { length: 255 }),
-    emailChangeSentAt: timestamp("email_change_sent_at", {
+      mode: "date",
+    }).notNull(),
+    createdAt: timestamp("created_at", {
       withTimezone: true,
-    }),
-    lastSignInAt: timestamp("last_sign_in_at", { withTimezone: true }),
-    rawAppMetaData: jsonb("raw_app_meta_data"),
-    rawUserMetaData: jsonb("raw_user_meta_data"),
-    isSuperAdmin: boolean("is_super_admin"),
-    createdAt: timestamp("created_at", { withTimezone: true }),
-    updatedAt: timestamp("updated_at", { withTimezone: true }),
-    phone: text("phone").default(sql`null::character varying`),
-    phoneConfirmedAt: timestamp("phone_confirmed_at", { withTimezone: true }),
-    phoneChange: text("phone_change").default(sql`''::character varying`),
-    phoneChangeToken: varchar("phone_change_token", { length: 255 }).default(
-      sql`''::character varying`,
-    ),
-    phoneChangeSentAt: timestamp("phone_change_sent_at", {
+      mode: "date",
+    })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
       withTimezone: true,
-    }),
-    // Drizzle ORM does not support .stored() for generated columns, so we omit it
-    confirmedAt: timestamp("confirmed_at", {
-      withTimezone: true,
-      mode: "string",
-    }).generatedAlwaysAs(sql`LEAST(email_confirmed_at, phone_confirmed_at)`),
-    emailChangeTokenCurrent: varchar("email_change_token_current", {
-      length: 255,
-    }).default(sql`''::character varying`),
-    emailChangeConfirmStatus: smallint("email_change_confirm_status").default(
-      0,
-    ),
-    bannedUntil: timestamp("banned_until", { withTimezone: true }),
-    reauthenticationToken: varchar("reauthentication_token", {
-      length: 255,
-    }).default(sql`''::character varying`),
-    reauthenticationSentAt: timestamp("reauthentication_sent_at", {
-      withTimezone: true,
-    }),
-    isSsoUser: boolean("is_sso_user").notNull().default(false),
-    deletedAt: timestamp("deleted_at", { withTimezone: true }),
-    isAnonymous: boolean("is_anonymous").notNull().default(false),
+      mode: "date",
+    })
+      .defaultNow()
+      .notNull(),
+    ipAddress: text("ip_address"),
+    userAgent: text("user_agent"),
+    userId: uuid("user_id").notNull(),
+    activeOrganizationId: uuid("active_organization_id"),
   },
   (table) => [
-    primaryKey({ columns: [table.id], name: "users_pkey" }),
-    unique("users_phone_key").on(table.phone),
-    unique("confirmation_token_idx").on(table.confirmationToken),
-    unique("email_change_token_current_idx").on(table.emailChangeTokenCurrent),
-    unique("email_change_token_new_idx").on(table.emailChangeTokenNew),
-    unique("reauthentication_token_idx").on(table.reauthenticationToken),
-    unique("recovery_token_idx").on(table.recoveryToken),
-    unique("users_email_partial_key").on(table.email),
-    index("users_instance_id_email_idx").on(
-      table.instanceId,
-      sql`lower((email)::text)`,
+    unique("auth_sessions_token_key").on(table.token),
+    index("auth_sessions_user_id_idx").on(table.userId),
+    index("auth_sessions_active_organization_id_idx").on(
+      table.activeOrganizationId,
     ),
-    index("users_instance_id_idx").on(table.instanceId),
-    index("users_is_anonymous_idx").on(table.isAnonymous),
-    // Check constraint for email_change_confirm_status
-    {
-      kind: "check",
-      name: "users_email_change_confirm_status_check",
-      expression: sql`((email_change_confirm_status >= 0) AND (email_change_confirm_status <= 2))`,
-    },
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [users.id],
+      name: "auth_sessions_user_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.activeOrganizationId],
+      foreignColumns: [teams.id],
+      name: "auth_sessions_active_organization_id_fkey",
+    }).onDelete("set null"),
   ],
+);
+
+export const authAccounts = pgTable(
+  "auth_accounts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", {
+      withTimezone: true,
+      mode: "date",
+    }),
+    scope: text(),
+    password: text(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "date",
+    })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "date",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("auth_accounts_provider_account_key").on(
+      table.providerId,
+      table.accountId,
+    ),
+    index("auth_accounts_user_id_idx").on(table.userId),
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [users.id],
+      name: "auth_accounts_user_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const authVerifications = pgTable(
+  "auth_verifications",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    identifier: text().notNull(),
+    value: text().notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "date",
+    }).notNull(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "date",
+    })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "date",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("auth_verifications_identifier_idx").on(table.identifier)],
 );
 
 export const shortLinks = pgTable(
@@ -2701,10 +2757,6 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   oauthApplications: many(oauthApplications),
   oauthAuthorizationCodes: many(oauthAuthorizationCodes),
   oauthAccessTokens: many(oauthAccessTokens),
-  usersInAuth: one(usersInAuth, {
-    fields: [users.id],
-    references: [usersInAuth.id],
-  }),
   team: one(teams, {
     fields: [users.teamId],
     references: [teams.id],
@@ -3049,10 +3101,6 @@ export const transactionEnrichmentsRelations = relations(
     }),
   }),
 );
-
-export const usersInAuthRelations = relations(usersInAuth, ({ many }) => ({
-  users: many(users),
-}));
 
 export const inboxRelations = relations(inbox, ({ one }) => ({
   transactionAttachment: one(transactionAttachments, {

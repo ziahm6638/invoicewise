@@ -1,8 +1,5 @@
 import { replicationCache } from "@midday/cache/replication-cache";
-import { teamPermissionsCache } from "@midday/cache/team-permissions-cache";
 import type { DatabaseWithPrimary } from "@midday/db/client";
-import { getUserTeamId } from "@midday/db/queries";
-import { logger } from "@midday/logger";
 import type { MiddlewareHandler } from "hono";
 
 /**
@@ -21,35 +18,7 @@ export const withPrimaryReadAfterWrite: MiddlewareHandler = async (c, next) => {
     ? "mutation"
     : "query";
 
-  let teamId: string | null = null;
-
-  // For OAuth sessions, use the token's team, not the user's current team
-  if (session?.oauth) {
-    teamId = session.teamId || null;
-  }
-  // For non-OAuth sessions, get user's current team
-  else if (session?.user?.id) {
-    const cacheKey = `user:${session.user.id}:team`;
-    teamId = (await teamPermissionsCache.get(cacheKey)) || null;
-
-    if (!teamId && session.user.id) {
-      try {
-        // Get user's current team
-        const userTeamId = await getUserTeamId(db, session.user.id);
-
-        if (userTeamId) {
-          teamId = userTeamId;
-          await teamPermissionsCache.set(cacheKey, userTeamId);
-        }
-      } catch (error) {
-        logger.warn({
-          msg: "Failed to fetch user team",
-          userId: session.user.id,
-          error: error instanceof Error ? error.message : "Unknown error",
-        });
-      }
-    }
-  }
+  const teamId = session?.teamId ?? null;
 
   let finalDb = db;
 

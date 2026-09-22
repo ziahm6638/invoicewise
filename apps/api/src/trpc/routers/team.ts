@@ -1,3 +1,4 @@
+import { auth } from "@api/auth";
 import {
   acceptTeamInviteSchema,
   createTeamSchema,
@@ -60,7 +61,7 @@ export const teamRouter = createTRPCRouter({
 
   create: protectedProcedure
     .input(createTeamSchema)
-    .mutation(async ({ ctx: { db, session }, input }) => {
+    .mutation(async ({ ctx: { db, requestHeaders, session }, input }) => {
       const requestId = `trpc_team_create_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
       console.log(`[${requestId}] TRPC team creation request`, {
@@ -79,6 +80,13 @@ export const teamRouter = createTRPCRouter({
           userId: session.user.id,
           email: session.user.email!,
         });
+
+        if (input.switchTeam) {
+          await auth.api.setActiveOrganization({
+            body: { organizationId: teamId },
+            headers: requestHeaders,
+          });
+        }
 
         console.log(`[${requestId}] TRPC team creation successful`, {
           teamId,
@@ -99,26 +107,37 @@ export const teamRouter = createTRPCRouter({
 
   leave: protectedProcedure
     .input(leaveTeamSchema)
-    .mutation(async ({ ctx: { db, session }, input }) => {
-      const teamMembersData = await getTeamMembersByTeamId(db, input.teamId);
+    .mutation(
+      async ({ ctx: { db, requestHeaders, session, teamId }, input }) => {
+        const teamMembersData = await getTeamMembersByTeamId(db, input.teamId);
 
-      const currentUser = teamMembersData?.find(
-        (member) => member.user?.id === session.user.id,
-      );
+        const currentUser = teamMembersData?.find(
+          (member) => member.user?.id === session.user.id,
+        );
 
-      const totalOwners = teamMembersData?.filter(
-        (member) => member.role === "owner",
-      ).length;
+        const totalOwners = teamMembersData?.filter(
+          (member) => member.role === "owner",
+        ).length;
 
-      if (currentUser?.role === "owner" && totalOwners === 1) {
-        throw Error("Action not allowed");
-      }
+        if (currentUser?.role === "owner" && totalOwners === 1) {
+          throw Error("Action not allowed");
+        }
 
-      return leaveTeam(db, {
-        userId: session.user.id,
-        teamId: input.teamId,
-      });
-    }),
+        const result = await leaveTeam(db, {
+          userId: session.user.id,
+          teamId: input.teamId,
+        });
+
+        if (input.teamId === teamId) {
+          await auth.api.setActiveOrganization({
+            body: { organizationId: null },
+            headers: requestHeaders,
+          });
+        }
+
+        return result;
+      },
+    ),
 
   acceptInvite: protectedProcedure
     .input(acceptTeamInviteSchema)
@@ -126,6 +145,7 @@ export const teamRouter = createTRPCRouter({
       return acceptTeamInvite(db, {
         id: input.id,
         userId: session.user.id,
+        email: session.user.email!,
       });
     }),
 
@@ -158,7 +178,11 @@ export const teamRouter = createTRPCRouter({
 
   deleteMember: protectedProcedure
     .input(deleteTeamMemberSchema)
-    .mutation(async ({ ctx: { db }, input }) => {
+    .mutation(async ({ ctx: { db, teamId }, input }) => {
+      if (input.teamId !== teamId) {
+        throw new TRPCError({ code: "FORBIDDEN" });
+      }
+
       return deleteTeamMember(db, {
         teamId: input.teamId,
         userId: input.userId,
@@ -167,7 +191,11 @@ export const teamRouter = createTRPCRouter({
 
   updateMember: protectedProcedure
     .input(updateTeamMemberSchema)
-    .mutation(async ({ ctx: { db }, input }) => {
+    .mutation(async ({ ctx: { db, teamId }, input }) => {
+      if (input.teamId !== teamId) {
+        throw new TRPCError({ code: "FORBIDDEN" });
+      }
+
       return updateTeamMember(db, input);
     }),
 

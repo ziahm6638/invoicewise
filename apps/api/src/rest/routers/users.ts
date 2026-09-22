@@ -1,8 +1,10 @@
+import { auth } from "@api/auth";
 import type { Context } from "@api/rest/types";
 import { updateUserSchema, userSchema } from "@api/schemas/users";
 import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
-import { getUserById, updateUser } from "@midday/db/queries";
+import { getUserById, hasTeamAccess, updateUser } from "@midday/db/queries";
+import { HTTPException } from "hono/http-exception";
 import { withRequiredScope } from "../middleware";
 
 const app = new OpenAPIHono<Context>();
@@ -72,6 +74,20 @@ app.openapi(
     const db = c.get("db");
     const session = c.get("session");
     const body = c.req.valid("json");
+
+    if (
+      body.teamId &&
+      !(await hasTeamAccess(db, body.teamId, session.user.id))
+    ) {
+      throw new HTTPException(403, { message: "Team not found" });
+    }
+
+    if (body.teamId) {
+      await auth.api.setActiveOrganization({
+        body: { organizationId: body.teamId },
+        headers: c.req.raw.headers,
+      });
+    }
 
     const result = await updateUser(db, {
       id: session.user.id,

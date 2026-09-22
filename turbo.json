@@ -25,8 +25,10 @@
         "lib/**"
       ],
       "passThroughEnv": [
-        "SUPABASE_SERVICE_KEY",
-        "SUPABASE_API_KEY",
+        "BETTER_AUTH_SECRET",
+        "BETTER_AUTH_URL",
+        "BETTER_AUTH_COOKIE_DOMAIN",
+        "AUTH_EMAIL_FROM",
         "RESEND_API_KEY",
         "RESEND_AUDIENCE_ID",
         "UPSTASH_REDIS_REST_URL",
