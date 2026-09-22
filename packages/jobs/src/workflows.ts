@@ -42,6 +42,7 @@ import {
   Resend,
 } from "resend";
 import sharp from "sharp";
+import { enqueueAccountingPost, postAccountingDraft } from "./accounting";
 import { workflowKey } from "./client";
 import { processDocumentAttachment } from "./process-document";
 import {
@@ -49,6 +50,7 @@ import {
   type InitialInboxSetupPayload,
   type InviteTeamMembersPayload,
   type OnboardTeamPayload,
+  type PostAccountingDraftPayload,
   type ProcessAttachmentPayload,
   type SyncInboxAccountPayload,
   WorkflowRequest,
@@ -407,10 +409,32 @@ const makeProcessAttachment = (
           }),
         "Unable to process invoice",
       );
+      const accountingQueued = processed.record
+        ? yield* attempt(
+            () =>
+              enqueueAccountingPost(db, {
+                invoiceId: processed.record!.id,
+                teamId: payload.teamId,
+              }),
+            "Unable to queue accounting post",
+          ).pipe(
+            Effect.map((queued) => queued !== null),
+            Effect.catchAll((error) =>
+              Effect.logWarning("accounting_post_queue_failed").pipe(
+                Effect.annotateLogs({
+                  invoiceId: processed.record!.id,
+                  reason: error.reason,
+                }),
+                Effect.as(false),
+              ),
+            ),
+          )
+        : false;
       return {
         inboxId: inboxItem.id,
         type: processed.result.type ?? null,
         judgments: processed.result.judgments?.length ?? 0,
+        accountingQueued,
       };
     });
 
@@ -730,6 +754,16 @@ export const WorkflowHandlerLive = Layer.effect(
     const inviteTeamMembers = makeInviteTeamMembers(mailer);
     const onboardTeam = makeOnboardTeam(db, mailer);
     const webhookRepository = makeWebhookDeliveryRepository(db);
+    const postAccountingDraftJob = (payload: PostAccountingDraftPayload) =>
+      postAccountingDraft(db, storage, payload).pipe(
+        Effect.mapError(
+          (error) =>
+            new WorkflowExecutionError({
+              reason: error.reason,
+              retryable: error.retryable,
+            }),
+        ),
+      );
     const deliverWebhookJob = (
       job: WorkflowJob,
       payload: DeliverWebhookPayload,
@@ -771,6 +805,8 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* onboardTeam(job, request.payload);
             case "deliver-webhook":
               return yield* deliverWebhookJob(job, request.payload);
+            case "post-accounting-draft":
+              return yield* postAccountingDraftJob(request.payload);
           }
         }) as Effect.Effect<Record<string, unknown>, WorkflowExecutionError>,
     };

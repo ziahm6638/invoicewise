@@ -261,6 +261,54 @@ export async function getWorkflowJob(
   return job;
 }
 
+export async function getWorkflowJobByKey(
+  db: Database,
+  params: { name: string; idempotencyKey: string; teamId: string },
+) {
+  const [job] = await db
+    .select()
+    .from(workflowJobs)
+    .where(
+      and(
+        eq(workflowJobs.name, params.name),
+        eq(workflowJobs.idempotencyKey, params.idempotencyKey),
+        eq(workflowJobs.teamId, params.teamId),
+      ),
+    )
+    .limit(1);
+  return job;
+}
+
+export async function restartFailedWorkflowJob(
+  db: Database,
+  params: { id: string; teamId: string },
+) {
+  const now = new Date().toISOString();
+  const [job] = await db
+    .update(workflowJobs)
+    .set({
+      status: "queued",
+      attempts: 0,
+      runAt: now,
+      lockedBy: null,
+      lockedAt: null,
+      heartbeatAt: null,
+      leaseExpiresAt: null,
+      finishedAt: null,
+      lastError: null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(workflowJobs.id, params.id),
+        eq(workflowJobs.teamId, params.teamId),
+        eq(workflowJobs.status, "failed"),
+      ),
+    )
+    .returning();
+  return job;
+}
+
 export function listWorkflowJobs(db: Database, limit = 50) {
   return db
     .select()

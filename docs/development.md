@@ -132,6 +132,14 @@ the API or standalone worker environment for normal workflow processing.
 verification command starts a deterministic TypeSafe stub and does not require
 external credentials.
 
+Accounting connections and draft-bill delivery use Nango. Set
+`NANGO_SECRET_KEY`, the Xero and QuickBooks integration IDs, and their
+draft-bill action names in both the API and standalone worker environments.
+`NANGO_BASE_URL` defaults to Nango Cloud and is overridden only by the local
+verification stub. See [Nango accounting integrations](accounting-integrations.md)
+for the action contract, required API-key scopes, connection-ID storage, local
+proof command, and the live-provider checks that remain outstanding.
+
 To verify the stored-PDF-to-database path with the committed synthetic fixture:
 
 ```bash

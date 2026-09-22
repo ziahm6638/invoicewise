@@ -7,12 +7,14 @@
     "status": "bun run src/status.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test src",
-    "verify": "bun run src/verify-workflows.ts"
+    "verify": "bun run src/verify-workflows.ts",
+    "verify:accounting": "bun run src/verify-accounting.ts"
   },
   "exports": {
     ".": "./src/client.ts",
     "./runner": "./src/runner.ts",
     "./schema": "./src/schema.ts",
+    "./accounting": "./src/accounting.ts",
     "./webhooks": "./src/webhooks.ts"
   },
   "dependencies": {
