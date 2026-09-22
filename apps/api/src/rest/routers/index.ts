@@ -1,5 +1,6 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { protectedMiddleware } from "../middleware";
+import { accountingRouter } from "./accounting";
 import { inboxRouter } from "./inbox";
 import { invoicesRouter } from "./invoices";
 import oauthRouter from "./oauth";
@@ -21,5 +22,6 @@ routers.route("/users", usersRouter);
 routers.route("/inbox", inboxRouter);
 routers.route("/invoices", invoicesRouter);
 routers.route("/webhooks", webhooksRouter);
+routers.route("/accounting", accountingRouter);
 
 export { routers };

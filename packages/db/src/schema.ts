@@ -119,6 +119,15 @@ export const webhookDeliveryStatusEnum = pgEnum("webhook_delivery_status", [
   "succeeded",
   "failed",
 ]);
+export const accountingProviderEnum = pgEnum("accounting_provider", [
+  "xero",
+  "quickbooks",
+]);
+export const accountingPostStatusEnum = pgEnum("accounting_post_status", [
+  "posted",
+  "already_posted",
+  "failed",
+]);
 export const invoiceDeliveryTypeEnum = pgEnum("invoice_delivery_type", [
   "create",
   "create_and_send",
@@ -2002,6 +2011,15 @@ export const inbox = pgTable(
     meta: json(),
     extraction: jsonb("extraction").$type<Record<string, unknown>>(),
     judgments: jsonb("judgments").$type<Record<string, unknown>[]>(),
+    accountingProvider: accountingProviderEnum("accounting_provider"),
+    accountingPostStatus: accountingPostStatusEnum("accounting_post_status"),
+    accountingProviderId: text("accounting_provider_id"),
+    accountingPostError: text("accounting_post_error"),
+    accountingPostedAt: timestamp("accounting_posted_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    accountingIdempotencyKey: text("accounting_idempotency_key"),
     status: inboxStatusEnum().default("new"),
     website: text(),
     displayName: text("display_name"),
@@ -2078,6 +2096,52 @@ export const inbox = pgTable(
       for: "update",
       to: ["public"],
     }),
+  ],
+);
+
+export const accountingConnections = pgTable(
+  "accounting_connections",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    provider: accountingProviderEnum("provider").notNull(),
+    integrationId: text("integration_id").notNull(),
+    connectionId: text("connection_id").notNull(),
+    capabilities: text("capabilities")
+      .array()
+      .default(sql`ARRAY['draft_bills']::text[]`)
+      .notNull(),
+    connectedAt: timestamp("connected_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    disconnectedAt: timestamp("disconnected_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("accounting_connections_team_id_idx").on(table.teamId),
+    unique("accounting_connections_team_provider_key").on(
+      table.teamId,
+      table.provider,
+    ),
+    uniqueIndex("accounting_connections_one_active_per_team_key")
+      .on(table.teamId)
+      .where(sql`${table.disconnectedAt} IS NULL`),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "accounting_connections_team_id_fkey",
+    }).onDelete("cascade"),
   ],
 );
 

@@ -1,4 +1,5 @@
 export * from "./activities";
+export * from "./accounting-connections";
 export * from "./api-keys";
 export * from "./apps";
 export * from "./bank-accounts";

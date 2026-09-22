@@ -81,6 +81,19 @@ const RepositoryTest = Layer.succeed(InvoiceRepository, {
           ]
         : [],
     ),
+  accountingStatus: (invoiceId, teamId) =>
+    Effect.succeed(
+      invoiceId === invoice.id && teamId === "team-123"
+        ? {
+            provider: "xero" as const,
+            status: "posted" as const,
+            providerId: "xero-bill-1",
+            lastError: null,
+            postedAt: "2026-09-20T12:02:00.000Z",
+            idempotencyKey: `invoicewise:${invoice.id}`,
+          }
+        : null,
+    ),
   exportRows: (teamId) =>
     Effect.succeed(teamId === "team-123" ? [invoice] : []),
 });
@@ -201,6 +214,11 @@ describe("Effect invoice read HTTP slice", () => {
           attempts: 1,
         }),
       ],
+      accounting: expect.objectContaining({
+        provider: "xero",
+        status: "posted",
+        providerId: "xero-bill-1",
+      }),
     });
   });
 

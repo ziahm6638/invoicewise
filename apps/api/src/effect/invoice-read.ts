@@ -3,6 +3,7 @@ import {
   type GetInboxParams,
   getInbox,
   getInboxById,
+  getInvoiceAccountingStatus,
   getInvoiceDeliveryStatus,
   getInvoiceExportRows,
 } from "@midday/db/queries";
@@ -110,6 +111,16 @@ export const DeliveryStatusItem = Schema.Struct({
 });
 export const DeliveryStatus = Schema.Struct({
   data: Schema.Array(DeliveryStatusItem),
+  accounting: Schema.NullOr(
+    Schema.Struct({
+      provider: Schema.String,
+      status: Schema.String,
+      providerId: Schema.NullOr(Schema.String),
+      lastError: Schema.NullOr(Schema.String),
+      postedAt: Schema.NullOr(Schema.String),
+      idempotencyKey: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 export type DeliveryStatus = typeof DeliveryStatus.Type;
 
@@ -133,6 +144,9 @@ type InboxItemResult = Awaited<ReturnType<typeof getInboxById>>;
 type DeliveryStatusResult = Awaited<
   ReturnType<typeof getInvoiceDeliveryStatus>
 >;
+type AccountingStatusResult = Awaited<
+  ReturnType<typeof getInvoiceAccountingStatus>
+>;
 type ExportRowsResult = Awaited<ReturnType<typeof getInvoiceExportRows>>;
 
 export class InvoiceRepository extends Context.Tag(
@@ -151,6 +165,10 @@ export class InvoiceRepository extends Context.Tag(
       id: string,
       teamId: string,
     ) => Effect.Effect<DeliveryStatusResult, InvoiceReadError>;
+    readonly accountingStatus: (
+      id: string,
+      teamId: string,
+    ) => Effect.Effect<AccountingStatusResult, InvoiceReadError>;
     readonly exportRows: (
       teamId: string,
     ) => Effect.Effect<ExportRowsResult, InvoiceReadError>;
@@ -278,6 +296,12 @@ export const InvoiceRepositoryLive = Layer.effect(
           try: () => getInvoiceDeliveryStatus(db, { invoiceId: id, teamId }),
           catch: () =>
             new InvoiceReadError({ error: "Unable to read delivery status" }),
+        }),
+      accountingStatus: (id: string, teamId: string) =>
+        Effect.tryPromise({
+          try: () => getInvoiceAccountingStatus(db, { invoiceId: id, teamId }),
+          catch: () =>
+            new InvoiceReadError({ error: "Unable to read accounting status" }),
         }),
       exportRows: (teamId: string) =>
         Effect.tryPromise({
@@ -462,6 +486,7 @@ export const InvoiceReadLayer = Layer.effect(
         }
         return yield* decode(DeliveryStatus, {
           data: yield* repository.deliveryStatus(id, teamId),
+          accounting: yield* repository.accountingStatus(id, teamId),
         });
       });
 

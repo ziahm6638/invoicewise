@@ -51,6 +51,12 @@ export const DeliverWebhookPayload = Schema.Struct({
 });
 export type DeliverWebhookPayload = typeof DeliverWebhookPayload.Type;
 
+export const PostAccountingDraftPayload = Schema.Struct({
+  invoiceId: Schema.String,
+  teamId: Schema.String,
+});
+export type PostAccountingDraftPayload = typeof PostAccountingDraftPayload.Type;
+
 export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("process-attachment"),
@@ -75,6 +81,10 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("deliver-webhook"),
     payload: DeliverWebhookPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("post-accounting-draft"),
+    payload: PostAccountingDraftPayload,
   }),
 );
 export type WorkflowRequest = typeof WorkflowRequest.Type;

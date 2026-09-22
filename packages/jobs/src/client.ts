@@ -59,5 +59,6 @@ export const workflowKey = {
   invitations: (teamId: string, identifiers: readonly string[]) =>
     `${teamId}:${[...identifiers].sort().join(",")}`,
   onboarding: (userId: string, stage = "welcome") => `${userId}:${stage}`,
+  accounting: (teamId: string, invoiceId: string) => `${teamId}:${invoiceId}`,
   webhook: (eventId: string, endpointId: string) => `${eventId}:${endpointId}`,
 };
