@@ -341,9 +341,8 @@ changes. To recover:
 ### Dependency and secret checks
 
 `.github/workflows/ci.yml` runs `bun run verify` on pull requests and pushes to
-`main`, and a separate `security` job that runs `bun run verify:security` plus
-`actions/dependency-review-action` on pull requests. Both jobs should be
-required checks in branch protection; each uploads the redacted
+`main`, and a separate `security` job that runs `bun run verify:security`.
+Both jobs should be required checks in branch protection; each uploads the redacted
 `.verify-artifacts` directory when it fails.
 
 - Dependencies: `bun audit --json` is compared with

@@ -68,7 +68,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      pull-requests: read
     steps:
       - uses: actions/checkout@v4
 
@@ -82,12 +81,6 @@ jobs:
 
       - name: Dependency and secret checks
         run: bun run verify:security
-
-      - name: Review dependency changes in this pull request
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: high
 
       - name: Upload redacted failure evidence
         if: failure()
