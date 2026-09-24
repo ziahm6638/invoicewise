@@ -23,11 +23,10 @@ export default async function InvoicesPage({ searchParams }: Props) {
   const filter = loadInboxFilterParams(values);
   const params = loadInboxParams(values);
   const data = await queryClient.fetchInfiniteQuery(
-    trpc.inbox.get.infiniteQueryOptions({
-      order: params.order,
-      sort: params.sort,
-      ...filter,
-    }),
+    trpc.inbox.get.infiniteQueryOptions(
+      { order: params.order, sort: params.sort, ...filter },
+      { getNextPageParam: ({ meta }) => meta?.cursor },
+    ),
   );
 
   if (

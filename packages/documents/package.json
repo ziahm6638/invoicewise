@@ -22,7 +22,7 @@
     "canvas": "^3.1.2",
     "effect": "^3.22.2",
     "pdfjs-dist": "4.8.69",
-    "sharp": "0.34.1"
+    "sharp": "0.35.4"
   },
   "devDependencies": {
     "@types/bun": "^1.2.21"

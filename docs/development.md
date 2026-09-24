@@ -465,11 +465,10 @@ Both jobs should be required checks in branch protection; each uploads the redac
 
 - Dependencies: `bun audit --json` is compared with
   `scripts/verify/dependency-advisory-baseline.json`. A new **high** or
-  **critical** advisory fails the job. The 132 recorded entries are the initial
-  inventory of outstanding security debt for the inherited dependency tree,
-  tracked under **#62** for triage and burn-down; they are not release
-  clearance. Remove a baseline entry only after the upgrade that resolves it,
-  and never add one without a written reason in the same change.
+  **critical** advisory fails the job. The inherited inventory of 132 entries
+  was burned down to zero under **#74**, largely through the root `overrides`
+  in `package.json`. Remove a baseline entry only after the upgrade that
+  resolves it, and never add one without a written reason in the same change.
 - Secrets: tracked **and untracked non-ignored** files are scanned locally for
   high-confidence credential patterns (private keys, cloud/provider tokens,
   assigned credentials). CI scans the committed files. Exceptions are exact
