@@ -77,8 +77,14 @@ export class WorkflowExecutionError extends Schema.TaggedError<WorkflowExecution
   {
     reason: Schema.String,
     retryable: Schema.Boolean,
+    /** The reason safe to show the customer; absent for internal failures. */
+    userMessage: Schema.optional(Schema.String),
   },
 ) {}
+
+/** Recorded on an invoice whose failure is not the document's fault. */
+export const TEMPORARY_PROCESSING_FAILURE =
+  "A temporary processing problem stopped this invoice from being read. Retry it shortly.";
 
 export class WorkflowDatabase extends Context.Tag(
   "invoicewise/WorkflowDatabase",
@@ -129,6 +135,13 @@ const executionError = (error: unknown, fallback: string, retryable = true) =>
       typeof error.retryable === "boolean"
         ? error.retryable
         : retryable,
+    userMessage:
+      typeof error === "object" &&
+      error !== null &&
+      "userMessage" in error &&
+      typeof error.userMessage === "string"
+        ? error.userMessage
+        : undefined,
   });
 
 const attempt = <A>(
@@ -451,20 +464,30 @@ const makeProcessAttachment = (
     });
 
     return yield* processing.pipe(
-      // A final failure is recorded on the invoice with its reason, in the
-      // same shape for every input format; a retryable one waits for the
-      // next attempt.
+      // A final failure is recorded on the invoice in the same shape for
+      // every input format: the customer sees the document's problem or a
+      // generic retry message, and the internal detail stays in the logs. A
+      // retryable failure waits for the next attempt.
       Effect.tapError((error) =>
         !error.retryable || job.attempts >= job.maxAttempts
-          ? attempt(
-              () =>
-                recordInboxProcessingFailure(db, {
-                  id: inboxItem.id,
-                  teamId: payload.teamId,
-                  error: error.reason,
-                }).then(() => undefined),
-              "Unable to update failed invoice",
-            ).pipe(Effect.ignore)
+          ? Effect.logWarning("invoice_processing_failed").pipe(
+              Effect.annotateLogs({
+                inboxId: inboxItem.id,
+                reason: error.reason,
+              }),
+              Effect.zipRight(
+                attempt(
+                  () =>
+                    recordInboxProcessingFailure(db, {
+                      id: inboxItem.id,
+                      teamId: payload.teamId,
+                      error: error.userMessage ?? TEMPORARY_PROCESSING_FAILURE,
+                    }).then(() => undefined),
+                  "Unable to update failed invoice",
+                ),
+              ),
+              Effect.ignore,
+            )
           : Effect.void,
       ),
     );

@@ -225,7 +225,12 @@ Every input persists the same fields on its `inbox` record:
   a limit, unsupported) fail at once; transient ones (provider or parser
   capacity) are retried and recorded only after the last attempt. An explicit
   retry clears the reason while it runs. REST/MCP reads return
-  `processingError` and the dashboard shows it on the failed invoice.
+  `processingError` and the dashboard shows it on the failed invoice. Only
+  the document's own problems are recorded word for word; provider,
+  infrastructure and configuration failures are recorded as a generic
+  temporary processing problem, with the detail in the worker log
+  (`invoice_processing_failed`). A failure is recorded only on a document
+  still `processing`, so a later error never erases a saved extraction.
 
 Fixtures for each input live in `packages/documents/src/test/fixtures`
 (regenerate with `generate-uk-invoice.ts`): `uk-invoice.pdf` (text PDF),

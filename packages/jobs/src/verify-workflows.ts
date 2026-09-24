@@ -9,6 +9,7 @@ import {
   getInboxIntakeBinding,
   getUserQuestions,
   getWorkflowJob,
+  recordInboxProcessingFailure,
   updateInboxWithProcessedData,
   updateUserQuestion,
 } from "@invoicewise/db/queries";
@@ -20,6 +21,7 @@ import { Effect, Logger } from "effect";
 import { enqueueWorkflow, workflowKey } from "./client";
 import { acceptIntakeUpload } from "./intake";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
+import { TEMPORARY_PROCESSING_FAILURE } from "./workflows";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -405,12 +407,92 @@ async function verifyInputMatrix(
     throw new Error("The input formats persisted different data shapes");
   }
 
+  // A failure after the extraction is saved (for example while emitting its
+  // webhook) must never erase the processed invoice.
+  const processed = rows[0]!;
+  const lateFailure = await recordInboxProcessingFailure(database.db, {
+    id: processed.row.id,
+    teamId,
+    error: "late failure",
+  });
+  const [afterLateFailure] = await database.db
+    .select()
+    .from(inbox)
+    .where(eq(inbox.id, processed.row.id))
+    .limit(1);
+  if (
+    lateFailure !== undefined ||
+    afterLateFailure?.processingError !== null ||
+    !Bun.deepEquals(afterLateFailure.extraction, processed.row.extraction)
+  ) {
+    throw new Error("A late failure erased a processed invoice");
+  }
+
+  // A provider failure is recorded with a generic reason; its internal
+  // detail never reaches the customer.
+  const internalFailure = await verifyInternalFailureHidden(
+    database,
+    storage,
+    teamId,
+  );
+
   return {
     formats: rows.map(({ upload }) => upload.file),
     sameShape: true,
     extractedGross: expectedFields.grossAmount,
     nonInvoiceError: letter.row.processingError,
+    lateFailureKeptExtraction: true,
+    internalFailure,
   };
+}
+
+async function verifyInternalFailureHidden(
+  database: ReturnType<typeof createDatabaseClient>,
+  storage: ReturnType<typeof createStorageClientFromEnv>,
+  teamId: string,
+) {
+  const rejecting = Bun.serve({
+    port: 0,
+    fetch: () => new Response("unauthorized", { status: 401 }),
+  });
+  const baseUrl = process.env.TYPESAFE_BASE_URL;
+  process.env.TYPESAFE_BASE_URL = `http://127.0.0.1:${rejecting.port}`;
+  try {
+    const file = "uk-invoice-multipage.pdf";
+    const accepted = await acceptIntakeUpload(database.db, storage, {
+      teamId,
+      bytes: new Uint8Array(
+        await Bun.file(resolve(fixturesDir(), file)).arrayBuffer(),
+      ),
+      declaredMimeType: "application/pdf",
+      fileName: file,
+    });
+    if (accepted.status !== "accepted") {
+      throw new Error(`${file} was not accepted: ${accepted.message}`);
+    }
+    await drain();
+    const [row] = await database.db
+      .select()
+      .from(inbox)
+      .where(eq(inbox.id, accepted.inboxId))
+      .limit(1);
+    if (
+      row?.status !== "pending" ||
+      row.extraction !== null ||
+      row.processingError !== TEMPORARY_PROCESSING_FAILURE
+    ) {
+      throw new Error(
+        `A provider failure was not recorded generically: ${JSON.stringify({
+          status: row?.status,
+          processingError: row?.processingError,
+        })}`,
+      );
+    }
+    return row.processingError;
+  } finally {
+    process.env.TYPESAFE_BASE_URL = baseUrl;
+    rejecting.stop(true);
+  }
 }
 
 async function main() {

@@ -4,14 +4,17 @@ import { TypeSafeError, TypeSafeLive } from "../../typesafe/client";
 import { processInvoice } from "../../typesafe/invoice";
 
 /**
- * A failed invoice run. `message` is the reason recorded on the invoice and
- * `retryable` tells the worker whether another attempt can succeed.
+ * A failed invoice run. `message` is the internal detail for logs,
+ * `userMessage` the reason safe to record on the invoice (absent when the
+ * failure is not the document's fault) and `retryable` tells the worker
+ * whether another attempt can succeed.
  */
 export class InvoiceProcessingError extends Error {
   override readonly name = "InvoiceProcessingError";
   constructor(
     message: string,
     readonly retryable: boolean,
+    readonly userMessage?: string,
   ) {
     super(message);
   }
@@ -35,6 +38,7 @@ export class InvoiceProcessor {
         throw new InvoiceProcessingError(
           failure.value.reason,
           failure.value.retryable,
+          failure.value.userMessage,
         );
       }
       // Missing TypeSafe configuration: another attempt cannot succeed.

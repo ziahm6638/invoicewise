@@ -2049,7 +2049,8 @@ export async function updateInboxWithProcessedData(
  * Records a failed extraction on an accepted document. Every input format
  * fails into the same shape: status `pending`, the reason in
  * `processing_error`, and no extraction or judgments, so a failure can never
- * be mistaken for a processed invoice.
+ * be mistaken for a processed invoice. Only a document still `processing` is
+ * marked failed: a later failure never erases a saved extraction.
  */
 export async function recordInboxProcessingFailure(
   db: InboxQueryDatabase,
@@ -2067,7 +2068,7 @@ export async function recordInboxProcessingFailure(
       and(
         eq(inbox.id, params.id),
         eq(inbox.teamId, params.teamId),
-        ne(inbox.status, "deleted"),
+        eq(inbox.status, "processing"),
         visibleIntakeState(),
       ),
     )

@@ -262,11 +262,38 @@ export const DEFAULT_INVOICE_JUDGMENTS: readonly InvoiceJudgmentQuestion[] = [
 const readError = (reason: string, retryable: boolean) =>
   new TypeSafeError({ reason, retryable });
 
+/** A problem with the document itself, explained to the customer as is. */
+const documentError = (reason: string) =>
+  new TypeSafeError({ reason, retryable: false, userMessage: reason });
+
 const RETRYABLE_READ_FAILURES: readonly IsolatedPdfFailureCode[] = [
   "busy",
   "monitor_unavailable",
   "task_failed",
 ];
+
+const OVER_READ_LIMIT =
+  "The document is too large or complex to read within the processing limits. Upload the invoice pages on their own, or a smaller copy.";
+
+const ISOLATED_FAILURE_MESSAGES: Partial<
+  Record<IsolatedPdfFailureCode, string>
+> = {
+  malformed:
+    "The document is damaged or is not a valid PDF or image. Upload a fresh copy.",
+  password_protected:
+    "The PDF is password protected. Upload a copy without a password.",
+  limit: OVER_READ_LIMIT,
+  output_limit: OVER_READ_LIMIT,
+  timeout: OVER_READ_LIMIT,
+  memory_limit: OVER_READ_LIMIT,
+};
+
+const isolatedError = (detail: string, code: IsolatedPdfFailureCode) =>
+  new TypeSafeError({
+    reason: detail,
+    retryable: RETRYABLE_READ_FAILURES.includes(code),
+    userMessage: ISOLATED_FAILURE_MESSAGES[code],
+  });
 
 /** How each supported input type is read; anything else is refused. */
 const INPUT_KIND: Record<string, "pdf" | "image"> = {
@@ -308,9 +335,9 @@ const ocrImage = (image: Uint8Array, page: number) =>
       result.ok
         ? Effect.succeed(result.result.lines)
         : Effect.fail(
-            readError(
+            isolatedError(
               `OCR failed (${result.code}): ${result.message}`,
-              RETRYABLE_READ_FAILURES.includes(result.code),
+              result.code,
             ),
           ),
     ),
@@ -330,7 +357,7 @@ const uprightImage = (image: Uint8Array) =>
         .png()
         .toBuffer()
         .then((buffer) => new Uint8Array(buffer)),
-    catch: () => readError("The image could not be decoded for OCR", false),
+    catch: () => documentError("The image could not be decoded for OCR"),
   });
 
 /**
@@ -347,9 +374,9 @@ const readPdf = (bytes: Uint8Array) =>
     );
     if (!extracted.ok) {
       return yield* Effect.fail(
-        readError(
+        isolatedError(
           `PDF text extraction failed (${extracted.code}): ${extracted.message}`,
-          RETRYABLE_READ_FAILURES.includes(extracted.code),
+          extracted.code,
         ),
       );
     }
@@ -363,9 +390,8 @@ const readPdf = (bytes: Uint8Array) =>
     // silently drop the rest of the invoice.
     if (ocrPages > INVOICE_EXTRACTION_LIMITS.maxOcrPages) {
       return yield* Effect.fail(
-        readError(
+        documentError(
           `This PDF has ${ocrPages} scanned pages without a text layer; at most ${INVOICE_EXTRACTION_LIMITS.maxOcrPages} scanned pages are read per invoice. Upload the invoice pages on their own, or a PDF with a text layer.`,
-          false,
         ),
       );
     }
@@ -385,9 +411,9 @@ const readPdf = (bytes: Uint8Array) =>
       );
       if (!rendered.ok) {
         return yield* Effect.fail(
-          readError(
+          isolatedError(
             `Rendering page ${index + 1} for OCR failed (${rendered.code}): ${rendered.message}`,
-            RETRYABLE_READ_FAILURES.includes(rendered.code),
+            rendered.code,
           ),
         );
       }
@@ -414,9 +440,8 @@ const readDocument = (request: GetDocumentRequest) =>
     const kind = INPUT_KIND[request.mimetype.split(";")[0]!.trim()];
     if (!kind) {
       return yield* Effect.fail(
-        readError(
+        documentError(
           `Unsupported document type ${request.mimetype}. Only PDF, JPEG and PNG invoices are processed.`,
-          false,
         ),
       );
     }
@@ -447,9 +472,8 @@ const taggedDocument = (lines: readonly DocumentLine[], maxChars: number) => {
 };
 
 const tooLong = (reason: string) =>
-  readError(
+  documentError(
     `${reason} Upload the invoice pages on their own, without appended statements or terms.`,
-    false,
   );
 
 const choiceQuestion = <T>(
@@ -554,9 +578,8 @@ export const extractInvoiceLines = (
     const plain = documentPlainText(lines);
     if (readableCharacters(plain) < 20) {
       return yield* Effect.fail(
-        readError(
+        documentError(
           "The document has no readable text, even after OCR. Upload a clearer copy.",
-          false,
         ),
       );
     }
@@ -863,9 +886,8 @@ export const extractInvoiceLines = (
 
     if (!hasInvoiceContent(extraction)) {
       return yield* Effect.fail(
-        readError(
+        documentError(
           "No invoice details could be read from this document. Check that it is an invoice and upload a clearer copy.",
-          false,
         ),
       );
     }

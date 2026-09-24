@@ -952,6 +952,9 @@ describe("supported input matrix", () => {
       ),
     );
     expect(error.reason).toContain("PDF text extraction failed (malformed)");
+    expect(error.userMessage).toBe(
+      "The document is damaged or is not a valid PDF or image. Upload a fresh copy.",
+    );
     expect(error.retryable).toBe(false);
   });
 
@@ -965,6 +968,7 @@ describe("supported input matrix", () => {
       ),
     );
     expect(error.reason).toContain("Unsupported document type image/heic");
+    expect(error.userMessage).toBe(error.reason);
     expect(error.retryable).toBe(false);
   });
 });
