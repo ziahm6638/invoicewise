@@ -23,9 +23,10 @@ export function SectionTwo() {
           </h3>
 
           <p className="text-[#878787] mb-8 lg:mb-4 text-sm">
-            Forward an invoice and InvoiceWise reads the supplier, amounts,
-            dates, VAT, line items and bank details straight from the PDF or
-            scan. No templates, no manual entry, nothing to re-type.
+            Upload an invoice, or forward one to your dedicated mailbox (coming
+            soon), and InvoiceWise reads the supplier, amounts, dates, VAT, line
+            items and bank details straight from the PDF or scan. No templates,
+            no manual entry, nothing to re-type.
           </p>
 
           <div className="flex flex-col space-y-2">

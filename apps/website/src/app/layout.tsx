@@ -13,7 +13,7 @@ import { baseUrl } from "./sitemap";
 
 const title = "InvoiceWise | Invoice middleware";
 const description =
-  "Forward invoices to a dedicated mailbox. InvoiceWise extracts the fields with TypeSafe, answers your own questions automatically, and delivers clean data to Xero, QuickBooks, your API, MCP, webhooks or CSV.";
+  "Forward invoices to a dedicated mailbox (coming soon). InvoiceWise extracts the fields with TypeSafe, answers your own questions automatically, and delivers clean data to Xero (coming), QuickBooks (coming), your API, MCP, webhooks or CSV.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
