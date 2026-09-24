@@ -88,7 +88,7 @@ export function SectionFour() {
           </div>
           <div className="flex space-x-2 text-sm">
             <Check />
-            <span className="text-primary">No upload step required</span>
+            <span className="text-primary">No upload step once your mailbox is live</span>
           </div>
         </div>
 

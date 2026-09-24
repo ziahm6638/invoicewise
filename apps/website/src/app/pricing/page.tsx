@@ -42,7 +42,7 @@ export default function Page() {
               </span>
             </div>
             <p className="mt-4 text-[#878787] text-sm">
-              For teams who want to try email-first extraction and judgments on
+              For teams who want to try TypeSafe extraction and judgments on
               real invoices.
             </p>
 

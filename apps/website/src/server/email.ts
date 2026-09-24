@@ -60,9 +60,10 @@ export async function sendConfirmationEmail(lead: {
   const body = [
     "Thanks for joining the InvoiceWise waitlist.",
     "",
-    "InvoiceWise is invoice middleware: forward invoices to a dedicated mailbox",
-    "and get typed, structured data back, ready for Xero, QuickBooks, your API",
-    "or your accountant. We will email you when early access opens.",
+    "InvoiceWise is invoice middleware: upload an invoice and get typed,",
+    "structured data back, with TypeSafe extraction and judgments. A dedicated",
+    "inbound mailbox and delivery to Xero and QuickBooks are coming. We will",
+    "email you when early access opens.",
     "",
     `You can find out more at ${SITE_URL}`,
     "",
