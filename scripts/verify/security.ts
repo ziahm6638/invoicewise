@@ -73,6 +73,11 @@ const SECRET_PATTERNS: SecretPattern[] = [
     pattern:
       /(?:api[_-]?key|client[_-]?secret|access[_-]?token|password)\s*[:=]\s*["']?([A-Za-z0-9_\-+/=]{24,})["']?/i,
   },
+  {
+    name: "env-credential",
+    pattern:
+      /^\s*(?:export\s+)?[A-Z0-9_]*(?:SECRET|KEY|TOKEN|PASSWORD)[A-Z0-9_]*\s*[:=]\s*["']?(?=[A-Za-z0-9_\-+/=.]*[a-z\-+/=])([A-Za-z0-9_\-+/=.]{16,})["']?/,
+  },
 ];
 
 /**
@@ -122,6 +127,92 @@ export const SECRET_EXCEPTIONS: {
     path: "apps/dashboard/.env-example",
     value: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     reason: "committed local template for the development encryption key",
+  },
+  {
+    path: ".env.example",
+    value: "invoicewise-secret",
+    reason: "committed local template for the development MinIO credential",
+  },
+  {
+    path: "apps/api/.env-template",
+    value: "invoicewise-secret",
+    reason: "committed local template for the development MinIO credential",
+  },
+  {
+    path: "apps/dashboard/.env-example",
+    value: "invoicewise-secret",
+    reason: "committed local template for the development MinIO credential",
+  },
+  {
+    path: "packages/jobs/.env-template",
+    value: "invoicewise-secret",
+    reason: "committed local template for the development MinIO credential",
+  },
+  {
+    path: "docs/development.md",
+    value: "invoicewise-secret",
+    reason: "documented development MinIO credential",
+  },
+  {
+    path: "packages/jobs/.env-template",
+    value: "local-development-storage-secret",
+    reason:
+      "committed local template for the development storage signing secret",
+  },
+  {
+    path: "docs/development.md",
+    value: "local-development-storage-secret",
+    reason: "documented development storage signing secret",
+  },
+  {
+    path: "apps/api/.env-template",
+    value: "re_local_development",
+    reason: "committed local template placeholder for the Resend key",
+  },
+  {
+    path: "apps/dashboard/.env-example",
+    value: "re_local_development",
+    reason: "committed local template placeholder for the Resend key",
+  },
+  {
+    path: "apps/api/.env-template",
+    value: "polar_local_development",
+    reason: "committed local template placeholder for the Polar token",
+  },
+  {
+    path: "apps/dashboard/.env-example",
+    value: "polar_local_development",
+    reason: "committed local template placeholder for the Polar token",
+  },
+  {
+    path: "apps/dashboard/.env-example",
+    value: "local-development-webhook-secret",
+    reason: "committed local template for the development webhook secret",
+  },
+  {
+    path: "scripts/verify/lib.ts",
+    value: "invoicewise-verify-auth-secret-0123456789abcdef",
+    reason: "synthetic verification auth secret",
+  },
+  {
+    path: "scripts/verify/lib.ts",
+    value: "invoicewise-verify-storage-signing-secret",
+    reason: "synthetic verification storage signing secret",
+  },
+  {
+    path: "scripts/verify/release.ts",
+    value: "invoicewise-verify-storage-signing-secret",
+    reason: "synthetic verification storage signing secret",
+  },
+  {
+    path: "scripts/verify/lib.ts",
+    value: "polar_verify_stub",
+    reason: "synthetic verification provider stub",
+  },
+  {
+    path: "scripts/verify/lib.ts",
+    value: "nango_verify_stub",
+    reason: "synthetic verification provider stub",
   },
   {
     path: "scripts/verify/verify-selftest.test.ts",

@@ -388,15 +388,17 @@ reason). A new or changed mismatch, a stale recorded entry, or any other
 manypkg error inside the probe fails the gate. Incompatible runtime ranges (zod
 v4 in `documents`/`categories`, the 0.x Polar SDK difference) are deliberately
 not forced; no dependency was upgraded for this check. The negative-control
-suite also asserts that the root `manypkg` configuration is exactly that single
-waiver.
+suite also runs manypkg against a probe copy to prove the root configuration
+waives only external range mismatches while every other rule still fails.
 
 Retired bank/transaction matching is the only product-scope exclusion: those
 suites stay in the repository for historical reference, are out of
 `packages/db`'s product `test` script (reachable via
 `bun run test:retired-bank-matching`), and the verification command still runs
-them, requiring a completed run with exactly the three recorded failing
-tiered-tolerance expectations — a crashed or unreadable run fails the gate.
+the retired unit suite (`transaction-matching.test.ts`), requiring a completed
+run whose failures are exactly the three recorded tiered-tolerance tests, by
+name — a crashed or unreadable run, a newly failing test or a recorded failure
+that starts passing fails the gate.
 `packages/supabase` is used only by the inherited marketing site, whose data
 sources are out of contract.
 

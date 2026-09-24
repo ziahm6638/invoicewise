@@ -459,6 +459,7 @@ export async function runMigrationVerification(
   const failure = await v.runStep("migrations:injected-failure", {
     ...migrateSpec(context, RECOVERY_DATABASE),
     expectFailure: true,
+    outputIncludes: 'type "inbox_intake_state" already exists',
   });
   await v.runCheck("migrations:failure-is-partial", async () => {
     if (!failure.ok) {

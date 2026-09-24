@@ -325,16 +325,7 @@ const makeProcessAttachment = (
       );
     }
 
-    if (binding.status === "deleted" || binding.intakeState === "cancelled") {
-      return yield* Effect.fail(
-        new WorkflowExecutionError({
-          reason: "Invoice document was deleted",
-          retryable: false,
-        }),
-      );
-    }
-
-    if (binding.intakeState === "accepted" && binding.status !== "processing") {
+    if (binding.status !== "processing") {
       return { inboxId: binding.id, idempotent: true };
     }
 

@@ -121,6 +121,12 @@ export const oauthApplicationsRouter = createTRPCRouter({
         throw new Error(`Invalid scopes: ${scopes.join(", ")}`);
       }
 
+      // The decision is redirected to this URI, so it must be registered even
+      // when the user denies.
+      if (!application.redirectUris.includes(redirectUri)) {
+        throw new Error("Invalid redirect_uri");
+      }
+
       const redirectUrl = new URL(redirectUri);
 
       // Handle denial early - no need to check team membership for denial

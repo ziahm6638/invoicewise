@@ -23,3 +23,21 @@ export const withRequiredTeamRole = (minimum: TeamRole): MiddlewareHandler => {
     await next();
   };
 };
+
+/**
+ * Requires an active workspace. Workspace resources cannot be read or written
+ * by a session that has not selected one.
+ */
+export const withRequiredTeam: MiddlewareHandler = async (c, next) => {
+  if (!c.get("teamId")) {
+    return c.json(
+      {
+        error: "Forbidden",
+        description: "Select a workspace to access this resource.",
+      },
+      403,
+    );
+  }
+
+  await next();
+};

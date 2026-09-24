@@ -9,6 +9,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmod,
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -17,7 +18,11 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { diffMismatches, parseMismatches } from "./dependency-ranges";
+import {
+  buildRangeProbe,
+  diffMismatches,
+  parseMismatches,
+} from "./dependency-ranges";
 import {
   ARTIFACTS_ROOT,
   Verification,
@@ -31,7 +36,10 @@ import {
   startProviderTrap,
   syntheticEnv,
 } from "./lib";
-import { parseRetiredMatchingOutcome } from "./scopes";
+import {
+  RETIRED_MATCHING_EXPECTED_FAILURES,
+  parseRetiredMatchingOutcome,
+} from "./scopes";
 import {
   SECRET_EXCEPTIONS,
   candidateFiles,
@@ -304,13 +312,46 @@ describe("dependency-range exceptions", () => {
     expect(diffMismatches([], exceptions).missing).toHaveLength(1);
   });
 
-  test("the manypkg waiver is exactly EXTERNAL_MISMATCH", async () => {
-    const rootManifest = (await Bun.file(
-      join(process.cwd(), "package.json"),
-    ).json()) as { manypkg?: unknown };
-    expect(rootManifest.manypkg).toEqual({
-      ignoredRules: ["EXTERNAL_MISMATCH"],
-    });
+  test("the repo manypkg configuration waives only external range mismatches", async () => {
+    const probe = await mkdtemp(join(tmpdir(), "manypkg-waiver-"));
+    const manypkg = (cwd: string) => {
+      const run = Bun.spawnSync(
+        [join(process.cwd(), "node_modules", ".bin", "manypkg"), "check"],
+        { cwd, stdout: "pipe", stderr: "pipe" },
+      );
+      return {
+        exitCode: run.exitCode,
+        output:
+          new TextDecoder().decode(run.stdout) +
+          new TextDecoder().decode(run.stderr),
+      };
+    };
+    try {
+      await buildRangeProbe(process.cwd(), probe);
+
+      // Without the waiver the recorded external mismatches are reported.
+      const unwaived = manypkg(probe);
+      expect(unwaived.exitCode).not.toBe(0);
+      expect(parseMismatches(unwaived.output).length).toBeGreaterThan(0);
+
+      // With the repository configuration the same manifests pass.
+      await copyFile(
+        join(process.cwd(), "package.json"),
+        join(probe, "package.json"),
+      );
+      expect(manypkg(probe).exitCode).toBe(0);
+
+      // Every other rule is still enforced under that configuration.
+      const apiManifestPath = join(probe, "apps", "api", "package.json");
+      const apiManifest = JSON.parse(await readFile(apiManifestPath, "utf8"));
+      apiManifest.dependencies["@invoicewise/db"] = "0.0.1";
+      await writeFile(apiManifestPath, JSON.stringify(apiManifest, null, 2));
+      const internal = manypkg(probe);
+      expect(internal.exitCode).not.toBe(0);
+      expect(internal.output).toContain("@invoicewise/db");
+    } finally {
+      await rm(probe, { recursive: true, force: true });
+    }
   });
 });
 
@@ -327,6 +368,35 @@ describe("secret scanner", () => {
     expect(scanContentForSecrets("tmp/probe.ts", assigned)).toHaveLength(1);
   });
 
+  test("detects generic secrets assigned to credential-named variables", () => {
+    const value = ["Q8vN2kL7", "pR4tX9zB", "1mC6wY3h"].join("");
+    for (const name of [
+      "BETTER_AUTH_SECRET",
+      "STORAGE_SIGNING_SECRET",
+      "MIDDAY_ENCRYPTION_KEY",
+      "POLAR_WEBHOOK_SECRET",
+      "NANGO_SECRET_KEY",
+      "STORAGE_S3_SECRET_ACCESS_KEY",
+    ]) {
+      const hits = scanContentForSecrets(
+        "apps/api/.env-template",
+        `${name}=${value}`,
+      );
+      expect(hits.map((hit) => hit.pattern)).toContain("env-credential");
+      expect(
+        scanContentForSecrets("tmp/probe.yml", `  ${name}: "${value}"`),
+      ).toHaveLength(1);
+    }
+
+    // References to other variables are not credentials.
+    expect(
+      scanContentForSecrets(
+        "tmp/probe.ts",
+        "  STORAGE_S3_SECRET_ACCESS_KEY: LOCAL_MINIO_SECRET_KEY,",
+      ),
+    ).toHaveLength(0);
+  });
+
   test("only waives exact fixture path/value pairs", () => {
     const exception = SECRET_EXCEPTIONS[0]!;
     expect(
@@ -341,8 +411,8 @@ describe("secret scanner", () => {
       scanContentForSecrets(
         exception.path,
         "BETTER_AUTH_SECRET=re_liveabcdefghijklmnop",
-      ),
-    ).toHaveLength(1);
+      ).length,
+    ).toBeGreaterThan(0);
 
     // Template-looking path with an unlisted value must still fail.
     expect(
@@ -355,7 +425,7 @@ describe("secret scanner", () => {
 
   test("reports location and pattern without exposing the value", () => {
     const value = "re_testabcdefghijklmnopqrst";
-    const hits = scanContentForSecrets("tmp/probe.env", `KEY=${value}`);
+    const hits = scanContentForSecrets("tmp/probe.env", `RESEND=${value}`);
     expect(hits).toHaveLength(1);
     const hit = hits[0]!;
     expect(hit.path).toBe("tmp/probe.env");
@@ -367,11 +437,11 @@ describe("secret scanner", () => {
 
 describe("retired-scope parsing", () => {
   const completed = [
-    "(fail) suite > case one [0.1ms]",
-    "(fail) suite > case two [0.1ms]",
-    "(fail) suite > case three [0.1ms]",
+    ...RETIRED_MATCHING_EXPECTED_FAILURES.map(
+      (name) => `(fail) ${name} [0.1ms]`,
+    ),
     " 3 fail",
-    "Ran 10 tests across 1 file.",
+    "Ran 25 tests across 1 file.",
   ].join("\n");
 
   test("accepts only the recorded completed failure set", () => {
@@ -393,5 +463,36 @@ describe("retired-scope parsing", () => {
       parseRetiredMatchingOutcome(`${completed}\n(fail) suite > extra [0.1ms]`)
         .ok,
     ).toBe(false);
+  });
+
+  test("rejects a swapped failure even when the count is unchanged", () => {
+    const swapped = [
+      ...RETIRED_MATCHING_EXPECTED_FAILURES.slice(1).map(
+        (name) => `(fail) ${name} [0.1ms]`,
+      ),
+      "(fail) Cross-Currency Matching Algorithm > another case [0.1ms]",
+      " 3 fail",
+      "Ran 25 tests across 1 file.",
+    ].join("\n");
+    const outcome = parseRetiredMatchingOutcome(swapped);
+    expect(outcome.ok).toBe(false);
+  });
+
+  test("the recorded failures match a real run of the retired suite", () => {
+    const run = Bun.spawnSync(
+      ["bun", "--no-env-file", "test", "src/test/transaction-matching.test.ts"],
+      {
+        cwd: join(process.cwd(), "packages", "db"),
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const output =
+      new TextDecoder().decode(run.stdout) +
+      new TextDecoder().decode(run.stderr);
+    expect(parseRetiredMatchingOutcome(output)).toEqual({
+      ok: true,
+      failures: RETIRED_MATCHING_EXPECTED_FAILURES.length,
+    });
   });
 });

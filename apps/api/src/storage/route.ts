@@ -43,22 +43,8 @@ const validateBinding = async (
   // at, so a re-bound or replaced record invalidates older links.
   if (binding.filePath.join("/") !== input.path) return null;
 
-  // Legacy rows were created with caller-selected paths. They are only served
-  // when the persisted path stays inside the record's own workspace.
-  const [root] = binding.filePath;
-  if (
-    binding.teamId &&
-    UUID_PATTERN.test(root ?? "") &&
-    root !== binding.teamId
-  ) {
-    return null;
-  }
-
   return binding;
 };
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Serving route for short-lived, inbox-bound capability URLs. The signature

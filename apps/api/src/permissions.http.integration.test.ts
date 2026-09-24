@@ -928,4 +928,78 @@ suite("workspace permissions over real HTTP", () => {
     );
     expect(memberRead.error).toBeNull();
   });
+
+  test("consent never redirects to an unregistered URI, even on deny", async () => {
+    const owner = await createUser("redirect-owner");
+    const redirectUri = `${BASE}/oauth/callback`;
+    const appResult = await trpc(
+      owner.cookie,
+      "oauthApplications.create",
+      {
+        name: `Redirect App ${crypto.randomUUID()}`,
+        redirectUris: [redirectUri],
+        scopes: ["inbox.read"],
+        isPublic: false,
+      },
+      "mutation",
+    );
+    expect(appResult.error).toBeNull();
+    const application = appResult.data as { clientId: string };
+
+    for (const decision of ["allow", "deny"] as const) {
+      const result = await trpc(
+        owner.cookie,
+        "oauthApplications.authorize",
+        {
+          clientId: application.clientId,
+          decision,
+          scopes: ["inbox.read"],
+          redirectUri: "https://attacker.example/callback",
+          state: "c".repeat(32),
+          teamId: owner.personalTeamId,
+        },
+        "mutation",
+      );
+      expect(result.data).toBeNull();
+      expect(String(result.error)).toContain("Invalid redirect_uri");
+    }
+
+    const registered = await trpc(
+      owner.cookie,
+      "oauthApplications.authorize",
+      {
+        clientId: application.clientId,
+        decision: "deny",
+        scopes: ["inbox.read"],
+        redirectUri,
+        teamId: owner.personalTeamId,
+      },
+      "mutation",
+    );
+    expect(registered.error).toBeNull();
+  });
+
+  test("REST workspace resources refuse a session with no active workspace", async () => {
+    const user = await createUser("no-active-team");
+    await primaryDb
+      .update(schema.authSessions)
+      .set({ activeOrganizationId: null })
+      .where(orm.eq(schema.authSessions.userId, user.userId));
+
+    for (const path of ["/inbox", "/invoices", "/webhooks"]) {
+      const response = await get(path, { cookie: user.cookie });
+      expect(response.status).toBe(403);
+    }
+
+    const presigned = await post(
+      `/inbox/${crypto.randomUUID()}/presigned-url`,
+      {},
+      user.cookie,
+    );
+    expect(presigned.status).toBe(403);
+
+    // Account routes still work without a workspace.
+    const me = await get("/users/me", { cookie: user.cookie });
+    expect(me.status).toBe(200);
+  });
 });

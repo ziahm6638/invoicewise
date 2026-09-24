@@ -1115,6 +1115,92 @@ suite("document intake ownership over real HTTP", () => {
     expect(deletedJob?.status).toBe("failed");
   });
 
+  test("a legacy queued job without an inbox row still runs for its own workspace", async () => {
+    const owner = await createUser("intake-legacy-job");
+    const teamId = owner.personalTeamId;
+    const legacyPath = [teamId, "inbox", "legacy-mail.pdf"];
+    await storage.uploadIfAbsent({
+      bucket: "vault",
+      path: legacyPath,
+      file: invoicePdf,
+    });
+
+    const legacyPayload = {
+      teamId,
+      filePath: legacyPath,
+      mimetype: "application/pdf",
+      size: invoicePdf.byteLength,
+      referenceId: `legacy-message-${crypto.randomUUID()}`,
+    };
+    const jobByKey = async (key: string) => {
+      const [job] = await client.primaryDb
+        .select()
+        .from(schema.workflowJobs)
+        .where(orm.eq(schema.workflowJobs.idempotencyKey, key));
+      return job;
+    };
+
+    await queries.enqueueWorkflowJob(client.primaryDb, {
+      name: "process-attachment",
+      teamId,
+      idempotencyKey: `${teamId}:legacy-first`,
+      payload: legacyPayload,
+    });
+    const processed = await runWorker(
+      async () =>
+        (await jobByKey(`${teamId}:legacy-first`))?.status === "succeeded",
+    );
+    expect(processed).toBe(true);
+
+    const rows = await inboxRowsFor(teamId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.filePath).toEqual(legacyPath);
+    expect(rows[0]?.intakeState).toBeNull();
+    expect(rows[0]?.extraction).toBeTruthy();
+
+    // A retried legacy job for the finished row is idempotent: nothing is
+    // extracted or posted again.
+    await queries.enqueueWorkflowJob(client.primaryDb, {
+      name: "process-attachment",
+      teamId,
+      idempotencyKey: `${teamId}:legacy-again`,
+      payload: legacyPayload,
+    });
+    await queries.enqueueWorkflowJob(client.primaryDb, {
+      name: "process-attachment",
+      teamId,
+      idempotencyKey: `${teamId}:legacy-by-id`,
+      payload: { teamId, inboxId: rows[0]!.id },
+    });
+    for (const key of [`${teamId}:legacy-again`, `${teamId}:legacy-by-id`]) {
+      expect(
+        await runWorker(
+          async () => (await jobByKey(key))?.status === "succeeded",
+        ),
+      ).toBe(true);
+      expect((await jobByKey(key))?.result).toMatchObject({
+        inboxId: rows[0]!.id,
+        idempotent: true,
+      });
+    }
+    expect(await inboxRowsFor(teamId)).toHaveLength(1);
+
+    // A legacy path outside this workspace's document namespace never
+    // creates a row.
+    await queries.enqueueWorkflowJob(client.primaryDb, {
+      name: "process-attachment",
+      teamId,
+      idempotencyKey: `${teamId}:legacy-assets`,
+      payload: { ...legacyPayload, filePath: [teamId, "assets", "logo.pdf"] },
+    });
+    await runWorker(
+      async () =>
+        (await jobByKey(`${teamId}:legacy-assets`))?.status === "failed",
+    );
+    expect((await jobByKey(`${teamId}:legacy-assets`))?.status).toBe("failed");
+    expect(await inboxRowsFor(teamId)).toHaveLength(1);
+  });
+
   test("a missing stored object is retried instead of inventing a record", async () => {
     const owner = await createUser("intake-missing-object");
     const teamId = owner.personalTeamId;
@@ -2363,6 +2449,49 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(true);
+  });
+
+  test("a failed intake stays retryable after a cleanup pass", async () => {
+    const owner = await createUser("intake-cleanup-reference");
+    const teamId = owner.personalTeamId;
+    const input = {
+      teamId,
+      bytes: invoicePdf,
+      declaredMimeType: "application/pdf",
+      fileName: "invoice.pdf",
+      referenceId: `message-${crypto.randomUUID()}_0_invoice.pdf`,
+    };
+
+    const failed = await intake.acceptIntakeUpload(
+      client.primaryDb,
+      {
+        ...intakeStorage(),
+        download: async () => {
+          throw new Error("synthetic temporary read failure");
+        },
+      },
+      input,
+    );
+    expect(failed.status).toBe("rejected");
+    if (failed.status === "rejected") {
+      expect(failed.code).toBe("storage_unavailable");
+    }
+    const [reserved] = await inboxRowsFor(teamId);
+    expect(reserved?.intakeState).toBe("reserved");
+
+    const cleanup = await intake.discardStaleReservations(
+      client.primaryDb,
+      intakeStorage(),
+      { olderThanMs: 60 * 60 * 1000, limit: 10_000 },
+    );
+    expect(cleanup.discarded).not.toContain(reserved!.id);
+
+    const retried = await intake.acceptIntakeUpload(
+      client.primaryDb,
+      intakeStorage(),
+      input,
+    );
+    expect(retried.status).toBe("accepted");
   });
 
   test("a transient mailbox sync failure is retried instead of advancing the account", async () => {

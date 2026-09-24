@@ -11,6 +11,8 @@ import {
   claimSettledObjectRemovalForDiscard,
   clearAcceptedObjectRemovalIntent,
   clearObjectRemovalPending,
+  createInbox,
+  documentBindingIssue,
   enqueueWorkflowJob,
   findInboxIntakeByContentHash,
   findPendingIntakeJob,
@@ -534,8 +536,8 @@ export async function retryIntakeProcessing(
 
 /**
  * Resolves the trusted storage binding a worker must use. New payloads are
- * inbox ids; legacy payloads carry a serialized path that only counts when it
- * matches an authorized persisted record for the same workspace.
+ * inbox ids. Legacy payloads, queued before the intake contract, carry a
+ * serialized path that only counts when it is this workspace's document path.
  */
 export async function resolveWorkerIntakeBinding(
   db: InboxQueryDatabase,
@@ -543,33 +545,65 @@ export async function resolveWorkerIntakeBinding(
     teamId: string;
     inboxId?: string;
     filePath?: readonly string[];
+    mimetype?: string;
+    size?: number;
+    referenceId?: string;
+    website?: string;
+    inboxAccountId?: string;
   },
 ) {
-  if (payload.inboxId) {
-    const binding = await getInboxIntakeBinding(db, {
-      id: payload.inboxId,
-      teamId: payload.teamId,
-    });
-    if (!binding) return null;
-    if (binding.status === "deleted" || binding.intakeState === "cancelled") {
-      return null;
-    }
-    // Unaccepted content is never processable; only legacy rows (null state)
-    // predate the intake contract.
-    if (binding.intakeState !== null && binding.intakeState !== "accepted") {
-      return null;
-    }
-    return binding;
+  const binding = payload.inboxId
+    ? await getInboxIntakeBinding(db, {
+        id: payload.inboxId,
+        teamId: payload.teamId,
+      })
+    : await resolveLegacyWorkerBinding(db, payload);
+
+  if (!binding) return null;
+  if (binding.status === "deleted" || binding.intakeState === "cancelled") {
+    return null;
+  }
+  // Unaccepted content is never processable; only legacy rows (null state)
+  // predate the intake contract.
+  if (binding.intakeState !== null && binding.intakeState !== "accepted") {
+    return null;
+  }
+  return binding;
+}
+
+async function resolveLegacyWorkerBinding(
+  db: InboxQueryDatabase,
+  payload: Parameters<typeof resolveWorkerIntakeBinding>[1],
+) {
+  const filePath = [...(payload.filePath ?? [])];
+  if (documentBindingIssue({ teamId: payload.teamId, filePath }) !== null) {
+    return undefined;
   }
 
-  if (!payload.filePath?.length) return null;
-
-  // Legacy payloads are only trusted when they match an authorized persisted
-  // record for the same workspace.
-  return getInboxByFilePath(db, {
+  const existing = await getInboxByFilePath(db, {
     teamId: payload.teamId,
-    filePath: [...payload.filePath],
+    filePath,
   });
+  if (existing) return existing;
+
+  if (!payload.mimetype || typeof payload.size !== "number") return undefined;
+
+  const fileName = filePath.at(-1)!;
+  const created = await createInbox(db as Database, {
+    displayName: fileName,
+    teamId: payload.teamId,
+    filePath,
+    fileName,
+    contentType: payload.mimetype,
+    size: payload.size,
+    referenceId: payload.referenceId,
+    website: payload.website,
+    inboxAccountId: payload.inboxAccountId,
+    status: "processing",
+  });
+  if (!created) return undefined;
+
+  return getInboxIntakeBinding(db, { id: created.id, teamId: payload.teamId });
 }
 
 /**
@@ -702,8 +736,15 @@ export async function discardStaleReservations(
   // Pending rows are processed first. Each one is re-checked with a
   // state-conditional claim, so an accepted row can never be removed and a
   // retry that wins the row lock makes the cleanup claim a no-op.
+  const reservedCutoff = Date.now() - params.olderThanMs;
   for (const pending of pendingPage.rows) {
     if (!pending.teamId || handled.has(pending.id)) continue;
+    if (
+      pending.intakeState === "reserved" &&
+      new Date(pending.createdAt).getTime() >= reservedCutoff
+    ) {
+      continue;
+    }
     handled.add(pending.id);
 
     if (pending.intakeState === "accepted") {

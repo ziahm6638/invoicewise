@@ -9,8 +9,8 @@ export const ProcessAttachmentPayload = Schema.Struct({
   inboxId: Schema.optional(Schema.String),
   /**
    * Legacy payload fields, kept so jobs enqueued before this contract still
-   * run. A serialized path only counts when it matches an authorized persisted
-   * binding for the same workspace.
+   * run. A serialized path only counts when it is the job workspace's own
+   * document path; the record is created from it when none exists yet.
    */
   mimetype: Schema.optional(Schema.String),
   size: Schema.optional(Schema.Number),

@@ -1,5 +1,5 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { protectedMiddleware } from "../middleware";
+import { protectedMiddleware, withRequiredTeam } from "../middleware";
 import { accountingRouter } from "./accounting";
 import { inboxRouter } from "./inbox";
 import { invoicesRouter } from "./invoices";
@@ -15,6 +15,11 @@ routers.route("/oauth", oauthRouter);
 
 // Apply protected middleware to all subsequent routes
 routers.use(...protectedMiddleware);
+
+// Workspace resources need an active workspace
+for (const path of ["/inbox", "/invoices", "/webhooks", "/accounting"]) {
+  routers.use(`${path}/*`, withRequiredTeam);
+}
 
 // Mount protected routes
 routers.route("/teams", teamsRouter);
