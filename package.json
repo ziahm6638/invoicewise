@@ -36,5 +36,25 @@
   },
   "manypkg": {
     "ignoredRules": ["EXTERNAL_MISMATCH"]
+  },
+  "overrides": {
+    "axios": "^1.20.0",
+    "browserslist": "^4.29.1",
+    "defu": "^6.1.7",
+    "engine.io": "~6.6.11",
+    "fast-uri": "^3.1.8",
+    "form-data": "^4.0.6",
+    "js-yaml": "^4.3.2",
+    "jws": "^4.0.1",
+    "linkify-it": "^5.0.2",
+    "lodash": "^4.18.1",
+    "postcss": "^8.5.28",
+    "react-email": "4.3.2",
+    "rollup": "^4.63.5",
+    "serialize-javascript": "^7.1.2",
+    "sharp": "0.35.4",
+    "socket.io-parser": "^4.2.7",
+    "tar-fs": "^2.1.5",
+    "ws": "^8.21.3"
   }
 }
