@@ -5,6 +5,7 @@ import {
   type InboxIntakeBindingCursor,
   type InboxQueryDatabase,
   acceptInboxIntake,
+  beginInboxIntakePublication,
   cancelInboxIntake,
   claimAmbiguousObjectRemovalForDiscard,
   claimReservedIntakeForDiscard,
@@ -147,19 +148,20 @@ export const intakeFileName = (fileName?: string | null) => {
 const isUniqueViolation = (error: unknown) =>
   (error as { code?: string } | null)?.code === "23505";
 
-/** Bounded budget for the storage work performed under the row lock. */
+/** Bounded budget for the storage write and read-back of one attempt. */
 export const INTAKE_STORAGE_TIMEOUT_MS = 60_000;
 
-/** A publication failure with a code the callers can classify. */
-class IntakePublicationError extends Error {
-  override readonly name = "IntakePublicationError";
-  constructor(
-    readonly code: "storage_unavailable" | "content_mismatch" | "superseded",
-    message: string,
-  ) {
-    super(message);
-  }
-}
+/**
+ * Publication lease: the storage budget plus headroom for the short
+ * acceptance transaction. Cleanup cannot claim a reservation inside it.
+ */
+export const INTAKE_PUBLICATION_LEASE_MS = INTAKE_STORAGE_TIMEOUT_MS + 30_000;
+
+const supersededResult = {
+  status: "rejected",
+  code: "superseded",
+  message: "This document was cancelled before it could be accepted.",
+} as const satisfies IntakeUploadResult;
 
 /**
  * Reads the reserved object back and proves it holds exactly the bytes this
@@ -214,6 +216,72 @@ async function verifyReservedObject(
   }
 
   return { ok: true };
+}
+
+/**
+ * Writes the reserved object immutably and proves the stored bytes hash to
+ * the content this record claims. Covers an existing object from an earlier
+ * attempt, a partially published write and transport-level corruption. Runs
+ * with no database connection held.
+ */
+async function publishReservedObject(
+  storage: IntakeStorage,
+  input: {
+    filePath: string[];
+    bytes: Uint8Array;
+    mimeType: string;
+    contentHash: string;
+    size: number;
+  },
+): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      code: "storage_unavailable" | "content_mismatch";
+      message: string;
+    }
+> {
+  const controller = new AbortController();
+  const abortTimer = setTimeout(
+    () => controller.abort(),
+    INTAKE_STORAGE_TIMEOUT_MS,
+  );
+
+  try {
+    await storage.uploadIfAbsent({
+      bucket: VAULT_BUCKET,
+      path: input.filePath,
+      file: input.bytes,
+      contentType: input.mimeType,
+      signal: controller.signal,
+    });
+
+    const storageCheck = await verifyReservedObject(storage, {
+      filePath: input.filePath,
+      contentHash: input.contentHash,
+      size: input.size,
+      signal: controller.signal,
+    });
+    if (!storageCheck.ok) {
+      return {
+        ok: false,
+        code: storageCheck.code,
+        message: storageCheck.reason,
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      code: "storage_unavailable",
+      message:
+        error instanceof Error
+          ? `The document could not be stored or verified (${error.message}). Retry the upload.`
+          : "The document could not be stored or verified. Retry the upload.",
+    };
+  } finally {
+    clearTimeout(abortTimer);
+  }
 }
 
 const acceptIntake = async (
@@ -296,99 +364,111 @@ const acceptIntake = async (
 
   const reservationPath: string[] = reservation.filePath;
 
+  const acceptedResult = (
+    binding: InboxIntakeBinding,
+    deduplicated: boolean,
+  ): IntakeUploadResult => ({
+    status: "accepted",
+    inboxId: binding.id,
+    filePath: binding.filePath ?? reservationPath,
+    fileName: binding.fileName ?? fileName,
+    mimeType: binding.contentType ?? validation.mimeType,
+    size: binding.size ?? validation.size,
+    pageCount: validation.pageCount,
+    deduplicated,
+  });
+
   if (reservation.intakeState === "accepted") {
     // Replay of an already accepted upload: same workspace document, no new
     // object, no second processing intent.
-    return {
-      status: "accepted",
-      inboxId: reservation.id,
-      filePath: reservation.filePath,
-      fileName: reservation.fileName ?? fileName,
-      mimeType: reservation.contentType ?? validation.mimeType,
-      size: reservation.size ?? validation.size,
-      pageCount: validation.pageCount,
-      deduplicated: true,
-    };
+    return acceptedResult(reservation, true);
   }
 
-  // Publication, acceptance and discard all serialize on the canonical inbox
-  // row. The storage work happens inside that lock and is bounded/abortable, so
-  // when the lock is released the write has settled: either the object exists
-  // (and this attempt either accepts it or records durable removal intent) or
-  // it does not (and no writer can create it afterwards). Cleanup therefore
-  // cannot interleave with a publisher, and no compensation catch is needed.
-  const outcome = await db.transaction(async (tx) => {
-    const executor = tx as unknown as InboxQueryDatabase;
-    const locked = await getInboxIntakeBindingForUpdate(executor, {
+  // No database connection or transaction is held while bytes move to or
+  // from object storage. A short publication lease on the reservation keeps
+  // cleanup from claiming it while this attempt writes and verifies the
+  // object; acceptance and the processing intent then commit in one short
+  // row-locked transaction. The write is immutable (an existing object is
+  // never replaced) and every cancellation of a reservation records removal
+  // intent with the ambiguity marker, so a write that lands after the record
+  // was cancelled is still reclaimed by the next cleanup pass.
+  const leased = await beginInboxIntakePublication(db, {
+    id: reservation.id,
+    teamId: input.teamId,
+    leaseMs: INTAKE_PUBLICATION_LEASE_MS,
+  });
+
+  if (!leased) {
+    const current = await getInboxIntakeBinding(db, {
       id: reservation.id,
       teamId: input.teamId,
     });
-
-    if (!locked) {
-      return {
-        type: "rejected" as const,
-        code: "superseded" as const,
-        message: "This document was cancelled before it could be accepted.",
-      };
+    if (current?.intakeState === "accepted" && current.status !== "deleted") {
+      return acceptedResult(current, true);
     }
+    return supersededResult;
+  }
 
-    if (locked.intakeState === "accepted") {
-      return { type: "deduplicated" as const, binding: locked };
-    }
+  const objectPath = leased.filePath ?? reservationPath;
+  const publication = await publishReservedObject(storage, {
+    filePath: objectPath,
+    bytes: input.bytes,
+    mimeType: validation.mimeType,
+    contentHash,
+    size: validation.size,
+  });
 
-    if (locked.intakeState !== "reserved" || locked.status === "deleted") {
-      return {
-        type: "rejected" as const,
-        code: "superseded" as const,
-        message: "This document was cancelled before it could be accepted.",
-      };
-    }
+  if (!publication.ok) {
+    // Durable removal intent for whatever may have reached storage. The
+    // statement is conditional, so it never attaches to accepted content.
+    await recordInboxIntakeRemovalIntent(db, {
+      id: reservation.id,
+      teamId: input.teamId,
+      error: publication.message,
+    }).catch(() => undefined);
+    return {
+      status: "rejected",
+      code: publication.code,
+      message: publication.message,
+    };
+  }
 
-    const controller = new AbortController();
-    const abortTimer = setTimeout(
-      () => controller.abort(),
-      INTAKE_STORAGE_TIMEOUT_MS,
-    );
-
-    try {
-      await storage.uploadIfAbsent({
-        bucket: VAULT_BUCKET,
-        path: locked.filePath ?? reservationPath,
-        file: input.bytes,
-        contentType: validation.mimeType,
-        signal: controller.signal,
-      });
-
-      // An immutable write is only "done" when the bytes at the reservation
-      // path actually hash to the content this record claims. This covers an
-      // existing object from an earlier attempt, a partially published write
-      // and transport-level corruption, before any acceptance or queueing.
-      const storageCheck = await verifyReservedObject(storage, {
-        filePath: locked.filePath ?? reservationPath,
-        contentHash,
-        size: validation.size,
-        signal: controller.signal,
-      });
-      if (!storageCheck.ok) {
-        throw new IntakePublicationError(
-          storageCheck.code,
-          storageCheck.reason,
-        );
-      }
-
-      const accepted = await acceptInboxIntake(executor, {
+  let outcome:
+    | { type: "accepted" | "deduplicated"; binding: InboxIntakeBinding }
+    | { type: "superseded" };
+  try {
+    outcome = await db.transaction(async (tx) => {
+      const executor = tx as unknown as InboxQueryDatabase;
+      const locked = await getInboxIntakeBindingForUpdate(executor, {
         id: reservation.id,
         teamId: input.teamId,
-        contentHash,
-        contentType: validation.mimeType,
-        size: validation.size,
-        fileName,
       });
+
+      if (locked?.intakeState === "accepted" && locked.status !== "deleted") {
+        return { type: "deduplicated" as const, binding: locked };
+      }
+
+      const accepted = locked
+        ? await acceptInboxIntake(executor, {
+            id: reservation.id,
+            teamId: input.teamId,
+            contentHash,
+            contentType: validation.mimeType,
+            size: validation.size,
+            fileName,
+          })
+        : undefined;
       if (!accepted) {
-        throw new IntakePublicationError(
-          "superseded",
-          "This document was cancelled before it could be accepted.",
-        );
+        // Cancelled while this attempt was writing: the bytes it published
+        // belong to no live record, so record their removal intent.
+        if (locked) {
+          await recordInboxIntakeRemovalIntent(executor, {
+            id: reservation.id,
+            teamId: input.teamId,
+            error: supersededResult.message,
+          });
+        }
+        return { type: "superseded" as const };
       }
 
       await enqueueWorkflowJob(executor, {
@@ -401,73 +481,25 @@ const acceptIntake = async (
       });
 
       return { type: "accepted" as const, binding: accepted };
-    } catch (error) {
-      const failure =
-        error instanceof IntakePublicationError
-          ? error
-          : new IntakePublicationError(
-              "storage_unavailable",
-              error instanceof Error
-                ? `The document could not be stored or verified (${error.message}). Retry the upload.`
-                : "The document could not be stored or verified. Retry the upload.",
-            );
-
-      // Durable removal intent, written before the lock is released. A
-      // database error aborts the transaction, so if this write cannot run
-      // inside it the caller records the same intent right after the rollback
-      // (the row then remains `reserved`, which the stale pass also covers).
-      let intentRecorded = false;
-      try {
-        await recordInboxIntakeRemovalIntent(executor, {
-          id: reservation.id,
-          teamId: input.teamId,
-          error: failure.message,
-        });
-        intentRecorded = true;
-      } catch {
-        intentRecorded = false;
-      }
-
-      return {
-        type: "rejected" as const,
-        code: failure.code,
-        message: failure.message,
-        needsDurableIntent: !intentRecorded,
-      };
-    } finally {
-      clearTimeout(abortTimer);
-    }
-  });
-
-  if (outcome.type === "rejected" && outcome.needsDurableIntent) {
+    });
+  } catch (error) {
     // The transaction rolled back (for example a database error while
-    // queueing), so the removal intent is recorded on its own statement now
-    // that the row lock has been released.
+    // queueing), so the row is still reserved and its object exists. Record
+    // the removal intent on its own statement.
+    const message =
+      error instanceof Error
+        ? `The document could not be stored or verified (${error.message}). Retry the upload.`
+        : "The document could not be stored or verified. Retry the upload.";
     await recordInboxIntakeRemovalIntent(db, {
       id: reservation.id,
       teamId: input.teamId,
-      error: outcome.message,
+      error: message,
     }).catch(() => undefined);
+    return { status: "rejected", code: "storage_unavailable", message };
   }
 
-  if (outcome.type === "deduplicated" || outcome.type === "accepted") {
-    return {
-      status: "accepted",
-      inboxId: outcome.binding.id,
-      filePath: outcome.binding.filePath ?? reservationPath,
-      fileName: outcome.binding.fileName ?? fileName,
-      mimeType: outcome.binding.contentType ?? validation.mimeType,
-      size: outcome.binding.size ?? validation.size,
-      pageCount: validation.pageCount,
-      deduplicated: outcome.type === "deduplicated",
-    };
-  }
-
-  return {
-    status: "rejected",
-    code: outcome.code,
-    message: outcome.message,
-  };
+  if (outcome.type === "superseded") return supersededResult;
+  return acceptedResult(outcome.binding, outcome.type === "deduplicated");
 };
 
 export const acceptIntakeUpload = acceptIntake;

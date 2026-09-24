@@ -842,6 +842,129 @@ suite("document intake ownership over real HTTP", () => {
     expect(row?.intakeState).toBe("accepted");
   });
 
+  test("saturated previews leave upload parser admission free", async () => {
+    const owner = await createUser("intake-preview-saturation");
+    const teamId = owner.personalTeamId;
+
+    // Two preview slots and no preview queue: the same capacity the intake
+    // pool has by default, so a shared pool would leave uploads waiting.
+    const previousConcurrent = process.env.IW_PDF_PREVIEW_MAX_CONCURRENT;
+    const previousQueued = process.env.IW_PDF_PREVIEW_MAX_QUEUED;
+    process.env.IW_PDF_PREVIEW_MAX_CONCURRENT = "2";
+    process.env.IW_PDF_PREVIEW_MAX_QUEUED = "0";
+    let previewsSettled = false;
+    const held = Promise.all(
+      [0, 1].map(() =>
+        realDocuments.runBusyProcessForTest({
+          spinMs: 5_000,
+          timeoutMs: 20_000,
+          admission: "preview",
+        }),
+      ),
+    ).then((outcomes) => {
+      previewsSettled = true;
+      return outcomes;
+    });
+
+    try {
+      const preview = await realDocuments.renderPdfPageIsolated(
+        invoicePdf,
+        {
+          timeoutMs: 12_000,
+          maxPages: 50,
+          maxPageDimension: 10_000,
+          maxTotalPixels: 25_000_000,
+          maxChars: 0,
+          admission: "preview",
+        },
+        { page: 1 },
+      );
+      expect(preview.ok).toBe(false);
+      if (!preview.ok) expect(preview.code).toBe("busy");
+
+      const accepted = await upload(
+        owner.cookie,
+        invoicePdf,
+        "invoice.pdf",
+        "application/pdf",
+      );
+      expect(accepted.status).toBe(200);
+      // The upload finished while every preview slot was still occupied.
+      expect(previewsSettled).toBe(false);
+    } finally {
+      process.env.IW_PDF_PREVIEW_MAX_CONCURRENT = previousConcurrent ?? "";
+      process.env.IW_PDF_PREVIEW_MAX_QUEUED = previousQueued ?? "";
+    }
+
+    for (const { result } of await held) expect(result.ok).toBe(true);
+    const [row] = await inboxRowsFor(teamId);
+    expect(row?.intakeState).toBe("accepted");
+  }, 30_000);
+
+  test("no database connection is held while bytes move to or from storage", async () => {
+    const owner = await createUser("intake-slow-storage");
+    const teamId = owner.personalTeamId;
+
+    // A one-connection pool: if intake held its connection (or a
+    // transaction) across storage I/O, nothing else could use the pool
+    // until the slow storage call returned.
+    const narrow = client.createDatabaseClient({
+      primaryUrl: testDatabaseUrl!,
+      maxConnections: 1,
+    });
+    const observed: {
+      stage: string;
+      activeConnections: number;
+      probe: "ran" | "blocked";
+    }[] = [];
+
+    const slowly = async <T>(stage: string, work: () => Promise<T>) => {
+      const { active } = narrow.getConnectionPoolStats().pools.primary!;
+      const probe = await Promise.race([
+        narrow.primaryDb.execute(orm.sql`select 1`).then(() => "ran" as const),
+        Bun.sleep(2_000).then(() => "blocked" as const),
+      ]);
+      observed.push({ stage, activeConnections: active, probe });
+      await Bun.sleep(500);
+      return work();
+    };
+
+    try {
+      const result = await intake.acceptIntakeUpload(
+        narrow.primaryDb,
+        {
+          ...intakeStorage(),
+          uploadIfAbsent: (input) =>
+            slowly("upload", () => storage.uploadIfAbsent(input)),
+          download: (input) =>
+            slowly("download", () => storage.download(input)),
+        },
+        {
+          teamId,
+          bytes: invoicePdf,
+          declaredMimeType: "application/pdf",
+          fileName: "invoice.pdf",
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(observed.map(({ stage }) => stage)).toEqual([
+        "upload",
+        "download",
+      ]);
+      for (const stage of observed) {
+        expect(stage.activeConnections).toBe(0);
+        expect(stage.probe).toBe("ran");
+      }
+    } finally {
+      await narrow.close();
+    }
+
+    const [row] = await inboxRowsFor(teamId);
+    expect(row?.intakeState).toBe("accepted");
+    expect(await workflowJobsFor(teamId)).toHaveLength(1);
+  }, 30_000);
+
   test("reservation and enqueue boundaries recover without an orphaned accepted invoice", async () => {
     const owner = await createUser("intake-recovery");
     const teamId = owner.personalTeamId;
@@ -1343,8 +1466,9 @@ suite("document intake ownership over real HTTP", () => {
     const owner = await createUser("intake-concurrent");
     const teamId = owner.personalTeamId;
 
-    // Publication serializes on the canonical row, so two simultaneous
-    // attempts with different provider references cannot double-publish.
+    // Publication is immutable and acceptance serializes on the canonical
+    // row, so two simultaneous attempts with different provider references
+    // cannot double-publish.
     const results = await Promise.all(
       ["ref-a", "ref-b"].map((referenceId) =>
         intake.acceptIntakeUpload(client.primaryDb, intakeStorage(), {
@@ -2173,7 +2297,7 @@ suite("document intake ownership over real HTTP", () => {
     }
   });
 
-  test("cleanup cannot claim a row while a publication holds it", async () => {
+  test("cleanup cannot claim a row while a publication is writing it", async () => {
     const owner = await createUser("intake-late-write");
     const teamId = owner.personalTeamId;
 
@@ -2210,8 +2334,8 @@ suite("document intake ownership over real HTTP", () => {
       },
     );
 
-    // Cleanup starts while the writer holds the row lock; it must wait for the
-    // publication to settle instead of tombstoning the row underneath it.
+    // Cleanup runs while the writer holds the publication lease; it must leave
+    // the row alone instead of tombstoning it underneath the publication.
     await startedPromise;
     const cleanup = intake.discardStaleReservations(
       client.primaryDb,
@@ -2238,7 +2362,7 @@ suite("document intake ownership over real HTTP", () => {
     ).toBe(true);
   });
 
-  test("pending cleanup cannot delete a retry that wins the row lock", async () => {
+  test("pending cleanup cannot delete a retry that holds the publication lease", async () => {
     const owner = await createUser("intake-pending-retry-race");
     const teamId = owner.personalTeamId;
 
@@ -2292,9 +2416,9 @@ suite("document intake ownership over real HTTP", () => {
     );
 
     await startedPromise;
-    // The retry holds the canonical row lock. Cleanup can read the pending
-    // tombstone but its state-conditional claim must wait; once the retry
-    // accepts and clears the tombstone, cleanup must become a no-op.
+    // The retry holds the publication lease. Cleanup can read the pending
+    // tombstone but its claim must skip the leased row, and once the retry
+    // accepts it clears the tombstone.
     const cleanup = intake.discardStaleReservations(
       client.primaryDb,
       intakeStorage(),
@@ -2317,6 +2441,96 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(true);
+  });
+
+  test("a publication that lands after its record was deleted is reclaimed", async () => {
+    const owner = await createUser("intake-late-publication");
+    const teamId = owner.personalTeamId;
+
+    let release!: () => void;
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let latePath: string[] = [];
+    const exists = () =>
+      storage
+        .download({ bucket: "vault", path: latePath })
+        .then(() => true)
+        .catch(() => false);
+
+    // A slow attempt starts writing, then a second attempt with the same
+    // content accepts the document, which is deleted and fully cleaned up
+    // before the slow write finally lands.
+    const late = intake.acceptIntakeUpload(
+      client.primaryDb,
+      {
+        ...intakeStorage(),
+        uploadIfAbsent: async (input) => {
+          latePath = input.path as string[];
+          started();
+          await gate;
+          return storage.uploadIfAbsent(input);
+        },
+      },
+      {
+        teamId,
+        bytes: invoicePdf,
+        declaredMimeType: "application/pdf",
+        fileName: "invoice.pdf",
+      },
+    );
+    await startedPromise;
+
+    const accepted = await intake.acceptIntakeUpload(
+      client.primaryDb,
+      intakeStorage(),
+      {
+        teamId,
+        bytes: invoicePdf,
+        declaredMimeType: "application/pdf",
+        fileName: "invoice.pdf",
+      },
+    );
+    expect(accepted.status).toBe("accepted");
+    if (accepted.status !== "accepted") return;
+    await queries.cancelInboxIntake(client.primaryDb, {
+      id: accepted.inboxId,
+      teamId,
+      error: "deleted by the workspace",
+    });
+    const settled = await intake.discardStaleReservations(
+      client.primaryDb,
+      intakeStorage(),
+      { olderThanMs: -1, limit: 100 },
+    );
+    expect(settled.discarded).toContain(accepted.inboxId);
+    expect(await exists()).toBe(false);
+
+    release();
+    const lateResult = await late;
+    expect(lateResult.status).toBe("rejected");
+    if (lateResult.status === "rejected") {
+      expect(lateResult.code).toBe("superseded");
+    }
+
+    // The late bytes belong to no live record: removal intent is durable.
+    expect(await exists()).toBe(true);
+    const [row] = await inboxRowsFor(teamId);
+    expect(row?.intakeState).toBe("cancelled");
+    expect(row?.objectRemovalPending).toBe(true);
+    expect(row?.objectRemovalAmbiguous).toBe(true);
+
+    const reclaimed = await intake.discardStaleReservations(
+      client.primaryDb,
+      intakeStorage(),
+      { olderThanMs: -1, limit: 100 },
+    );
+    expect(reclaimed.discarded).toContain(accepted.inboxId);
+    expect(await exists()).toBe(false);
   });
 
   test("a publication that fails after writing records durable removal intent", async () => {

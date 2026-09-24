@@ -13,12 +13,15 @@ export type DatabaseClientConfig = {
   region?: string;
   instance?: string;
   isDevelopment?: boolean;
+  /** Connections per pool; defaults to 8 in development and 12 otherwise. */
+  maxConnections?: number;
 };
 
 export function createDatabaseClient(config: DatabaseClientConfig) {
   const isDevelopment = config.isDevelopment ?? false;
+  const connectionsPerPool = config.maxConnections ?? (isDevelopment ? 8 : 12);
   const connectionConfig = {
-    max: isDevelopment ? 8 : 12,
+    max: connectionsPerPool,
     idleTimeoutMillis: isDevelopment ? 5000 : 60000,
     connectionTimeoutMillis: 15000,
     maxUses: isDevelopment ? 100 : 0,
@@ -111,7 +114,6 @@ export function createDatabaseClient(config: DatabaseClientConfig) {
       (pool) =>
         (pool.active || 0) >= (pool.total || 0) || (pool.waiting || 0) > 0,
     );
-    const connectionsPerPool = isDevelopment ? 8 : 12;
     const totalConnections = connectionsPerPool * (replicaPools ? 4 : 1);
 
     return {

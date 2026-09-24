@@ -168,6 +168,50 @@ describe("isolated PDF tasks", () => {
     }
   });
 
+  test("saturated previews cannot take intake admission", async () => {
+    const previousQueued = process.env.IW_PDF_PREVIEW_MAX_QUEUED;
+    process.env.IW_PDF_PREVIEW_MAX_QUEUED = "0";
+    let previewSettled = false;
+    // The preview pool admits one process by default; hold it with a child
+    // that is busy for longer than the intake work below takes.
+    const held = runBusyProcessForTest({
+      spinMs: 4_000,
+      timeoutMs: 15_000,
+      admission: "preview",
+    }).then((outcome) => {
+      previewSettled = true;
+      return outcome;
+    });
+
+    try {
+      const preview = await renderPdfPageIsolated(
+        fixture,
+        { ...limits, admission: "preview" },
+        { page: 1 },
+      );
+      expect(preview.ok).toBe(false);
+      if (!preview.ok) expect(preview.code).toBe("busy");
+
+      const intake = await validateIntakeDocument({
+        bytes: fixture,
+        declaredMimeType: "application/pdf",
+      });
+      expect(intake.ok).toBe(true);
+      // Intake finished while every preview slot was still occupied.
+      expect(previewSettled).toBe(false);
+    } finally {
+      if (previousQueued === undefined) {
+        process.env.IW_PDF_PREVIEW_MAX_QUEUED = "";
+      } else {
+        process.env.IW_PDF_PREVIEW_MAX_QUEUED = previousQueued;
+      }
+    }
+
+    const { readySeen, result } = await held;
+    expect(readySeen).toBe(true);
+    expect(result.ok).toBe(true);
+  }, 20_000);
+
   test("fails closed when the RSS sampler cannot run", async () => {
     const { readySeen, result } = await runMemoryHogForTest({
       targetBytes: 16 * 1024 * 1024,

@@ -41,14 +41,23 @@ export type IsolatedPdfLimits = {
   /** Bytes of child stdout accepted before the child is killed. */
   maxOutputBytes?: number;
   /**
-   * Admission bounds. The defaults are product limits; tests can set a bound
-   * of zero to exercise the typed busy path without starting host processes.
+   * Which admission pool the process is counted against (default `intake`).
+   * Dashboard previews use their own pool, so preview traffic can never take
+   * the capacity invoice intake, extraction and OCR depend on.
+   */
+  admission?: IsolatedAdmissionPool;
+  /**
+   * Admission bounds for the selected pool. The defaults are product limits;
+   * tests can set a bound of zero to exercise the typed busy path without
+   * starting host processes.
    */
   maxConcurrentProcesses?: number;
   maxQueuedProcesses?: number;
   /** Test/operational override for the RSS sampler executable. */
   rssSamplerCommand?: string;
 };
+
+export type IsolatedAdmissionPool = "intake" | "preview";
 
 export type IsolatedPdfFailureCode =
   | "timeout"
@@ -95,8 +104,6 @@ type Task = "inspect" | "render" | "text" | "__spin" | "__memory";
 
 export const DEFAULT_PROCESS_RSS_BYTES = 320 * 1024 * 1024;
 export const DEFAULT_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
-const DEFAULT_MAX_CONCURRENT_PROCESSES = 2;
-const DEFAULT_MAX_QUEUED_PROCESSES = 8;
 const RSS_SAMPLE_INTERVAL_MS = 150;
 const RSS_SAMPLE_TIMEOUT_MS = 1_000;
 
@@ -356,8 +363,41 @@ const childBaseEnv = () => {
 const childRuntimeArgs = () =>
   process.versions.bun ? ["--no-env-file", "-e"] : ["-e"];
 
-let activeProcesses = 0;
-const admissionQueue: (() => void)[] = [];
+/**
+ * Admission is bounded per pool. Each pool has its own concurrency and queue
+ * bounds, configured from the environment, so saturating one pool leaves the
+ * other's capacity untouched.
+ */
+const ADMISSION_POOLS: Record<
+  IsolatedAdmissionPool,
+  {
+    concurrentEnv: string;
+    queuedEnv: string;
+    defaultConcurrent: number;
+    defaultQueued: number;
+  }
+> = {
+  intake: {
+    concurrentEnv: "IW_PDF_MAX_CONCURRENT",
+    queuedEnv: "IW_PDF_MAX_QUEUED",
+    defaultConcurrent: 2,
+    defaultQueued: 8,
+  },
+  preview: {
+    concurrentEnv: "IW_PDF_PREVIEW_MAX_CONCURRENT",
+    queuedEnv: "IW_PDF_PREVIEW_MAX_QUEUED",
+    defaultConcurrent: 1,
+    defaultQueued: 4,
+  },
+};
+
+const admissionState: Record<
+  IsolatedAdmissionPool,
+  { active: number; queue: (() => void)[] }
+> = {
+  intake: { active: 0, queue: [] },
+  preview: { active: 0, queue: [] },
+};
 
 const admissionNumber = (
   configured: number | undefined,
@@ -373,42 +413,54 @@ const admissionNumber = (
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
+/** Returns the admitted pool, or null when the pool is full. */
 const acquireAdmission = async (
   limits: IsolatedPdfLimits,
-): Promise<boolean> => {
+): Promise<IsolatedAdmissionPool | null> => {
+  const pool = limits.admission ?? "intake";
+  const config = ADMISSION_POOLS[pool];
+  const state = admissionState[pool];
   const maxConcurrent = admissionNumber(
     limits.maxConcurrentProcesses,
-    "IW_PDF_MAX_CONCURRENT",
-    DEFAULT_MAX_CONCURRENT_PROCESSES,
+    config.concurrentEnv,
+    config.defaultConcurrent,
   );
   const maxQueued = admissionNumber(
     limits.maxQueuedProcesses,
-    "IW_PDF_MAX_QUEUED",
-    DEFAULT_MAX_QUEUED_PROCESSES,
+    config.queuedEnv,
+    config.defaultQueued,
   );
 
   if (maxConcurrent <= 0) {
     isolatedPdfDiagnostics.rejectedByAdmission += 1;
-    return false;
+    return null;
   }
 
-  if (activeProcesses < maxConcurrent) {
-    activeProcesses += 1;
-    return true;
+  if (state.active < maxConcurrent) {
+    state.active += 1;
+    return pool;
   }
-  if (admissionQueue.length >= maxQueued) {
+  if (state.queue.length >= maxQueued) {
     isolatedPdfDiagnostics.rejectedByAdmission += 1;
-    return false;
+    return null;
   }
-  await new Promise<void>((resolve) => admissionQueue.push(resolve));
-  activeProcesses += 1;
-  return true;
+  await new Promise<void>((resolve) => state.queue.push(resolve));
+  state.active += 1;
+  return pool;
 };
 
-const releaseAdmission = () => {
-  activeProcesses -= 1;
-  admissionQueue.shift()?.();
+const releaseAdmission = (pool: IsolatedAdmissionPool) => {
+  const state = admissionState[pool];
+  state.active -= 1;
+  state.queue.shift()?.();
 };
+
+const busyResult = {
+  ok: false,
+  code: "busy",
+  message: "Too many documents are being processed at once. Retry the upload.",
+  terminated: false,
+} as const;
 
 type RssSample = { ok: true; bytes: number } | { ok: false; reason: string };
 
@@ -718,20 +770,12 @@ async function runIsolatedTask<T>(
   limits: IsolatedPdfLimits,
 ): Promise<IsolatedPdfResult<T>> {
   const admitted = await acquireAdmission(limits);
-  if (!admitted) {
-    return {
-      ok: false,
-      code: "busy",
-      message:
-        "Too many documents are being processed at once. Retry the upload.",
-      terminated: false,
-    };
-  }
+  if (!admitted) return busyResult;
   try {
     const { result } = await spawnIsolatedTask<T>(task, bytes, options, limits);
     return result;
   } finally {
-    releaseAdmission();
+    releaseAdmission(admitted);
   }
 }
 
@@ -801,15 +845,7 @@ export async function ocrImageIsolated(
   options: { page?: number } = {},
 ): Promise<IsolatedPdfResult<IsolatedOcrText>> {
   const admitted = await acquireAdmission(limits);
-  if (!admitted) {
-    return {
-      ok: false,
-      code: "busy",
-      message:
-        "Too many documents are being processed at once. Retry the upload.",
-      terminated: false,
-    };
-  }
+  if (!admitted) return busyResult;
   try {
     const { result } = await superviseProcess<string>(
       {
@@ -839,7 +875,7 @@ export async function ocrImageIsolated(
       },
     };
   } finally {
-    releaseAdmission();
+    releaseAdmission(admitted);
   }
 }
 
@@ -884,22 +920,36 @@ export function renderPdfPageIsolated(
 export async function runBusyProcessForTest(input: {
   spinMs: number;
   timeoutMs: number;
+  /** When set, the process is admitted through this pool like real work. */
+  admission?: IsolatedAdmissionPool;
 }): Promise<{
   readySeen: boolean;
   result: IsolatedPdfResult<{ spun: boolean; envKeys: string[] }>;
 }> {
-  return await spawnIsolatedTask<{ spun: boolean; envKeys: string[] }>(
-    "__spin",
-    undefined,
-    { spinMs: input.spinMs },
-    {
-      timeoutMs: input.timeoutMs,
-      maxPages: 1,
-      maxPageDimension: 1,
-      maxTotalPixels: 1,
-      maxChars: 1,
-    },
-  );
+  const limits: IsolatedPdfLimits = {
+    timeoutMs: input.timeoutMs,
+    maxPages: 1,
+    maxPageDimension: 1,
+    maxTotalPixels: 1,
+    maxChars: 1,
+    admission: input.admission,
+  };
+  const spin = () =>
+    spawnIsolatedTask<{ spun: boolean; envKeys: string[] }>(
+      "__spin",
+      undefined,
+      { spinMs: input.spinMs },
+      limits,
+    );
+  if (!input.admission) return await spin();
+
+  const admitted = await acquireAdmission(limits);
+  if (!admitted) return { readySeen: false, result: busyResult };
+  try {
+    return await spin();
+  } finally {
+    releaseAdmission(admitted);
+  }
 }
 
 /**
