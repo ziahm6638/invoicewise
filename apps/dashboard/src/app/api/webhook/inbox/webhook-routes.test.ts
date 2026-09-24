@@ -24,11 +24,8 @@ mock.module("@/utils/logger", () => ({
   logger: () => undefined,
 }));
 
-mock.module("@api/services/resend", () => ({
-  resend: {
-    emails: { send: async () => ({ data: { id: "stub" }, error: null }) },
-    contacts: { remove: async () => ({ data: null, error: null }) },
-  },
+mock.module("@api/services/mail", () => ({
+  deliverMail: async () => ({ transport: "log" }),
 }));
 
 mock.module("@invoicewise/events/server", () => ({

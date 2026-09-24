@@ -6,9 +6,9 @@
  * verification, email change and recovery, and the product tRPC/REST routers
  * for invitations and profile writes. Nothing edits `users.email` directly.
  *
- * Transactional mail is captured by the explicit local mail sink, and every
- * provider base URL points at a loopback trap that must stay empty, so no
- * request can leave the machine. The database is a disposable local one.
+ * Transactional mail is captured by the explicit local mail sink, and SMTP is
+ * configured against a loopback SMTP trap that must receive no connection, so
+ * no message can leave the machine. The database is a disposable local one.
  *
  *   docker exec invoicewise-postgres-1 psql -U invoicewise -d postgres \
  *     -c "DROP DATABASE IF EXISTS invoicewise_identity_test" \
@@ -22,6 +22,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database, PrimaryDatabase } from "@invoicewise/db/client";
+import { type SmtpTrap, startSmtpTrap } from "@invoicewise/utils/smtp-trap";
 
 const testDatabaseUrl = process.env.IDENTITY_TEST_DATABASE_URL;
 const PORT = 31783;
@@ -39,8 +40,7 @@ suite("identity lifecycle over real HTTP", () => {
   let server: ReturnType<typeof Bun.serve>;
   let mailSinkDir: string;
   let mailSinkPath: string;
-  let providerTrap: ReturnType<typeof Bun.serve>;
-  const providerRequests: string[] = [];
+  let smtpTrap: SmtpTrap;
 
   const created = {
     userIds: [] as string[],
@@ -322,26 +322,19 @@ suite("identity lifecycle over real HTTP", () => {
     mailSinkDir = await mkdtemp(join(tmpdir(), "identity-mail-sink-"));
     mailSinkPath = join(mailSinkDir, "mail.jsonl");
 
-    providerTrap = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(request) {
-        providerRequests.push(
-          `${request.method} ${new URL(request.url).pathname}`,
-        );
-        return Response.json({ id: "identity-trap" });
-      },
-    });
+    smtpTrap = await startSmtpTrap();
 
     process.env.DATABASE_PRIMARY_URL = testDatabaseUrl;
     process.env.BETTER_AUTH_SECRET ??= "identity-http-integration-secret";
     process.env.BETTER_AUTH_URL = BASE;
     process.env.NEXT_PUBLIC_URL = BASE;
-    // The committed development placeholder is "not configured", so every
-    // identity message goes to the sink and no provider key or base URL is
-    // needed to reach the network.
-    process.env.RESEND_API_KEY = "re_local_development";
-    process.env.RESEND_BASE_URL = `http://127.0.0.1:${providerTrap.port}`;
+    // SMTP is fully configured, but only against the loopback trap, and the
+    // explicit sink wins outside production: every identity and workflow
+    // message must land in the sink with no SMTP connection at all.
+    process.env.SMTP_HOST = smtpTrap.host;
+    process.env.SMTP_PORT = String(smtpTrap.port);
+    process.env.SMTP_USER = "identity@invoicewise.test";
+    process.env.SMTP_PASS = "synthetic-identity-smtp-password";
     process.env.AUTH_EMAIL_FROM = "InvoiceWise <auth@invoicewise.test>";
     process.env.AUTH_MAIL_SINK_PATH = mailSinkPath;
     process.env.POLAR_ACCESS_TOKEN ??= "polar_identity_http_test";
@@ -379,7 +372,7 @@ suite("identity lifecycle over real HTTP", () => {
 
   afterAll(async () => {
     server?.stop(true);
-    providerTrap?.stop(true);
+    await smtpTrap?.stop();
 
     if (!testDatabaseUrl) return;
 
@@ -1475,7 +1468,7 @@ suite("identity lifecycle over real HTTP", () => {
     expect(await membershipRows(account.userId)).toEqual(membershipBefore);
   });
 
-  test("no identity message reached a provider during the journey", () => {
-    expect(providerRequests).toEqual([]);
+  test("no identity message reached an SMTP server during the journey", () => {
+    expect(smtpTrap.connections).toBe(0);
   });
 });

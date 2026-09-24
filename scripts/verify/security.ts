@@ -91,12 +91,6 @@ export const SECRET_EXCEPTIONS: {
   reason: string;
 }[] = [
   {
-    path: "apps/api/src/services/auth-mail.test.ts",
-    value: "re_local_development",
-    reason:
-      "the committed development placeholder key, asserted to be refused in production",
-  },
-  {
     path: "apps/api/.env-template",
     value: "invoicewise-local-development-auth-secret-change-in-production",
     reason: "committed local template for the shared development auth secret",
@@ -169,16 +163,6 @@ export const SECRET_EXCEPTIONS: {
     path: "docs/development.md",
     value: "local-development-storage-secret",
     reason: "documented development storage signing secret",
-  },
-  {
-    path: "apps/api/.env-template",
-    value: "re_local_development",
-    reason: "committed local template placeholder for the Resend key",
-  },
-  {
-    path: "apps/dashboard/.env-example",
-    value: "re_local_development",
-    reason: "committed local template placeholder for the Resend key",
   },
   {
     path: "apps/api/.env-template",

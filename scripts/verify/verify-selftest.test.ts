@@ -19,6 +19,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  assertTransactionalMailConfigured,
+  sendTransactionalSmtp,
+} from "../../packages/utils/src/transactional-mail";
+import {
   buildRangeProbe,
   diffMismatches,
   parseMismatches,
@@ -33,7 +37,9 @@ import {
   createIsolatedWorkspace,
   redact,
   setProviderStubBaseUrl,
+  setSmtpTrapPort,
   startProviderTrap,
+  startSmtpTrap,
   syntheticEnv,
 } from "./lib";
 import {
@@ -86,8 +92,9 @@ describe("safety guards", () => {
   test("blocks provider keys and pins provider base URLs to loopback", () => {
     const built = syntheticEnv();
     expect(() => assertSyntheticEnvironment(built)).not.toThrow();
-    expect(built.RESEND_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1/);
     expect(built.POLAR_SERVER_URL).toMatch(/^http:\/\/127\.0\.0\.1/);
+    expect(built.SMTP_HOST).toBe("127.0.0.1");
+    expect(built.RESEND_API_KEY).toBe("");
     expect(built.NEXT_PUBLIC_SUPABASE_URL).toBe("");
     expect(built.DATABASE_FRA_URL).toBe("");
 
@@ -101,10 +108,27 @@ describe("safety guards", () => {
     expect(() =>
       assertSyntheticEnvironment({
         ...built,
-        RESEND_BASE_URL: "https://api.resend.com",
+        POLAR_SERVER_URL: "https://api.polar.sh",
       }),
     ).toThrow();
     expect(() => setProviderStubBaseUrl("https://api.nango.dev")).toThrow();
+  });
+
+  test("pins transactional mail to the loopback SMTP trap", () => {
+    const built = syntheticEnv();
+
+    const overrides: Record<string, string>[] = [
+      { SMTP_HOST: "smtp.purelymail.com" },
+      { SMTP_HOST: "" },
+      { SMTP_PORT: "" },
+      { SMTP_PASS: "a-real-looking-smtp-password" },
+      { RESEND_API_KEY: "re_liveabcdefghijklmnopqrst" },
+    ];
+    for (const override of overrides) {
+      expect(() =>
+        assertSyntheticEnvironment({ ...built, ...override }),
+      ).toThrow();
+    }
   });
 
   test("redacts live-looking credentials from captured output", () => {
@@ -176,6 +200,38 @@ describe("provider trap", () => {
       expect(trap.requests[0]?.path).toBe("/emails");
     } finally {
       trap.stop();
+    }
+  });
+});
+
+describe("SMTP trap", () => {
+  test("receives production-mode mail sent with the synthetic environment", async () => {
+    const trap = await startSmtpTrap();
+    try {
+      setSmtpTrapPort(trap.port);
+      const env = syntheticEnv({
+        NODE_ENV: "production",
+        AUTH_MAIL_SINK_PATH: join(tmpdir(), "verify-sink-ignored.jsonl"),
+      });
+      expect(() => assertSyntheticEnvironment(env)).not.toThrow();
+      expect(() => assertTransactionalMailConfigured(env)).not.toThrow();
+
+      await sendTransactionalSmtp(
+        {
+          to: "tenant@example.test",
+          subject: "Verify your InvoiceWise email",
+          text: "Synthetic verification probe",
+        },
+        env,
+      );
+
+      expect(trap.connections).toBe(1);
+      expect(trap.messages).toHaveLength(1);
+      expect(trap.messages[0]?.from).toBe(env.AUTH_EMAIL_FROM);
+      expect(trap.messages[0]?.recipients).toEqual(["tenant@example.test"]);
+    } finally {
+      setSmtpTrapPort(9);
+      await trap.stop();
     }
   });
 });

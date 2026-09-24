@@ -24,11 +24,12 @@ import { InboxConnector } from "@invoicewise/inbox/connector";
 import { isAuthenticationError } from "@invoicewise/inbox/utils";
 import { ensureFileExtension } from "@invoicewise/utils";
 import {
+  type TransactionalMessage,
   assertTransactionalMailConfigured,
   isProductionEnv,
   resolveMailSender,
   resolveMailSinkPath,
-  resolveProviderApiKey,
+  sendTransactionalSmtp,
   writeMailSinkRecord,
 } from "@invoicewise/utils/transactional-mail";
 import {
@@ -41,12 +42,7 @@ import {
   Schema,
 } from "effect";
 import { nanoid } from "nanoid";
-import {
-  type CreateBatchOptions,
-  type CreateContactOptions,
-  type CreateEmailOptions,
-  Resend,
-} from "resend";
+import { type CreateContactOptions, Resend } from "resend";
 import { enqueueAccountingPost, postAccountingDraft } from "./accounting";
 import { workflowKey } from "./client";
 import {
@@ -93,14 +89,20 @@ export class WorkflowStorage extends Context.Tag("invoicewise/WorkflowStorage")<
   { readonly client: ReturnType<typeof createStorageClient> }
 >() {}
 
+/**
+ * A workflow message. A template's own `from` is kept for the local sink only
+ * when no AUTH_EMAIL_FROM is configured; SMTP always sends from AUTH_EMAIL_FROM.
+ */
+export type WorkflowMail = TransactionalMessage & { from?: string };
+
 export class WorkflowMailer extends Context.Tag("invoicewise/WorkflowMailer")<
   WorkflowMailer,
   {
     readonly send: (
-      message: CreateEmailOptions,
+      message: WorkflowMail,
     ) => Effect.Effect<void, WorkflowExecutionError>;
     readonly batch: (
-      messages: CreateBatchOptions,
+      messages: WorkflowMail[],
     ) => Effect.Effect<void, WorkflowExecutionError>;
     readonly createContact: (
       contact: Omit<CreateContactOptions, "audienceId">,
@@ -270,98 +272,94 @@ export const WorkflowStorageLive = Layer.effect(
 export const WorkflowMailerLive = Layer.effect(
   WorkflowMailer,
   Config.all({
-    apiKey: Config.option(Config.redacted("RESEND_API_KEY")),
-    audienceId: Config.option(Config.string("RESEND_AUDIENCE_ID")),
+    smtpHost: Config.option(Config.string("SMTP_HOST")),
+    smtpPort: Config.option(Config.string("SMTP_PORT")),
+    smtpUser: Config.option(Config.string("SMTP_USER")),
+    smtpPass: Config.option(Config.redacted("SMTP_PASS")),
     sender: Config.option(Config.string("AUTH_EMAIL_FROM")),
     sinkPath: Config.option(Config.string("AUTH_MAIL_SINK_PATH")),
+    resendApiKey: Config.option(Config.redacted("RESEND_API_KEY")),
+    audienceId: Config.option(Config.string("RESEND_AUDIENCE_ID")),
   }).pipe(
     Effect.map((config) => {
-      // The same transactional-mail policy as the API: the committed
-      // development placeholder and a missing key both mean "not configured",
-      // the configured AUTH_EMAIL_FROM is the sender for every workflow
-      // message, and a non-production AUTH_MAIL_SINK_PATH captures the real
-      // message locally instead of contacting a provider.
+      // The same transactional-mail policy as the API: mail goes through
+      // Purelymail over SMTP, the configured AUTH_EMAIL_FROM is the sender for
+      // every workflow message, and a non-production AUTH_MAIL_SINK_PATH
+      // captures the real message locally instead of contacting a server.
       const mailEnv = {
         ...process.env,
-        RESEND_API_KEY: Option.isSome(config.apiKey)
-          ? Redacted.value(config.apiKey.value)
+        SMTP_HOST: Option.getOrUndefined(config.smtpHost),
+        SMTP_PORT: Option.getOrUndefined(config.smtpPort),
+        SMTP_USER: Option.getOrUndefined(config.smtpUser),
+        SMTP_PASS: Option.isSome(config.smtpPass)
+          ? Redacted.value(config.smtpPass.value)
           : undefined,
         AUTH_EMAIL_FROM: Option.getOrUndefined(config.sender),
         AUTH_MAIL_SINK_PATH: Option.getOrUndefined(config.sinkPath),
       } as NodeJS.ProcessEnv;
       const sender = resolveMailSender(mailEnv);
       const sinkPath = resolveMailSinkPath(mailEnv);
-      const apiKey = resolveProviderApiKey(mailEnv);
 
       // The worker runs on its own, without the API's auth import, so it
       // enforces the same fail-closed production policy before it can send
-      // anything: a missing or placeholder key, or a missing sender, refuses
-      // the mailer instead of falling back to a template's sender.
+      // anything: missing SMTP credentials or a missing sender refuse the
+      // mailer instead of falling back to a template's sender.
       if (isProductionEnv(mailEnv)) {
         assertTransactionalMailConfigured(mailEnv);
       }
 
-      const resend = apiKey ? new Resend(apiKey) : null;
-      const requireClient = () => {
-        if (!resend) {
-          throw new Error(
-            "Transactional email is not configured: RESEND_API_KEY (not the local development placeholder) is required",
-          );
-        }
-        return resend;
-      };
+      // The marketing audience is optional and is not transactional mail: it
+      // stays on Resend and is skipped unless both values are configured.
+      const resendApiKey = Option.isSome(config.resendApiKey)
+        ? Redacted.value(config.resendApiKey.value).trim()
+        : "";
+      const audienceId = Option.getOrElse(config.audienceId, () => "").trim();
+      const audience =
+        resendApiKey && audienceId
+          ? { client: new Resend(resendApiKey), audienceId }
+          : null;
 
-      const applySender = <T extends CreateEmailOptions>(message: T): T =>
+      const applySender = (message: WorkflowMail): WorkflowMail =>
         sender ? { ...message, from: sender } : message;
 
-      const capture = async (messages: CreateEmailOptions[]): Promise<void> => {
+      const capture = async (messages: WorkflowMail[]): Promise<void> => {
         if (!sinkPath) return;
 
         for (const message of messages) {
           await writeMailSinkRecord(sinkPath, {
             at: new Date().toISOString(),
-            to: Array.isArray(message.to)
-              ? message.to.join(",")
-              : String(message.to),
+            to: Array.isArray(message.to) ? message.to.join(",") : message.to,
             from: message.from ?? null,
-            subject: String(message.subject ?? ""),
-            html: typeof message.html === "string" ? message.html : null,
-            text: typeof message.text === "string" ? message.text : null,
+            subject: message.subject,
+            html: message.html ?? null,
+            text: message.text ?? null,
           });
         }
       };
 
+      const deliver = async (messages: WorkflowMail[]): Promise<void> => {
+        const final = messages.map(applySender);
+        if (sinkPath) {
+          await capture(final);
+          return;
+        }
+        for (const { from: _templateSender, ...message } of final) {
+          await sendTransactionalSmtp(message, mailEnv);
+        }
+      };
+
       return {
-        send: (message: CreateEmailOptions) =>
-          attempt(async () => {
-            const final = applySender(message);
-            if (sinkPath) {
-              await capture([final]);
-              return;
-            }
-            const response = await requireClient().emails.send(final);
-            if (response.error) throw new Error(response.error.message);
-          }, "Unable to send email"),
-        batch: (messages: CreateBatchOptions) =>
-          attempt(async () => {
-            const final = messages.map(applySender);
-            if (sinkPath) {
-              await capture(final);
-              return;
-            }
-            const response = await requireClient().batch.send(final);
-            if (response.error) throw new Error(response.error.message);
-          }, "Unable to send email batch"),
+        send: (message: WorkflowMail) =>
+          attempt(() => deliver([message]), "Unable to send email"),
+        batch: (messages: WorkflowMail[]) =>
+          attempt(() => deliver(messages), "Unable to send email batch"),
         createContact: (contact: Omit<CreateContactOptions, "audienceId">) =>
           attempt(async () => {
             // Local capture must not reach the provider's contact store.
-            if (sinkPath) return;
-            if (Option.isNone(config.audienceId)) {
-              throw new Error("RESEND_AUDIENCE_ID is not configured");
-            }
-            const response = await requireClient().contacts.create({
+            if (sinkPath || !audience) return;
+            const response = await audience.client.contacts.create({
               ...contact,
-              audienceId: config.audienceId.value,
+              audienceId: audience.audienceId,
             });
             if (response.error) throw new Error(response.error.message);
           }, "Unable to create email contact"),

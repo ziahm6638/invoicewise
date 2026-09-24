@@ -3,9 +3,10 @@ import { Resend } from "resend";
 let client: Resend | undefined;
 
 /**
- * The provider client is created on first use. Transactional mail in a local
- * or test journey is captured by the explicit mail sink, and importing that
- * path must not require a provider key or dial anything.
+ * Resend is only used for the optional marketing audience (contact removal on
+ * account deletion); transactional mail goes through `./mail` over SMTP. The
+ * client is created on first use, so importing this module never requires a
+ * key or dials anything.
  */
 function getClient(): Resend {
   if (!client) {

@@ -10,7 +10,7 @@ import {
   oauthTokenRequestSchema,
   oauthTokenResponseSchema,
 } from "@api/schemas/oauth-flow";
-import { resend } from "@api/services/resend";
+import { deliverMail } from "@api/services/mail";
 import { getAuthSession } from "@api/utils/auth";
 import { validateClientCredentials } from "@api/utils/oauth";
 import { validateResponse } from "@api/utils/validate-response";
@@ -316,8 +316,7 @@ app.openapi(
             }),
           );
 
-          await resend.emails.send({
-            from: "InvoiceWise <middaybot@midday.ai>",
+          await deliverMail({
             to: session.user.email,
             subject: "An app has been added to your team",
             html,

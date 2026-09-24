@@ -9,9 +9,10 @@
  *
  * The command is reproducible and isolated: every product process runs inside a
  * symlink overlay of the repository that contains no `.env` file, every
- * provider SDK base URL points at a loopback trap, databases are validated as
- * disposable loopback targets before they are created or reset, and a failed
- * safety precondition aborts before any process or database effect.
+ * provider SDK base URL points at a loopback trap, transactional mail goes to a
+ * loopback SMTP trap, databases are validated as disposable loopback targets
+ * before they are created or reset, and a failed safety precondition aborts
+ * before any process or database effect.
  */
 
 import { existsSync } from "node:fs";
@@ -34,6 +35,7 @@ import {
   ManagedProcess,
   type ProviderTrap,
   ROOT,
+  type SmtpTrap,
   Verification,
   VerificationAborted,
   assertDisposableDatabaseName,
@@ -43,7 +45,9 @@ import {
   executablePath,
   redact,
   setProviderStubBaseUrl,
+  setSmtpTrapPort,
   startProviderTrap,
+  startSmtpTrap,
   syntheticEnv,
   waitForHttp,
 } from "./lib";
@@ -76,6 +80,7 @@ const v = new Verification(runId);
 
 let workspace: IsolatedWorkspace;
 let providerTrap: ProviderTrap;
+let smtpTrap: SmtpTrap;
 
 /** Builds and validates the environment for one command. */
 function env(overrides: Record<string, string | undefined> = {}) {
@@ -118,6 +123,38 @@ async function tcpReachable(host: string, port: number, timeoutMs = 3000) {
     return false;
   } finally {
     socket?.end();
+  }
+}
+
+/** Reads the first line an SMTP server sends, then closes the connection. */
+async function smtpGreeting(host: string, port: number, timeoutMs = 3000) {
+  let received = "";
+  let resolveGreeting: (line: string) => void = () => {};
+  const greeting = new Promise<string>((resolve) => {
+    resolveGreeting = resolve;
+  });
+  const socket = await Bun.connect({
+    hostname: host,
+    port,
+    socket: {
+      data(_socket, chunk) {
+        received += chunk.toString();
+        const end = received.indexOf("\r\n");
+        if (end !== -1) resolveGreeting(received.slice(0, end));
+      },
+      close() {
+        resolveGreeting(received);
+      },
+    },
+  });
+  try {
+    return await Promise.race([
+      greeting,
+      Bun.sleep(timeoutMs).then(() => received),
+    ]);
+  } finally {
+    socket.write("QUIT\r\n");
+    socket.end();
   }
 }
 
@@ -195,6 +232,7 @@ async function preflight() {
 
     for (const rejected of [
       "https://api.resend.com",
+      "smtp://smtp.purelymail.com:465",
       "https://api.typesafe.ai",
       "postgresql://db.example.com:5432/invoicewise_x_test",
     ]) {
@@ -214,11 +252,15 @@ async function preflight() {
       ["REDIS_URL", LOCAL_REDIS_URL],
       ["STORAGE_S3_ENDPOINT", LOCAL_MINIO_ENDPOINT],
       ["provider stub", providerTrap.origin],
+      ["SMTP", `smtp://${checked.SMTP_HOST}:${checked.SMTP_PORT}`],
     ] as const) {
       assertLoopbackUrl(label, url);
     }
+    if (checked.SMTP_PORT !== String(smtpTrap.port)) {
+      throw new Error("SMTP_PORT does not point at the verifier's SMTP trap");
+    }
 
-    return `loopback-only targets; ${BLOCKED_PROVIDER_KEYS.length} provider/telemetry keys pinned empty; all provider base URLs point at ${providerTrap.origin}`;
+    return `loopback-only targets; ${BLOCKED_PROVIDER_KEYS.length} provider/telemetry keys pinned empty; all provider base URLs point at ${providerTrap.origin}; SMTP points at ${smtpTrap.host}:${smtpTrap.port}`;
   });
 
   await v.requireCheck("preflight:provider-trap-loopback", async () => {
@@ -233,6 +275,23 @@ async function preflight() {
       throw new Error("provider trap did not record the probe request");
     }
     return `loopback provider trap answers and records requests (${providerTrap.origin})`;
+  });
+
+  await v.requireCheck("preflight:smtp-trap-loopback", async () => {
+    const trafficBeforeGate = smtpTrap.connections + smtpTrap.messages.length;
+    if (trafficBeforeGate !== 0) {
+      throw new Error("SMTP trap received traffic before the gate started");
+    }
+    const greeting = await smtpGreeting(smtpTrap.host, smtpTrap.port);
+    if (!greeting.startsWith("220 ")) {
+      throw new Error(`SMTP trap greeted with "${greeting.slice(0, 40)}"`);
+    }
+    if (smtpTrap.connections !== 1) {
+      throw new Error("SMTP trap did not record the probe connection");
+    }
+    // The summary then counts product mail only.
+    smtpTrap.reset();
+    return `loopback SMTP trap answers and records connections (${smtpTrap.host}:${smtpTrap.port})`;
   });
 
   await v.requireCheck("preflight:canary-dotenv-ignored", async () => {
@@ -838,6 +897,9 @@ async function main() {
   providerTrap = startProviderTrap();
   setProviderStubBaseUrl(providerTrap.origin);
   v.onCleanup("stop provider trap", async () => providerTrap.stop());
+  smtpTrap = await startSmtpTrap();
+  setSmtpTrapPort(smtpTrap.port);
+  v.onCleanup("stop SMTP trap", () => smtpTrap.stop());
   workspace = createIsolatedWorkspace(join(v.artifactsDir, "workspace"), ROOT);
   // The overlay contains real build output (hundreds of megabytes of `.next`),
   // so it is removed at the end of the run; the retained evidence is the
@@ -949,6 +1011,11 @@ async function main() {
           ? { message: redact(String(thrown)) }
           : null,
     providerTrapRequests: providerTrap.requests,
+    // Counts only: captured mail carries verification links.
+    smtpTrap: {
+      connections: smtpTrap.connections,
+      messages: smtpTrap.messages.length,
+    },
     workspace: {
       linkedEntries: workspace.linkedEntries,
       skippedEnvFiles: workspace.skippedEnvFiles,

@@ -1,5 +1,5 @@
 import { logger } from "@/utils/logger";
-import { resend } from "@api/services/resend";
+import { deliverMail } from "@api/services/mail";
 import { db, primaryDb } from "@invoicewise/db/client";
 import { teams } from "@invoicewise/db/schema";
 import { getAllowedAttachments } from "@invoicewise/documents";
@@ -100,15 +100,14 @@ export async function POST(req: Request) {
 
     const teamId = teamData.id;
 
-    // If the email is forwarded from a Google Workspace account, we need to send a reply to the team email
+    // If the email is forwarded from a Google Workspace account, we need to send a reply to the team email.
+    // It is sent from AUTH_EMAIL_FROM: the SMTP account only relays for its own addresses.
     if (teamData?.email && ALLOWED_FORWARDING_EMAILS.includes(FromFull.Email)) {
-      await resend.emails.send({
-        from: `${FromFull?.Name} <${FORWARD_FROM_EMAIL}>`,
+      await deliverMail({
         to: teamData.email,
         subject: Subject ?? FromFull?.Name,
         text: TextBody,
         html: HtmlBody,
-        react: null,
         headers: {
           "X-Entity-Ref-ID": nanoid(),
         },

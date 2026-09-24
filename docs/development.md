@@ -100,8 +100,9 @@ bun run dev:dashboard
 Open <http://localhost:3001/signup> to create a local account and workspace.
 Better Auth stores users, credentials, sessions, memberships, and invitations
 in the same Postgres database as product data. In local development,
-verification and password-reset links are printed in the dashboard terminal
-when `RESEND_API_KEY` has the placeholder value from the template.
+set `AUTH_MAIL_SINK_PATH` to capture verification and password-reset mail
+(with its links) in a local file; without a sink or SMTP credentials, only the
+subject and recipient are logged (see [Transactional mail](#transactional-mail)).
 
 If port 3001 is already in use, the dashboard script accepts an override:
 
@@ -202,22 +203,45 @@ The rules that keep those flows safe:
 
 ### Transactional mail
 
+Transactional mail is sent through Purelymail over SMTP with nodemailer. The
+API (Better Auth identity mail, API-key and OAuth-application notices, inbox
+forwarding) and the workflow worker (invitation and onboarding mail) share one
+policy in `@invoicewise/utils/transactional-mail`:
+
+| Variable | Purpose |
+| --- | --- |
+| `SMTP_HOST` | SMTP server, default `smtp.purelymail.com` |
+| `SMTP_PORT` | Default `465`, which uses implicit TLS; any other port starts in plain text |
+| `SMTP_USER`, `SMTP_PASS` | The Purelymail mailbox credentials; mail is "not configured" without both |
+| `AUTH_EMAIL_FROM` | The sender for every transactional message, a Purelymail address such as `InvoiceWise <auth@invoicewise.uk>` |
+| `AUTH_MAIL_SINK_PATH` | Optional local capture file, honoured outside production only |
+
 Verification, invitation and reset links carry bearer tokens, so delivery is
 fail-closed:
 
-- Production refuses to start when `RESEND_API_KEY` is absent, is the committed
-  development placeholder, or `AUTH_EMAIL_FROM` is missing.
-- Token-bearing links are never written to a log or a file in production.
-- Development and tests capture mail in the explicit sink file named by
-  `AUTH_MAIL_SINK_PATH` instead of sending anything, and that sink covers the
+- Production refuses to start when `SMTP_USER`, `SMTP_PASS` or
+  `AUTH_EMAIL_FROM` is missing (the API at import time, the worker when it
+  builds its mailer).
+- Token-bearing links are never written to a log or a file in production, and
+  production ignores `AUTH_MAIL_SINK_PATH`.
+- Outside production the explicit sink wins: mail is captured in the file named
+  by `AUTH_MAIL_SINK_PATH` instead of being sent, and that sink covers the
   queued workflow mail as well as Better Auth identity mail. The captured
-  record holds the real link, so the whole journey completes locally.
+  record holds the real link, so the whole journey completes locally. Without
+  a sink, the API sends over SMTP when it is configured and otherwise logs only
+  the subject and recipient.
 - `AUTH_EMAIL_FROM` is the sender for every transactional message, including
   the invitation and onboarding templates that previously hardcoded their own
-  `from` address, and the configured application origin (`NEXT_PUBLIC_URL`) is
-  used for links in that mail.
-- Verification runs against the loopback provider seam with explicit synthetic
-  values; live Resend delivery stays owner-gated evidence.
+  `from` address (Purelymail only relays for its own addresses), and the
+  configured application origin (`NEXT_PUBLIC_URL`) is used for links in that
+  mail.
+- Resend is not used for transactional mail. `RESEND_API_KEY` and
+  `RESEND_AUDIENCE_ID` only serve the optional marketing audience (onboarding
+  contacts and contact removal on account deletion), which is skipped unless
+  both are set.
+- Tests and verification send to a loopback SMTP trap
+  (`@invoicewise/utils/smtp-trap`) with explicit synthetic credentials; live
+  Purelymail delivery stays owner-gated evidence.
 
 ## Document storage
 
@@ -364,9 +388,12 @@ Requirements and isolation rules:
   none. Bun children additionally run with `--no-env-file`, and every
   provider/telemetry key is defined-but-empty so a stray file cannot inject a
   live value.
-- Resend, TypeSafe, Nango and Polar base URLs point at a loopback provider trap
-  started by the run; the trap records every request (the e2e's Better Auth
-  verification emails and TypeSafe calls appear there, not at a paid endpoint).
+- TypeSafe, Nango and Polar base URLs point at a loopback provider trap started
+  by the run, and `SMTP_HOST`/`SMTP_PORT` point at a loopback SMTP trap with
+  synthetic credentials. The traps record every request and message (the
+  e2e's production-mode Better Auth verification emails reach the SMTP trap
+  and TypeSafe calls reach the provider trap, not a paid endpoint).
+  `RESEND_API_KEY` is pinned empty.
   Redis uses the disposable logical database `redis://127.0.0.1:6379/9`
   (override with `VERIFY_REDIS_URL`) and MinIO objects use a unique per-run key
   prefix, so no development cache namespace or bucket object is reset.
@@ -375,7 +402,8 @@ Requirements and isolation rules:
   stops the command (a missing bucket is created) with a redacted summary
   (`bun run verify:selftest` proves the abort with a non-loopback target).
 - Redacted logs and `summary.json` are written to `.verify-artifacts/<run-id>/`
-  (gitignored) and include the provider-trap request list, the excluded `.env`
+  (gitignored) and include the provider-trap request list, the SMTP trap's
+  connection and message counts (never message content), the excluded `.env`
   files and the workspace overlay size. The command exits non-zero if any step
   fails, is aborted, or throws unexpectedly. Credential-shaped text is redacted
   before it reaches any note, abort detail, cleanup message or the serialized

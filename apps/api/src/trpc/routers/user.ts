@@ -56,14 +56,19 @@ export const userRouter = createTRPCRouter({
     }
 
     // Marketing-audience cleanup is best effort and must not fail a deletion
-    // that already succeeded.
-    try {
-      await resend.contacts.remove({
-        email: session.user.email!,
-        audienceId: process.env.RESEND_AUDIENCE_ID!,
-      });
-    } catch (error) {
-      console.error("Failed to remove deleted user from Resend", error);
+    // that already succeeded. It only runs when the optional Resend audience
+    // is configured.
+    const audienceId = process.env.RESEND_AUDIENCE_ID?.trim();
+
+    if (process.env.RESEND_API_KEY?.trim() && audienceId) {
+      try {
+        await resend.contacts.remove({
+          email: session.user.email!,
+          audienceId,
+        });
+      } catch (error) {
+        console.error("Failed to remove deleted user from Resend", error);
+      }
     }
 
     return data;

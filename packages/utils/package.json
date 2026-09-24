@@ -10,13 +10,18 @@
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "nodemailer": "^10.0.10"
+  },
   "devDependencies": {
+    "@types/nodemailer": "^8.0.2",
     "typescript": "^5.9.2"
   },
   "exports": {
     ".": "./src/index.ts",
     "./envs": "./src/envs.ts",
     "./format": "./src/format.ts",
+    "./smtp-trap": "./src/smtp-trap.ts",
     "./tax": "./src/tax.ts",
     "./transactional-mail": "./src/transactional-mail.ts"
   }
