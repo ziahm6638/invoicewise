@@ -159,9 +159,9 @@ Postgres database:
 
 `apps/api/src/permissions.http.integration.test.ts` boots the real API app on a
 local port and drives it over HTTP with real Better Auth session cookies, tRPC
-and REST: three roles, workspace switching, member removal, credential tenant
-binding, the OAuth consent → token → refresh → revoke flow, and account
-deletion. Providers are stubbed; nothing leaves the machine.
+and REST: three roles, workspace switching, member removal, workspace
+deletion, credential tenant binding, the OAuth consent → token → refresh →
+revoke flow, and account deletion. Providers are stubbed; nothing leaves the machine.
 
 `apps/dashboard/src/app/api/billing-routes.test.ts` proves the checkout and
 portal routes refuse members, admins and foreign workspaces before any provider
