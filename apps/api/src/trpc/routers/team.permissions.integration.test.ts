@@ -630,6 +630,264 @@ suite("workspace permissions (integration)", () => {
     });
   });
 
+  describe("inviter-bound invitations", () => {
+    // A fresh workspace per test: two owners, an admin and a member, so the
+    // shared fixture's roles are never disturbed.
+    const seedWorkspace = async (label: string) => {
+      const teamId = crypto.randomUUID();
+      const user = (role: string) => ({
+        id: crypto.randomUUID(),
+        email: `${label}-${role}-${teamId}@example.test`,
+      });
+      const owner = user("owner");
+      const secondOwner = user("owner2");
+      const admin = user("admin");
+      const member = user("member");
+      const people = [owner, secondOwner, admin, member];
+
+      await primaryDb.insert(schema.teams).values({ id: teamId, name: label });
+      await primaryDb
+        .insert(schema.users)
+        .values(people.map((p) => ({ ...p, fullName: label, teamId })));
+      await primaryDb.insert(schema.usersOnTeam).values([
+        { teamId, userId: owner.id, role: "owner" },
+        { teamId, userId: secondOwner.id, role: "owner" },
+        { teamId, userId: admin.id, role: "admin" },
+        { teamId, userId: member.id, role: "member" },
+      ]);
+
+      const invitees: string[] = [];
+
+      const invite = async (
+        inviterId: string,
+        role: "owner" | "admin" | "member",
+      ) => {
+        const email = `${label}-invitee-${crypto.randomUUID()}@example.test`;
+        const created = await queries.createTeamInvites(db, {
+          teamId,
+          actorUserId: inviterId,
+          invites: [{ email, role, invitedBy: inviterId }],
+        });
+        expect(created.results).toHaveLength(1);
+
+        const inviteeId = crypto.randomUUID();
+        await primaryDb
+          .insert(schema.users)
+          .values({ id: inviteeId, email, fullName: "Invitee" });
+        invitees.push(inviteeId);
+
+        const { id } = (await primaryDb.query.userInvites.findFirst({
+          where: orm.eq(schema.userInvites.email, email),
+          columns: { id: true },
+        }))!;
+
+        return { id, email, inviteeId };
+      };
+
+      const pendingIds = async () =>
+        (
+          await primaryDb
+            .select({ id: schema.userInvites.id })
+            .from(schema.userInvites)
+            .where(orm.eq(schema.userInvites.teamId, teamId))
+        ).map((row) => row.id);
+
+      const accept = (sent: Awaited<ReturnType<typeof invite>>) =>
+        queries.acceptTeamInvite(db, {
+          id: sent.id,
+          userId: sent.inviteeId,
+          email: sent.email,
+        });
+
+      const cleanup = async () => {
+        await primaryDb
+          .delete(schema.teams)
+          .where(orm.eq(schema.teams.id, teamId));
+        await primaryDb
+          .delete(schema.users)
+          .where(
+            orm.inArray(schema.users.id, [
+              ...people.map((p) => p.id),
+              ...invitees,
+            ]),
+          );
+      };
+
+      return {
+        teamId,
+        owner,
+        secondOwner,
+        admin,
+        member,
+        invite,
+        pendingIds,
+        accept,
+        cleanup,
+      };
+    };
+
+    test("removing an inviter revokes their pending invites, and accepting one is refused", async () => {
+      const ws = await seedWorkspace("removed-inviter");
+
+      const adminInvite = await ws.invite(ws.admin.id, "admin");
+      const memberInvite = await ws.invite(ws.admin.id, "member");
+      const ownersInvite = await ws.invite(ws.owner.id, "member");
+
+      await queries.deleteTeamMember(db, {
+        teamId: ws.teamId,
+        userId: ws.admin.id,
+        actorUserId: ws.owner.id,
+      });
+
+      expect(await ws.pendingIds()).toEqual([ownersInvite.id]);
+
+      await expect(ws.accept(adminInvite)).rejects.toThrow(/not found/i);
+      await expect(ws.accept(memberInvite)).rejects.toThrow(/not found/i);
+      expect(await roleOf(ws.teamId, adminInvite.inviteeId)).toBeNull();
+      expect(await roleOf(ws.teamId, memberInvite.inviteeId)).toBeNull();
+
+      // Another member's invitation is untouched.
+      await expect(ws.accept(ownersInvite)).resolves.toMatchObject({
+        role: "member",
+      });
+
+      await ws.cleanup();
+    });
+
+    test("leaving the workspace revokes the leaver's pending invites", async () => {
+      const ws = await seedWorkspace("left-inviter");
+
+      const sent = await ws.invite(ws.admin.id, "admin");
+
+      await queries.leaveTeam(db, { teamId: ws.teamId, userId: ws.admin.id });
+
+      expect(await ws.pendingIds()).toEqual([]);
+      await expect(ws.accept(sent)).rejects.toThrow();
+      expect(await roleOf(ws.teamId, sent.inviteeId)).toBeNull();
+
+      await ws.cleanup();
+    });
+
+    test("demotion revokes only the invites for a role the inviter can no longer grant", async () => {
+      const ws = await seedWorkspace("demoted-inviter");
+
+      const ownerRole = await ws.invite(ws.secondOwner.id, "owner");
+      const adminRole = await ws.invite(ws.secondOwner.id, "admin");
+      const memberRole = await ws.invite(ws.secondOwner.id, "member");
+
+      // Owner -> admin: an admin cannot grant owner.
+      await queries.updateTeamMember(db, {
+        teamId: ws.teamId,
+        userId: ws.secondOwner.id,
+        actorUserId: ws.owner.id,
+        role: "admin",
+      });
+
+      expect((await ws.pendingIds()).sort()).toEqual(
+        [adminRole.id, memberRole.id].sort(),
+      );
+      await expect(ws.accept(ownerRole)).rejects.toThrow(/not found/i);
+      expect(await roleOf(ws.teamId, ownerRole.inviteeId)).toBeNull();
+
+      // Admin -> member: a member cannot grant any role.
+      await queries.updateTeamMember(db, {
+        teamId: ws.teamId,
+        userId: ws.secondOwner.id,
+        actorUserId: ws.owner.id,
+        role: "member",
+      });
+
+      expect(await ws.pendingIds()).toEqual([]);
+      await expect(ws.accept(adminRole)).rejects.toThrow(/not found/i);
+      await expect(ws.accept(memberRole)).rejects.toThrow(/not found/i);
+      expect(await roleOf(ws.teamId, adminRole.inviteeId)).toBeNull();
+      expect(await roleOf(ws.teamId, memberRole.inviteeId)).toBeNull();
+
+      await ws.cleanup();
+    });
+
+    test("a failed membership change leaves the inviter's invites in place", async () => {
+      const ws = await seedWorkspace("rolled-back");
+
+      const sent = await ws.invite(ws.admin.id, "admin");
+
+      // A member may not remove an admin; the transaction must not revoke.
+      await expect(
+        queries.deleteTeamMember(db, {
+          teamId: ws.teamId,
+          userId: ws.admin.id,
+          actorUserId: ws.member.id,
+        }),
+      ).rejects.toThrow();
+
+      expect(await ws.pendingIds()).toEqual([sent.id]);
+
+      await ws.cleanup();
+    });
+
+    test("acceptance refuses an invite whose sender no longer holds the authority", async () => {
+      const ws = await seedWorkspace("stale-authority");
+
+      const sent = await ws.invite(ws.admin.id, "admin");
+
+      // Simulate an invite that predates eager revocation: the sender lost the
+      // role outside the membership flows, so the row is still pending.
+      await primaryDb
+        .update(schema.usersOnTeam)
+        .set({ role: "member" })
+        .where(
+          orm.and(
+            orm.eq(schema.usersOnTeam.teamId, ws.teamId),
+            orm.eq(schema.usersOnTeam.userId, ws.admin.id),
+          ),
+        );
+
+      await expect(ws.accept(sent)).rejects.toThrow(/revoked/);
+      expect(await roleOf(ws.teamId, sent.inviteeId)).toBeNull();
+
+      await ws.cleanup();
+    });
+
+    test("owners and admins list pending invites with their sender; members cannot", async () => {
+      const ws = await seedWorkspace("invite-list");
+
+      const sent = await ws.invite(ws.admin.id, "member");
+
+      const asActor = (userId: string, email: string) =>
+        caller({
+          ...ctx(userId, ws.teamId),
+          session: {
+            user: { id: userId, email, full_name: "Test User" },
+            teamId: ws.teamId,
+          },
+        });
+
+      for (const actor of [ws.owner, ws.admin]) {
+        const list = await asActor(actor.id, actor.email).team.teamInvites();
+        expect(list).toHaveLength(1);
+        expect(list[0]).toMatchObject({
+          id: sent.id,
+          email: sent.email,
+          role: "member",
+          user: { id: ws.admin.id },
+        });
+        expect(list[0]).not.toHaveProperty("code");
+      }
+
+      await expect(
+        asActor(ws.member.id, ws.member.email).team.teamInvites(),
+      ).rejects.toThrow();
+
+      await asActor(ws.owner.id, ws.owner.email).team.deleteInvite({
+        id: sent.id,
+      });
+      expect(await ws.pendingIds()).toEqual([]);
+      await expect(ws.accept(sent)).rejects.toThrow(/not found/i);
+
+      await ws.cleanup();
+    });
+  });
+
   describe("API keys", () => {
     test("deletion is effective immediately and foreign ids cannot be updated", async () => {
       const { hash } = await import("@invoicewise/encryption");

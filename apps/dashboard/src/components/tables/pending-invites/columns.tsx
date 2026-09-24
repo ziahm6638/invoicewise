@@ -11,6 +11,7 @@ import {
 } from "@invoicewise/ui/dropdown-menu";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef, FilterFn, Row } from "@tanstack/react-table";
+import { formatDistanceToNow } from "date-fns";
 import { MoreHorizontal } from "lucide-react";
 
 type TeamInvite = RouterOutputs["team"]["teamInvites"][number];
@@ -30,6 +31,10 @@ export const columns: ColumnDef<TeamInvite>[] = [
     accessorKey: "email",
     filterFn: emailFilterFn,
     cell: ({ row }) => {
+      const inviter = row.original.user?.fullName ?? row.original.user?.email;
+      const expiresAt = new Date(row.original.expiresAt);
+      const expired = expiresAt.getTime() <= Date.now();
+
       return (
         <div className="flex items-center space-x-4">
           <Avatar className="rounded-full w-8 h-8">
@@ -40,8 +45,13 @@ export const columns: ColumnDef<TeamInvite>[] = [
             </AvatarFallback>
           </Avatar>
           <div className="flex flex-col">
-            <span className="font-medium text-sm">Pending Invitation</span>
-            <span className="text-sm text-[#606060]">{row.original.email}</span>
+            <span className="font-medium text-sm">{row.original.email}</span>
+            <span className="text-sm text-[#606060]">
+              {inviter ? `Invited by ${inviter} · ` : ""}
+              {expired
+                ? "Expired"
+                : `Expires ${formatDistanceToNow(expiresAt, { addSuffix: true })}`}
+            </span>
           </div>
         </div>
       );
@@ -87,7 +97,7 @@ export const columns: ColumnDef<TeamInvite>[] = [
                     })
                   }
                 >
-                  Remove
+                  Revoke
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

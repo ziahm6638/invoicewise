@@ -1,7 +1,8 @@
 import type { Database } from "@db/client";
 import { teams, userInvites, users, usersOnTeam } from "@db/schema";
-import { and, eq, gt, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
 import {
+  TEAM_ROLES,
   TeamPermissionError,
   type TeamRole,
   canAssignRole,
@@ -80,6 +81,7 @@ export async function acceptTeamInvite(
         email: true,
         role: true,
         teamId: true,
+        invitedBy: true,
         status: true,
         expiresAt: true,
       },
@@ -111,6 +113,17 @@ export async function acceptTeamInvite(
 
     if (!role) {
       throw new TeamPermissionError("FORBIDDEN", "Invite role is not valid");
+    }
+
+    // An invite is only as good as its sender's current authority to grant
+    // the role. Removal and demotion revoke affected invites eagerly; this
+    // also refuses any invite that predates that rule.
+    const inviter = invite.invitedBy
+      ? await getTeamMemberRow(tx, invite.teamId, invite.invitedBy)
+      : null;
+
+    if (!canAssignRole(inviter?.role, role)) {
+      throw new TeamPermissionError("CONFLICT", "Invite is revoked");
     }
 
     const existing = await getTeamMemberRow(tx, invite.teamId, params.userId);
@@ -150,14 +163,23 @@ export async function declineTeamInvite(
     .where(and(eq(userInvites.id, id), eq(userInvites.email, email)));
 }
 
+/**
+ * Pending invitations for the workspace's owners and admins, with the member
+ * who sent each one. Expired invites are listed so they can be revoked.
+ */
 export async function getTeamInvites(db: Database, teamId: string) {
   return db.query.userInvites.findMany({
-    where: eq(userInvites.teamId, teamId),
+    where: and(
+      eq(userInvites.teamId, teamId),
+      eq(userInvites.status, "pending"),
+    ),
+    orderBy: (invites, { desc }) => [desc(invites.createdAt)],
     columns: {
       id: true,
       email: true,
-      code: true,
       role: true,
+      createdAt: true,
+      expiresAt: true,
     },
     with: {
       user: {
@@ -167,15 +189,53 @@ export async function getTeamInvites(db: Database, teamId: string) {
           email: true,
         },
       },
-      team: {
-        columns: {
-          id: true,
-          name: true,
-          logoUrl: true,
-        },
-      },
     },
   });
+}
+
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/**
+ * Invitations belong to the member who sent them. When that member's
+ * membership ends (`remainingRole` null) every pending invite they sent is
+ * revoked; when they are demoted, the ones for a role they can no longer
+ * grant are. Callers run this inside the membership change's transaction,
+ * under the team lock.
+ */
+export async function revokeInvitesSentBy(
+  tx: Transaction,
+  params: {
+    teamId: string;
+    inviterUserId: string;
+    remainingRole: TeamRole | null;
+  },
+) {
+  const { teamId, inviterUserId, remainingRole } = params;
+
+  const sentBy = and(
+    eq(userInvites.teamId, teamId),
+    eq(userInvites.invitedBy, inviterUserId),
+  );
+
+  if (!remainingRole) {
+    return tx
+      .delete(userInvites)
+      .where(sentBy)
+      .returning({ id: userInvites.id });
+  }
+
+  const ungrantable = TEAM_ROLES.filter(
+    (role) => !canAssignRole(remainingRole, role),
+  );
+
+  if (ungrantable.length === 0) {
+    return [];
+  }
+
+  return tx
+    .delete(userInvites)
+    .where(and(sentBy, inArray(userInvites.role, ungrantable)))
+    .returning({ id: userInvites.id });
 }
 
 export async function getInvitesByEmail(db: Database, email: string) {

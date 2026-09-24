@@ -226,7 +226,7 @@ export const teamRouter = createTRPCRouter({
       }
     }),
 
-  teamInvites: workspaceProcedure.query(async ({ ctx: { db, teamId } }) => {
+  teamInvites: adminProcedure.query(async ({ ctx: { db, teamId } }) => {
     return getTeamInvites(db, teamId!);
   }),
 

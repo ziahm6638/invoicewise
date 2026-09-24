@@ -1,14 +1,22 @@
 import { TeamMembers } from "@/components/team-members";
-import { prefetch, trpc } from "@/trpc/server";
+import { getQueryClient, prefetch, trpc } from "@/trpc/server";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Members | InvoiceWise",
 };
 
-export default function Members() {
-  prefetch(trpc.team.members.queryOptions());
-  prefetch(trpc.team.teamInvites.queryOptions());
+export default async function Members() {
+  const team = await getQueryClient().fetchQuery(
+    trpc.team.current.queryOptions(),
+  );
+  const canManageMembers = team?.permissions?.manageMembers ?? false;
 
-  return <TeamMembers />;
+  prefetch(trpc.team.members.queryOptions());
+
+  if (canManageMembers) {
+    prefetch(trpc.team.teamInvites.queryOptions());
+  }
+
+  return <TeamMembers canManageMembers={canManageMembers} />;
 }
