@@ -1,5 +1,6 @@
 "use client";
 
+import { useTeamPermissions } from "@/hooks/use-team";
 import { useTRPC } from "@/trpc/client";
 import type {
   RouterInputs,
@@ -188,6 +189,9 @@ export function QuestionSettings() {
   const { toast } = useToast();
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
+  const permissions = useTeamPermissions();
+  // Questions are workspace configuration: owner/admin only, server-enforced.
+  const canManage = permissions.manageQuestions;
   const { data: questions } = useSuspenseQuery(
     trpc.questions.list.queryOptions(),
   );
@@ -237,15 +241,17 @@ export function QuestionSettings() {
             wording.
           </CardDescription>
         </div>
-        <Button
-          onClick={() => {
-            setEditingKey(null);
-            setIsAdding(true);
-          }}
-          disabled={isAdding}
-        >
-          Add question
-        </Button>
+        {canManage && (
+          <Button
+            onClick={() => {
+              setEditingKey(null);
+              setIsAdding(true);
+            }}
+            disabled={isAdding}
+          >
+            Add question
+          </Button>
+        )}
       </CardHeader>
 
       {isAdding && (
@@ -265,7 +271,7 @@ export function QuestionSettings() {
                 <Switch
                   aria-label={`${question.enabled ? "Disable" : "Enable"} ${question.label}`}
                   checked={question.enabled}
-                  disabled={updateQuestion.isPending}
+                  disabled={!canManage || updateQuestion.isPending}
                   onCheckedChange={(enabled) =>
                     updateQuestion.mutate({
                       questionKey: question.questionKey,
@@ -306,7 +312,7 @@ export function QuestionSettings() {
                     </p>
                   )}
                 </div>
-                {!question.isDefault && (
+                {canManage && !question.isDefault && (
                   <div className="flex items-center gap-1">
                     <Button
                       size="sm"

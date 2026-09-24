@@ -4,11 +4,12 @@ import { Avatar, AvatarImage } from "@invoicewise/ui/avatar";
 import { Icons } from "@invoicewise/ui/icons";
 
 type Props = {
-  role: "assistant" | "user";
+  /** Who is speaking in the demo transcript (not an ARIA role). */
+  speaker: "assistant" | "user";
 };
 
-export function ChatAvatar({ role }: Props) {
-  switch (role) {
+export function ChatAvatar({ speaker }: Props) {
+  switch (speaker) {
     case "user": {
       return (
         <Avatar className="size-6">

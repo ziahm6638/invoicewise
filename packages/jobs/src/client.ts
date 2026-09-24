@@ -48,11 +48,13 @@ export async function getWorkflowStatus(
 }
 
 export const workflowKey = {
-  attachment: (
-    teamId: string,
-    filePath: readonly string[],
-    referenceId?: string,
-  ) => `${teamId}:${referenceId ?? filePath.join("/")}`,
+  /**
+   * Identity of the processing intent. Mailbox ingestion keeps using the
+   * provider reference so a redelivered message is deduplicated; all other
+   * callers use the server-owned inbox id.
+   */
+  attachment: (teamId: string, inboxId: string, referenceId?: string) =>
+    `${teamId}:${referenceId ?? inboxId}`,
   inboxSetup: (accountId: string) => accountId,
   inboxSync: (accountId: string, occurrence: string) =>
     `${accountId}:${occurrence}`,

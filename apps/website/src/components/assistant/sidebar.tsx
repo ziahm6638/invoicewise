@@ -16,7 +16,7 @@ export function Sidebar({
   onSelect,
   onNewChat,
 }: Props) {
-  const ref = useClickAway(() => {
+  const ref = useClickAway<HTMLDivElement>(() => {
     setExpanded(false);
   });
 

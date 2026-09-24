@@ -20,6 +20,7 @@ import {
 } from "@invoicewise/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@invoicewise/ui/tabs";
 
+import { isStatsConfigured } from "@/lib/stats-config";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -54,20 +55,26 @@ export default async function Page() {
         </TabsList>
 
         <TabsContent value="metrics" className="m-0 h-full">
-          <div className="grid md:grid-cols-2 gap-6 mt-12">
-            <UsersChart />
-            <TransactionsChart />
-            <TransactionEnrichmentsChart />
-            <BankAccountsChart />
-            <BankConnectionsChart />
-            <VaultChart />
-            <InvoicesChart />
-            <InvoiceCustomersChart />
-            <TrackerEntriesChart />
-            <TrackerProjectsChart />
-            <InboxChart />
-            <ReportsChart />
-          </div>
+          {isStatsConfigured() ? (
+            <div className="grid md:grid-cols-2 gap-6 mt-12">
+              <UsersChart />
+              <TransactionsChart />
+              <TransactionEnrichmentsChart />
+              <BankAccountsChart />
+              <BankConnectionsChart />
+              <VaultChart />
+              <InvoicesChart />
+              <InvoiceCustomersChart />
+              <TrackerEntriesChart />
+              <TrackerProjectsChart />
+              <InboxChart />
+              <ReportsChart />
+            </div>
+          ) : (
+            <p className="text-[#878787] text-sm mt-12">
+              Service metrics are not published in this environment.
+            </p>
+          )}
         </TabsContent>
 
         <TabsContent

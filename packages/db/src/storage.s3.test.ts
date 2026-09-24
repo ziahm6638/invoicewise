@@ -32,7 +32,11 @@ describe("S3-compatible storage", () => {
           createHash("sha256").update(pdf).digest("hex"),
         );
         const signed = new URL(
-          await storage.signedUrl({ ...input, expireIn: 60 }),
+          await storage.signedUrl({
+            ...input,
+            expireIn: 60,
+            inboxId: "11111111-1111-4111-8111-111111111111",
+          }),
         );
         expect(
           storage.verifySignedUrl({
@@ -40,8 +44,40 @@ describe("S3-compatible storage", () => {
             expires: Number(signed.searchParams.get("expires")),
             providedSignature: signed.searchParams.get("signature") ?? "",
             download: false,
+            inboxId: "11111111-1111-4111-8111-111111111111",
           }),
         ).toBe(true);
+        expect(
+          storage.verifySignedUrl({
+            ...input,
+            expires: Number(signed.searchParams.get("expires")),
+            providedSignature: signed.searchParams.get("signature") ?? "",
+            download: false,
+            inboxId: "22222222-2222-4222-8222-222222222222",
+          }),
+        ).toBe(false);
+
+        // A second immutable write must not replace the stored object.
+        const immutableInput = {
+          bucket: "vault",
+          path: [...path.slice(0, -1), "immutable.pdf"],
+        };
+        const firstWrite = await storage.uploadIfAbsent({
+          ...immutableInput,
+          file: Buffer.from("first"),
+        });
+        const secondWrite = await storage.uploadIfAbsent({
+          ...immutableInput,
+          file: Buffer.from("second"),
+        });
+        expect(firstWrite.created).toBe(true);
+        expect(secondWrite.created).toBe(false);
+        expect(
+          Buffer.from(
+            await (await storage.download(immutableInput)).arrayBuffer(),
+          ).toString("utf8"),
+        ).toBe("first");
+        await storage.remove(immutableInput);
 
         const s3 = new S3Client({
           endpoint: process.env.STORAGE_S3_ENDPOINT,

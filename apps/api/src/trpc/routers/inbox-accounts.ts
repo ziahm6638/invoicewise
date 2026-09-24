@@ -5,8 +5,16 @@ import {
   syncInboxAccountSchema,
   workflowStatusSchema,
 } from "@api/schemas/inbox-accounts";
-import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
-import { deleteInboxAccount, getInboxAccounts } from "@invoicewise/db/queries";
+import {
+  adminProcedure,
+  createTRPCRouter,
+  workspaceProcedure,
+} from "@api/trpc/init";
+import {
+  deleteInboxAccount,
+  getInboxAccountById,
+  getInboxAccounts,
+} from "@invoicewise/db/queries";
 import { InboxConnector } from "@invoicewise/inbox/connector";
 import {
   enqueueWorkflow,
@@ -16,11 +24,11 @@ import {
 import { TRPCError } from "@trpc/server";
 
 export const inboxAccountsRouter = createTRPCRouter({
-  get: protectedProcedure.query(async ({ ctx: { db, teamId } }) => {
+  get: workspaceProcedure.query(async ({ ctx: { db, teamId } }) => {
     return getInboxAccounts(db, teamId!);
   }),
 
-  connect: protectedProcedure
+  connect: adminProcedure
     .input(connectInboxAccountSchema)
     .mutation(async ({ ctx: { db }, input }) => {
       try {
@@ -36,7 +44,7 @@ export const inboxAccountsRouter = createTRPCRouter({
       }
     }),
 
-  exchangeCodeForAccount: protectedProcedure
+  exchangeCodeForAccount: adminProcedure
     .input(exchangeCodeForAccountSchema)
     .query(async ({ ctx: { db, teamId }, input }) => {
       try {
@@ -57,7 +65,7 @@ export const inboxAccountsRouter = createTRPCRouter({
       }
     }),
 
-  delete: protectedProcedure
+  delete: adminProcedure
     .input(deleteInboxAccountSchema)
     .mutation(async ({ ctx: { db, teamId }, input }) => {
       const data = await deleteInboxAccount(db, {
@@ -68,9 +76,23 @@ export const inboxAccountsRouter = createTRPCRouter({
       return data;
     }),
 
-  sync: protectedProcedure
+  sync: adminProcedure
     .input(syncInboxAccountSchema)
     .mutation(async ({ ctx: { db, teamId }, input }) => {
+      // The idempotency key is per account, so an account from another
+      // workspace must be refused here rather than only by the worker.
+      const account = await getInboxAccountById(db, {
+        id: input.id,
+        teamId: teamId!,
+      });
+
+      if (!account) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Inbox account not found",
+        });
+      }
+
       return enqueueWorkflow(db, {
         name: "sync-inbox-account",
         teamId: teamId!,
@@ -86,7 +108,7 @@ export const inboxAccountsRouter = createTRPCRouter({
       });
     }),
 
-  syncStatus: protectedProcedure
+  syncStatus: workspaceProcedure
     .input(workflowStatusSchema)
     .query(async ({ ctx: { db, teamId }, input }) => {
       return getWorkflowStatus(db, { id: input.id, teamId: teamId! });

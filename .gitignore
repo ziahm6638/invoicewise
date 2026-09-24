@@ -43,6 +43,9 @@ yarn-error.log*
 # turbo
 .turbo
 
+# local release verification artifacts
+.verify-artifacts
+
 # react-email
 .react-email
 packages/email/public

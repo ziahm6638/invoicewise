@@ -1,0 +1,13 @@
+{
+  "note": "sha256 of the prior-schema migrations (0000-0006) as recorded at ef798a99. The upgrade fixture must match these hashes; changing a pinned migration requires a deliberate baseline update plus a migration-review note.",
+  "pinnedAt": "ef798a99",
+  "files": {
+    "packages/db/migrations/0000_initial.sql": "0fc0e60b9918075b1ab2024186c1a84ced5e7675baaa2b0759abff635df09b2c",
+    "packages/db/migrations/0001_typesafe_extraction.sql": "a37d2243e540adc334b9b41ab151059487c6cebe471e2ebcfb30d3d87867f27a",
+    "packages/db/migrations/0002_better_auth.sql": "74996bc2b6a64ebde5a44d7d33644a9868bb1e3ce45f090d025dc6c0017e7cc0",
+    "packages/db/migrations/0003_user_questions.sql": "d97877cc32776c335ebebbffe5fa2987afd7b22336457b21f6c477aa9e63d201",
+    "packages/db/migrations/0004_effect_workflows.sql": "5722d2065b742ebf3f6f89013326727790602705777e954e97a94cc4e397cc3c",
+    "packages/db/migrations/0005_lovely_skullbuster.sql": "b36529d1beb6f66a289b2d3a192dfe394838f916fc7cd0f2ed0ecc50d8dd6b6e",
+    "packages/db/migrations/0006_curly_network.sql": "bf0e8befde1966010d1823400b50ef8804caf210dee46a8337e21739eaa87f30"
+  }
+}

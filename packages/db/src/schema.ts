@@ -101,6 +101,12 @@ export const inboxStatusEnum = pgEnum("inbox_status", [
   "deleted",
 ]);
 
+export const inboxIntakeStateEnum = pgEnum("inbox_intake_state", [
+  "reserved",
+  "accepted",
+  "cancelled",
+]);
+
 export const inboxTypeEnum = pgEnum("inbox_type", ["invoice", "expense"]);
 export const invoiceQuestionTypeEnum = pgEnum("invoice_question_type", [
   "boolean",
@@ -161,7 +167,7 @@ export const reportTypesEnum = pgEnum("reportTypes", [
   "expense",
 ]);
 
-export const teamRolesEnum = pgEnum("teamRoles", ["owner", "member"]);
+export const teamRolesEnum = pgEnum("teamRoles", ["owner", "admin", "member"]);
 export const trackerStatusEnum = pgEnum("trackerStatus", [
   "in_progress",
   "completed",
@@ -2037,6 +2043,25 @@ export const inbox = pgTable(
     taxRate: numericCasted("tax_rate", { precision: 10, scale: 2 }),
     taxType: text("tax_type"),
     inboxAccountId: uuid("inbox_account_id"),
+    // Workspace-owned intake lifecycle. Rows created before issue #34 keep a
+    // null state and are treated as legacy accepted documents.
+    intakeState: inboxIntakeStateEnum("intake_state"),
+    // sha256 of the accepted bytes. Replay identity is (team_id, content_hash).
+    contentHash: text("content_hash"),
+    intakeError: text("intake_error"),
+    // Set when an object removal failed; the next cleanup pass retries it so
+    // bytes are never orphaned behind a record that no longer matches the
+    // cleanup selection.
+    objectRemovalPending: boolean("object_removal_pending")
+      .default(false)
+      .notNull(),
+    // A failed publication may have reached storage after the local abort.
+    // The tombstone stays set until explicit provider/operator settlement or a
+    // verified accepted retry, so a late effect is never mistaken for a
+    // settled write based only on elapsed cleanup passes.
+    objectRemovalAmbiguous: boolean("object_removal_ambiguous")
+      .default(false)
+      .notNull(),
   },
   (table) => [
     index("inbox_attachment_id_idx").using(
@@ -2079,7 +2104,19 @@ export const inbox = pgTable(
       foreignColumns: [inboxAccounts.id],
       name: "inbox_inbox_account_id_fkey",
     }).onDelete("set null"),
-    unique("inbox_reference_id_key").on(table.referenceId),
+    // Provider/attachment identity is workspace-scoped: two tenants may both
+    // receive the same provider reference without colliding.
+    uniqueIndex("inbox_team_reference_id_key")
+      .on(table.teamId, table.referenceId)
+      .where(sql`${table.referenceId} is not null`),
+    // At most one reserved-or-accepted record per workspace and content hash,
+    // so a repeated upload is idempotent and a conflicting replay cannot
+    // replace the first accepted document.
+    uniqueIndex("inbox_team_content_hash_intake_idx")
+      .on(table.teamId, table.contentHash)
+      .where(
+        sql`${table.intakeState} in ('reserved'::"public"."inbox_intake_state", 'accepted'::"public"."inbox_intake_state")`,
+      ),
     pgPolicy("Inbox can be deleted by a member of the team", {
       as: "permissive",
       for: "delete",

@@ -8,10 +8,11 @@ import { chatExamples } from "./examples";
 import { Header } from "./header";
 import { BotCard, UserMessage } from "./messages";
 import { Sidebar } from "./sidebar";
+import type { AssistantMessage } from "./types";
 
 export function Assistant() {
   const [isExpanded, setExpanded] = useState(false);
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [input, setInput] = useState("");
 
   const toggleOpen = () => setExpanded((prev) => !prev);
@@ -60,7 +61,6 @@ export function Assistant() {
       />
 
       <Chat
-        onNewChat={onNewChat}
         messages={messages}
         setInput={setInput}
         input={input}

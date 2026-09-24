@@ -12,16 +12,15 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "jest",
     "migrate": "tsx scripts/migrate.ts",
     "migrate:preview": "tsx scripts/migrate.ts --command preview",
     "migrate:run": "tsx scripts/migrate.ts --command migrate"
   },
   "dependencies": {
-    "zod": "^4.1.5",
-    "ai": "5.0.29",
     "@ai-sdk/google": "^2.0.11",
-    "@invoicewise/logger": "workspace:*"
+    "@invoicewise/logger": "workspace:*",
+    "ai": "5.0.29",
+    "zod": "^4.1.5"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

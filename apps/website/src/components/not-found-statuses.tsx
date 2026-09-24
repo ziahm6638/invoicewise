@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const data = [
+type Status = {
+  name: string;
+  description: string;
+};
+
+const data: Status[] = [
   {
     name: "<Status Code>",
     description: "404 Not Found",
@@ -38,9 +43,9 @@ const data = [
 ];
 
 export function NotFoundStatuses() {
-  const [statuses, setStatuses] = useState();
+  const [statuses, setStatuses] = useState<Status[]>([]);
   const ref = useRef(false);
-  const scrollRef = useRef(undefined);
+  const scrollRef = useRef<HTMLUListElement>(null);
 
   useEffect(() => {
     setStatuses([
@@ -58,15 +63,17 @@ export function NotFoundStatuses() {
       const destinationArray = [];
 
       if (index < data.length - 1) {
-        destinationArray.push(data[index]);
+        const entry = data[index];
+        if (entry) {
+          destinationArray.push(entry);
 
-        setStatuses((prev) => [...prev, data[index]]);
+          setStatuses((prev) => [...prev, entry]);
+        }
         index++;
 
         scrollRef.current?.scrollTo({
           top: 10000000,
           behavior: "smooth",
-          block: "end",
         });
 
         setTimeout(addItems, 500);

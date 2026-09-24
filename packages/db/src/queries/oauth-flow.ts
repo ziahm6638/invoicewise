@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Database } from "@db/client";
+import type { Database, PrimaryDatabase } from "@db/client";
 import {
   oauthAccessTokens,
   oauthApplications,
@@ -9,6 +9,7 @@ import {
 import { hash } from "@invoicewise/encryption";
 import { and, desc, eq, gt, gte, lte } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { clampScopesForRole, getTeamRole } from "./team-permissions";
 
 export type CreateAuthorizationCodeParams = {
   applicationId: string;
@@ -225,7 +226,10 @@ export async function createAccessToken(
 }
 
 // Validate access token
-export async function validateAccessToken(db: Database, token: string) {
+export async function validateAccessToken(
+  db: Database | PrimaryDatabase,
+  token: string,
+) {
   // Hash the incoming token to compare with stored hash
   const tokenHash = hash(token);
 
@@ -347,6 +351,21 @@ export async function refreshAccessToken(
     // Use the validated subset of scopes
     validatedScopes = scopes;
   }
+
+  // The token belongs to a person, not just to the app: re-read their current
+  // workspace role and drop anything their role no longer permits. A removed
+  // member cannot refresh at all.
+  const role = await getTeamRole(
+    db,
+    existingToken.teamId,
+    existingToken.userId,
+  );
+
+  if (!role) {
+    throw new Error("User no longer has access to this workspace");
+  }
+
+  validatedScopes = clampScopesForRole(role, validatedScopes);
 
   // Revoke the old token
   await db

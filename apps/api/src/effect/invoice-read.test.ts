@@ -10,7 +10,9 @@ import {
 const invoice = {
   id: "4a80fbd7-898f-4896-af62-f4b21621988f",
   fileName: "invoice.pdf",
-  filePath: ["team", "inbox", "invoice.pdf"],
+  // The persisted path must belong to the row's own workspace and sit in the
+  // document namespace; the shared binding guard rejects anything else.
+  filePath: ["team-123", "inbox", "invoice.pdf"],
   displayName: "Acme September invoice",
   transactionId: null,
   amount: 125.5,

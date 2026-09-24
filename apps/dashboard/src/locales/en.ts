@@ -76,6 +76,7 @@ export default {
   },
   roles: {
     owner: "Owner",
+    admin: "Admin",
     member: "Member",
   },
   tracker_status: {

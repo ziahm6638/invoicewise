@@ -1,5 +1,6 @@
 "use client";
 
+import { useTeamPermissions } from "@/hooks/use-team";
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
 import {
@@ -32,6 +33,7 @@ export function DeleteTeam() {
   const [value, setValue] = useState("");
   const trpc = useTRPC();
   const { data: user } = useUserQuery();
+  const permissions = useTeamPermissions();
   const router = useRouter();
 
   const deleteTeamMutation = useMutation(
@@ -42,6 +44,11 @@ export function DeleteTeam() {
       },
     }),
   );
+
+  // Only the workspace owner can delete it; the server enforces this too.
+  if (!permissions.deleteWorkspace) {
+    return null;
+  }
 
   return (
     <Card className="border-destructive">

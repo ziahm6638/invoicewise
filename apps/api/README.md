@@ -52,11 +52,12 @@ bun start
 
 The API uses Redis for distributed caching across multiple server instances:
 
-- **apiKeyCache**: Caches API key lookups (30 min TTL)
-- **userCache**: Caches user data (30 min TTL)
-- **teamCache**: Caches team access permissions (30 min TTL)
-- **teamPermissionsCache**: Caches team permission lookups (30 min TTL)
 - **replicationCache**: Tracks recent mutations for read-after-write consistency (10 sec TTL)
+
+Authorization reads are deliberately not cached. Membership, role, API key and
+OAuth token checks go to the primary database on every request so that removal,
+demotion and revocation take effect on the next call. See
+[`docs/permissions.md`](../../docs/permissions.md).
 
 #### Environment-Specific Configuration
 

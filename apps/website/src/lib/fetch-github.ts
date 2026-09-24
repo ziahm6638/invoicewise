@@ -1,9 +1,38 @@
 "use server";
 
-async function getAllStargazers({ owner, name }) {
-  let endCursor = undefined;
+type RepositoryArgs = {
+  owner: string;
+  name: string;
+};
+
+type StargazerEdge = { starredAt: string };
+
+type StargazersResponse = {
+  data?: {
+    repository?: {
+      stargazers?: {
+        pageInfo?: { endCursor?: string; hasNextPage?: boolean };
+        edges?: StargazerEdge[];
+      };
+    };
+  };
+};
+
+type RepositoryResponse = {
+  data?: {
+    repository?: {
+      forks?: { totalCount?: number };
+      watchers?: { totalCount?: number };
+      stargazers?: { totalCount?: number };
+      commits?: { history?: { totalCount?: number } };
+    };
+  };
+};
+
+async function getAllStargazers({ owner, name }: RepositoryArgs) {
+  let endCursor: string | undefined;
   let hasNextPage = true;
-  let added = [];
+  let added: StargazerEdge[] = [];
 
   while (hasNextPage) {
     const request = await fetch("https://api.github.com/graphql", {
@@ -30,17 +59,18 @@ async function getAllStargazers({ owner, name }) {
       }),
     });
 
-    const { data } = await request.json();
+    const payload = (await request.json()) as StargazersResponse;
+    const stargazers = payload.data?.repository?.stargazers;
 
-    added = added.concat(data.repository.stargazers.edges);
-    hasNextPage = data.repository.stargazers.pageInfo.hasNextPage;
-    endCursor = data.repository.stargazers.pageInfo.endCursor;
+    added = added.concat(stargazers?.edges ?? []);
+    hasNextPage = stargazers?.pageInfo?.hasNextPage ?? false;
+    endCursor = stargazers?.pageInfo?.endCursor;
   }
 
   return added;
 }
 
-async function githubRequest({ owner, name }) {
+async function githubRequest({ owner, name }: RepositoryArgs) {
   const request = await fetch("https://api.github.com/graphql", {
     method: "POST",
     headers: {
@@ -72,7 +102,7 @@ async function githubRequest({ owner, name }) {
     }),
   });
 
-  return request.json();
+  return (await request.json()) as RepositoryResponse;
 }
 
 export async function getGithubStats() {
@@ -81,28 +111,26 @@ export async function getGithubStats() {
     name: "midday",
   });
 
-  const {
-    data: { repository },
-  } = await githubRequest({
+  const payload = await githubRequest({
     owner: "midday-ai",
     name: "midday",
   });
+  const repository = payload.data?.repository;
 
-  const starsPerDate = stargazers.reduce((acc, curr) => {
-    const date = curr.starredAt.substring(0, 10);
+  const starsPerDate = stargazers.reduce<Record<string, number>>(
+    (acc, curr) => {
+      const date = curr.starredAt.substring(0, 10);
 
-    if (acc[date]) {
-      acc[date]++;
-    } else {
-      acc[date] = 1;
-    }
-    return acc;
-  }, {});
+      acc[date] = (acc[date] ?? 0) + 1;
+      return acc;
+    },
+    {},
+  );
 
   const stats = Object.keys(starsPerDate).map((key) => {
     return {
       date: new Date(key),
-      value: starsPerDate[key],
+      value: starsPerDate[key] ?? 0,
     };
   });
 

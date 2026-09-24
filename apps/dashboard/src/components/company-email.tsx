@@ -1,6 +1,10 @@
 "use client";
 
-import { useTeamMutation, useTeamQuery } from "@/hooks/use-team";
+import {
+  useTeamMutation,
+  useTeamPermissions,
+  useTeamQuery,
+} from "@/hooks/use-team";
 import { useZodForm } from "@/hooks/use-zod-form";
 import {
   Card,
@@ -28,6 +32,7 @@ const formSchema = z.object({
 
 export function CompanyEmail() {
   const { data } = useTeamQuery();
+  const permissions = useTeamPermissions();
   const updateTeamMutation = useTeamMutation();
 
   const form = useZodForm(formSchema, {
@@ -70,7 +75,10 @@ export function CompanyEmail() {
           <CardFooter className="flex justify-end">
             <SubmitButton
               isSubmitting={updateTeamMutation.isPending}
-              disabled={updateTeamMutation.isPending}
+              disabled={
+                !permissions.manageWorkspaceSettings ||
+                updateTeamMutation.isPending
+              }
             >
               Save
             </SubmitButton>

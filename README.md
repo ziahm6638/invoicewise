@@ -68,21 +68,22 @@ Customers configure their own TypeSafe questions. These run automatically on eve
 
 Forked from [Midday](https://github.com/midday-ai/midday), an open-source business management platform. We use their email ingestion, document extraction, and matching infrastructure, replacing transaction matching with TypeSafe-powered authorisation matching.
 
-## Stack (inherited from Midday)
+## Stack
 
-- Bun
-- TypeScript
-- Next.js
-- Postgres + Drizzle (database)
-- Local filesystem storage for development; production object storage is deferred
-- Supabase Auth (temporary; replacement is a separate roadmap item)
-- Effect Workflows with a Postgres-backed queue
-- Nango (accounting integrations) — replacing GoCardless/Plaid bank connections
+- Bun `1.3.13` (pinned) + TypeScript
+- Next.js 15 for the dashboard and website; Hono + Effect for the API
+- Postgres 17 with pgvector, accessed through Drizzle
+- Better Auth for users, sessions, memberships and invitations
+- Effect workflows on a Postgres-backed queue (`packages/jobs`)
+- Private local filesystem storage in development, S3-compatible (MinIO/R2) elsewhere
+- TypeSafe for semantic extraction and judgments
+- Nango for Xero/QuickBooks delivery, Polar for billing, Resend for email
 
 ## Development
 
 See [docs/development.md](docs/development.md) for the complete local setup,
-including Docker services, database migrations, and app-specific commands.
+database migrations, app-specific commands and the authoritative
+`bun run verify` release check.
 See [docs/delivery.md](docs/delivery.md) for REST, MCP, webhook signing and
 retry behavior, and CSV export.
 

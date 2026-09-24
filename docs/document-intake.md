@@ -1,0 +1,336 @@
+# Document intake contract
+
+Roadmap issue #34. Every invoice that enters InvoiceWise — dashboard upload or
+mailbox attachment — passes through one workspace-authorized lifecycle owned by
+the server.
+
+## Identity
+
+- The server generates the inbox id and the storage path
+  (`<teamId>/inbox/<inboxId>/<random>.<ext>`). The original filename is display
+  metadata only, so two different `invoice.pdf` documents coexist.
+- Replay identity is `(team_id, sha256(content))`, enforced by a partial unique
+  index over `reserved` and `accepted` records. Re-uploading the accepted bytes
+  returns the same inbox id without writing a second object or queueing a second
+  processing job. Initial processing is keyed by the canonical inbox id, so a
+  concurrent replay cannot create a second job.
+- Different bytes never replace an existing object: writes use `uploadIfAbsent`
+  (local: write a temp file, then publish it with an atomic link; S3:
+  `If-None-Match: *`, where a 409 conditional conflict is retried and a 412
+  means the object already exists). After the write, the bytes at the reserved
+  path are read back and must match the reservation's size and sha256 before the
+  record can be accepted or queued.
+- Provider/attachment references are workspace scoped
+  (`unique (team_id, reference_id)`), and two same-named attachments in one
+  message get distinct references, so two tenants and two `invoice.pdf`
+  attachments cannot collide. Webhook references include the attachment
+  index. Gmail references keep the original `sha256(messageId_filename)` for
+  the first attachment with a given filename (so already-synced mail still
+  deduplicates) and add the occurrence number for later ones
+  (`gmailAttachmentReferenceIds`).
+- Legacy rows created before this change have a null `intake_state` and are
+  treated as accepted documents. New intake always sets a state.
+- Every persisted binding is checked by one shared validator
+  (`isValidDocumentBinding`): the stored path must start with the record's exact
+  non-null workspace, its second segment must be the `inbox` document
+  namespace, and no segment may be empty, `.`, `..` or contain a separator.
+  Reads, capability signing, worker ID/legacy-path resolution, retry, cleanup
+  and deletion all use it, so an inconsistent legacy row can never read, sign,
+  process or delete another workspace's object. Rows outside that shape are
+  refused and, on deletion, their object is deliberately retained.
+
+## Lifecycle
+
+`inbox.intake_state` is one of `reserved`, `accepted` or `cancelled`.
+
+1. Validate the real bytes (see limits below). Nothing is written for a
+   rejected document.
+2. Reserve a durable `reserved` record with the content hash and server-owned
+   path.
+3. Write the object immutably at that path.
+4. In one transaction: mark the record `accepted` and enqueue the
+   `process-attachment` job with `{ inboxId, teamId }`.
+
+Recovery, all explicit:
+
+| Failure point | State left behind | Recovery |
+| --- | --- | --- |
+| Crash after reserve, before write | `reserved`, no object | Re-upload the same bytes; the same reservation and path are resumed |
+| Crash after write, before finalize | `reserved`, object present | Re-upload or retry; the existing object is reused, never rewritten |
+| Enqueue or finalize failure | `reserved` with `intake_error` | Re-upload the same bytes; the transaction is retried |
+| Worker cannot load the object | `accepted`, job retried | Restore the object, or let the job exhaust attempts into a visible failure |
+| Explicit delete | `cancelled`, object removed | Re-uploading the same bytes creates a new document |
+| Delete a legacy row whose object another live row still uses | `cancelled`, object kept | The last live row to be deleted removes the object |
+| Abandoned reservation | `reserved` past the chosen age | `discardStaleReservations(db, storage, { olderThanMs })` claims `reserved → cancelled` first, removes the object, and returns `{ discarded, failed }`. The claim sets durable removal intent before the effect |
+
+There is deliberately no automatic retention schedule in this slice, and
+nothing calls `discardStaleReservations` periodically yet (see #50 for the
+owner-approved retention schedule). Reservations never become accepted
+invoices, and no accepted invoice is ever left without a queued processing
+intent. Until a reservation is accepted it is invisible to product and API
+reads: dashboard and REST/MCP listings, detail reads, CSV export, edits and
+document signing all show only `accepted` and legacy (null state) rows.
+
+Acceptance is conditional on `intake_state = 'reserved'`, so a late writer can
+never move an accepted record backwards or resurrect a cancelled one. Cleanup
+claims the reservation before touching storage, so a document that finished
+accepting in the meantime is never deleted; removal failures are reported and
+recorded on the record instead of being swallowed. Deletes are likewise
+conditional (`status <> 'deleted'`), and post-extraction writes refuse to
+restore a deleted invoice.
+
+Cleanup is resumable: a removal failure sets `object_removal_pending` on the
+record, and every later cleanup pass picks those rows up again even though they
+are already `cancelled`. Publication and discard share the canonical row lock,
+so a writer cannot start or finish a publication after a discard claim has
+tombstoned the row. A remote effect that arrives after a local abort is covered
+by the ambiguous-write reconciliation below rather than by an unproven
+compensation step.
+
+Removal intent is written **before** the effect, atomically with the state
+change: claiming a stale reservation, cancelling a record and deleting an
+invoice all set `object_removal_pending` in the same statement that tombstones
+the row. A crash between the claim and the storage removal is therefore
+recovered by the next cleanup pass, which selects outstanding removals
+independently of the reservation age. Non-ambiguous removals clear the flag
+after the object is proven gone. Ambiguous publication tombstones do **not**
+clear automatically; they stay pending until explicit provider/operator
+settlement or verified accepted retry.
+
+Publication, acceptance and discard serialize on the canonical inbox row: the
+publisher takes a `SELECT … FOR UPDATE` lock, performs the immutable write and
+the hash read-back inside that lock with an abort signal and a bounded budget,
+then accepts and enqueues in the same transaction. A discard claim waits for
+that transaction, so nothing can publish after a tombstone is considered clean
+and the interleaving cannot occur. If the attempt fails after writing, the
+failure path records durable removal intent before the lock is released; if the
+transaction itself aborts (for example a database error while queueing), the
+row stays `reserved` and the intent is recorded immediately after the rollback.
+
+Acceptance clears any earlier removal intent in the same conditional update that
+moves the row to `accepted`, so a successful retry cannot be deleted by a later
+pending-removal pass. Pending cleanup never removes a row by id alone: it
+re-claims the row with a state-conditional update, and only `reserved` or
+already-`cancelled` rows are eligible. A retry that wins the row lock therefore
+makes the cleanup claim a no-op, and an accepted row is repaired rather than
+removed if it carries a stale tombstone.
+
+Aborted local filesystem calls are cooperative; a call that has already entered
+the filesystem may still complete after the abort is observed. A failed
+publication is therefore recorded as `object_removal_ambiguous`, and the
+tombstone remains pending indefinitely. Repeated cleanup passes continue to
+revisit it, so a remote effect that arrives arbitrarily later is still removed.
+Clearing requires positive settlement evidence:
+
+- a verified accepted retry clears the obsolete intent atomically with
+  acceptance; or
+- an operator/provider reconciliation calls
+  `settleAmbiguousObjectRemoval({ id, teamId, evidence })` after proving no
+  late write remains.
+
+This is not a provider-level exactly-once guarantee. Unknown remote outcomes
+remain pending, and hard deployment containment for providers that cannot
+supply settlement evidence remains #53.
+
+### Full cleanup pass and pagination
+
+`discardStaleReservations` is the explicit recovery helper. It accepts
+`pendingAfter` (the `nextPendingCursor` from the previous call), processes one
+deterministic page ordered by `(created_at, id)`, and returns:
+
+- `discarded` — objects successfully removed in this page;
+- `unresolved` — ambiguous rows whose bytes were removed but whose remote
+  outcome remains pending;
+- `failed` — removals or database writes that failed and stay durable;
+- `retained` — legacy rows whose object is still used by another live record
+  (legacy paths `<team>/inbox/<filename>` could be shared); the bytes are kept
+  and the tombstone is cleared;
+- `nextPendingCursor` and `hasMorePending` — the cursor for the next page.
+
+To complete a full pass, call the helper repeatedly with `pendingAfter` set to
+the previous `nextPendingCursor` until `hasMorePending` is false. Reset the
+cursor for the next pass. Permanent ambiguous rows therefore cannot starve
+later candidates: each pass advances past them and still reaches the end.
+Unknown outcomes remain in `unresolved` and are revisited on every full pass.
+A page may contain only legacy or invalid bindings and therefore yield no
+`discarded` rows; continue the cursor instead of treating that as the end.
+
+Explicit retries serialize on the canonical inbox row (`SELECT … FOR UPDATE`)
+before they look for pending work, so concurrent retries share one processing
+job instead of creating duplicates.
+
+## Limits
+
+Enforced before any provider work, in `packages/documents/src/intake.ts`:
+
+- Size: 5,000,000 bytes (matches the dashboard upload contract). The HTTP
+  handler also bounds the *actual request body* while reading it, so a missing,
+  false or chunked `content-length` cannot smuggle a larger multipart payload
+  past the limit; the reader is cancelled as soon as the bound is crossed.
+- Types: PDF, JPEG, PNG. The declared MIME type must match the sniffed content;
+  other image formats (WebP, HEIC, GIF) fail explicitly.
+- Images: decoded with `sharp`, which rejects header-only, truncated and corrupt
+  bodies. Dimensions and decoded pixels are checked first (at most 10,000 px per
+  side and 25,000,000 pixels), then a downscaled decode forces the decoder to
+  consume the whole stream.
+- PDF: every parse runs in a dedicated **child process**
+  (`packages/documents/src/isolated.ts`). The installed pdf.js build keeps
+  `isWorkerDisabled = true` under Node/Bun, so a timer (or even
+  `worker.terminate()`) cannot interrupt synchronous decode work reliably; the
+  parent therefore kills and reaps a separate OS process. Enforcement is
+  concrete: a wall-clock budget that stays armed until the process exits, an RSS
+  budget sampled from the child (default 320 MB) that kills on breach, an output
+  byte budget, and bounded admission (two concurrent processes, eight queued;
+  beyond that the request fails with a typed `busy` outcome). The RSS budget is
+  a **sampled soft ceiling**, not a hard heap cap: a very fast allocation can
+  overshoot between samples. The sampler is itself bounded, never overlaps, and
+  fails closed: if `ps` or another configured sampler cannot be executed or
+  returns unusable output, the child is killed and the request returns a
+  retryable `temporarily_unavailable`/`monitor_unavailable` outcome. Hard
+  deployment-level memory containment remains #53. The child applies the
+  page-count (50), per-page geometry (10,000 px per side) and total page area
+  (100,000,000 px) bounds, and the caller enforces them. Password-protected and
+  malformed files are rejected. A document that opens but then fails to
+  parse (a broken or circular page tree, `/Kids` that is not an array, a
+  missing page object, a bad content stream) is reported as `malformed`,
+  which is permanent; only failures before the document opens (the child
+  cannot start or load pdf.js) are operational `task_failed` results. The
+  child receives a minimal environment (`PATH`, `HOME`, temp/locale/font
+  variables and its own `IW_*` task inputs), never the parent's database,
+  storage or API secrets, and Bun children run with `--no-env-file` so a
+  working-directory `.env` is not loaded either.
+- The same isolated process performs PDF text extraction for the invoice
+  pipeline and first-page rendering for the dashboard preview, each with its
+  own timeout and output bounds. Render geometry is checked against the
+  **scaled** viewport, so `scale: 2` cannot turn a bounded page into an
+  unbounded canvas allocation.
+- Extraction never truncates silently: a document with more pages than the
+  limit or text beyond the character limit fails with a typed `limit` outcome
+  and extracts nothing, so an incomplete invoice is never sent downstream as a
+  complete one.
+- Cancellation is asserted, not inferred: `runBusyProcessForTest` starts a
+  process that reports a ready handshake and then spins synchronously, and the
+  test proves it is terminated while busy; `runMemoryHogForTest` proves the RSS
+  watchdog kills a growing process inside a small budget and that the parent
+  survives both.
+- Worker re-check: the stored bytes must match the persisted size, type and
+  sha256 content hash before extraction runs, and only `accepted` (or legacy)
+  records resolve to a worker binding.
+- Intake failures are classified in one place
+  (`@invoicewise/jobs/intake-failure`). A failed object write **or read-back**
+  is `storage_unavailable` (transient, retried). Parser admission exhaustion,
+  child startup failure and RSS-monitor unavailability are
+  `temporarily_unavailable` (also transient). A verified hash/size mismatch is
+  `content_mismatch`; a verified parser/output/pixel limit is
+  `resource_limit`; timeout, malformed and password-protected results stay
+  explicit and are not retried as malformed documents. Both mailbox callers use
+  the same classification, so a temporary capacity or read failure is never
+  acknowledged as a permanent loss.
+
+The worker re-validates the cheap bounds and refuses missing, deleted or
+foreign bindings. Semantic extraction (TypeSafe format expansion) is unchanged;
+that is roadmap issue #36.
+
+## Reads, signatures and deletion
+
+- `inbox.getById`, REST `/inbox/{id}/presigned-url`, the dashboard
+  `/api/proxy` and `/api/preview` routes, retry and delete all resolve the
+  persisted binding for the caller's workspace first. Client input is only an
+  inbox id.
+- Capability URLs sign `bucket/path/expiry/download/inboxId` and are capped at
+  900 seconds (routes use 60–300 seconds). The serving route re-reads the
+  binding on every request, so a deleted or re-bound record invalidates older
+  links immediately, and a malformed or traversal-shaped path fails closed with
+  401.
+- Legacy rows (null intake state) are only served when the persisted path stays
+  inside the record's own workspace; a row whose path points at another
+  workspace's prefix is refused. `reserved` rows are never served or signed.
+- Deletion is only the delete endpoint/procedure. The inbox update schemas
+  (REST `PATCH /inbox/{id}` and tRPC `inbox.update`) do not accept
+  `status: "deleted"`, because a status edit would skip the tombstone, object
+  removal and replay-identity release.
+- Deleting a legacy row never removes an object that another live row in the
+  workspace still references.
+- Responses are `Cache-Control: private, no-store` with
+  `X-Content-Type-Options: nosniff`, a sandboxing CSP and an inline/attachment
+  `Content-Disposition`. Tenant content never enters a shared cache.
+
+## Non-invoice assets
+
+Logos, avatars, OAuth app logos and OAuth screenshots live under a separate
+`assets` branch: `<namespace>/assets/<kind>/<id>/<file>` with
+`kind ∈ {avatar, logo, app-logo, screenshot}`. The client sends only a kind; the
+server derives the namespace (user id for avatars, workspace for logos and
+screenshots, the public `logos` namespace for app logos). Reads follow the same
+policy: app logos are public, avatars are readable by any signed-in session, and
+team assets only by their workspace. An invoice path (`<team>/inbox/...`) can
+never satisfy the asset shape, so this route is not a raw document read.
+
+## Mailbox intake
+
+Mailbox attachments use the same intake service. Provider identity is
+`(team_id, reference_id)` and each attachment occurrence is included in the
+reference, so two same-named attachments in one message stay distinct. A
+transient `storage_unavailable` or `temporarily_unavailable` result fails the
+webhook with 503 (so the provider retries) and fails the sync job instead of
+marking the account synced; permanent rejections are logged and returned in the
+sync result. A `reserved` record is not treated as an already-delivered
+attachment, so the next sync recovers it. The webhook validates a message's
+attachments one at a time, so an email with more PDFs than the parser
+admits at once is not refused with 503 on every retry.
+
+Scheduled syncs form a chain: each run enqueues the next 6-hourly slot. A
+run that exhausts its retries (or fails permanently) still enqueues the next
+slot without advancing `lastAccessed`, so one failing message or a provider
+outage delays the mailbox instead of stopping it for good.
+
+Both boundaries are covered by checks: the webhook route is driven with local
+stubs (storage and parser-capacity transients → 503 with a retry message,
+permanent → 200, occurrence
+identity preserved) and the real sync workflow is run with a stubbed connector
+against a deliberately unwritable vault path and with parser admission forced
+to zero (job retried, account `lastAccessed` unchanged, no intake row for the
+capacity failure, then a successful recovery run once storage/admission is
+available again). The HTTP upload route is checked separately: capacity returns
+503 and the same bytes succeed on retry.
+
+## Deployment note
+
+Signed URLs are minted against `STORAGE_PUBLIC_URL`. The storage serving route
+sends the API's default same-origin resource policy, so the browser preview
+works when `/storage` is served from the app origin (the dashboard also has the
+session-authenticated `/api/proxy?id=` route). If a deployment puts storage on a
+separate host, that origin must be reachable with CORS or the preview should use
+`/api/proxy`; this is a deployment decision, not part of #34.
+
+## Checks
+
+- `packages/documents/src/intake.test.ts` — sniffing, spoofed MIME, size, page,
+  pixel, malformed and password-protected bounds, busy-process termination
+  (with a ready handshake), memory-budget termination and the real-document
+  timeout.
+- `packages/documents/src/isolated.test.ts` — text extraction, no silent
+  character/page truncation, first-page render, scaled-pixel bounds, typed busy
+  admission, fail-closed RSS-sampler behavior, broken page trees classified as
+  permanent `malformed` (not transient), and a child environment without the
+  parent's secrets.
+- `packages/inbox/src/generate-id.test.ts` — backward-compatible Gmail
+  attachment references for same-named attachments.
+- `apps/dashboard/src/app/api/webhook/inbox/webhook-routes.test.ts` — webhook
+  acknowledgment and sequential attachment intake.
+- `packages/db/src/storage.test.ts`, `packages/db/src/storage.s3.test.ts` —
+  immutable writes, inbox-bound signatures, expiry cap, S3 conditional write.
+- `packages/db/src/queries/inbox-binding.test.ts` — the shared document-binding
+  validator (workspace, namespace, traversal, separators, empty segments).
+- `apps/api/src/intake.http.integration.test.ts` — real HTTP intake, queue,
+  worker, capability download and delete across two workspaces, plus the forged
+  path, foreign id, traversal, expired URL, replay, conflict, crash-recovery,
+  worker-refusal, foreign-legacy-binding, concurrent-retry, failed-cleanup,
+  late-publication, ambiguous-publication-after-multiple-passes, explicit
+  settlement, paginated full-pass cleanup, transient-readback,
+  pending-cleanup-versus-retry, HTTP parser-capacity and mailbox-admission
+  cases, plus same-named Gmail attachments, update-cannot-delete, shared legacy
+  objects surviving delete and cleanup, hidden reservations and the sync chain
+  surviving an exhausted run.
+- `packages/jobs/src/verify-workflows.ts` — end-to-end pipeline verifier on the
+  new contract.

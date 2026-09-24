@@ -2,9 +2,19 @@ import { Schema } from "effect";
 
 export const ProcessAttachmentPayload = Schema.Struct({
   teamId: Schema.String,
-  mimetype: Schema.String,
-  size: Schema.Number,
-  filePath: Schema.Array(Schema.String),
+  /**
+   * Workspace-owned inbox record. The worker resolves path, type and size from
+   * this row; nothing in the payload is trusted as ownership proof.
+   */
+  inboxId: Schema.optional(Schema.String),
+  /**
+   * Legacy payload fields, kept so jobs enqueued before this contract still
+   * run. A serialized path only counts when it matches an authorized persisted
+   * binding for the same workspace.
+   */
+  mimetype: Schema.optional(Schema.String),
+  size: Schema.optional(Schema.Number),
+  filePath: Schema.optional(Schema.Array(Schema.String)),
   referenceId: Schema.optional(Schema.String),
   website: Schema.optional(Schema.String),
   inboxAccountId: Schema.optional(Schema.String),

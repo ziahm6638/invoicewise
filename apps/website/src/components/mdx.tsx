@@ -2,7 +2,7 @@ import { MDXRemote } from "next-mdx-remote/rsc";
 import Image from "next/image";
 import Link from "next/link";
 import React from "react";
-import { highlight } from "sugar-high";
+import { generate, tokenize } from "sugar-high";
 
 interface TableProps {
   data: {
@@ -12,17 +12,19 @@ interface TableProps {
 }
 
 function Table({ data }: TableProps) {
-  const headers = data.headers.map((header, index) => (
-    <th key={header}>{header}</th>
-  ));
+  const headers = data.headers.map((header) => <th key={header}>{header}</th>);
 
-  const rows = data.rows.map((row, rowIndex) => (
-    <tr key={row.join("-")}>
-      {row.map((cell, cellIndex) => (
-        <td key={`${cell}-${cellIndex}`}>{cell}</td>
-      ))}
-    </tr>
-  ));
+  const rows = data.rows.map((row) => {
+    const seen = new Map<string, number>();
+    const cells = row.map((cell) => {
+      const occurrence = seen.get(cell) ?? 0;
+      seen.set(cell, occurrence + 1);
+      return (
+        <td key={occurrence === 0 ? cell : `${cell}-${occurrence}`}>{cell}</td>
+      );
+    });
+    return <tr key={row.join("-")}>{cells}</tr>;
+  });
 
   return (
     <table>
@@ -67,9 +69,37 @@ interface CodeProps {
   children: string;
 }
 
+type HastNode = {
+  type: "text" | "element";
+  tagName?: string;
+  properties?: { className?: string };
+  children?: HastNode[];
+  value?: string;
+};
+
+/**
+ * Renders the sugar-high token tree as React elements. This keeps highlighted
+ * code out of `dangerouslySetInnerHTML`, so no HTML string is ever injected
+ * into the document.
+ */
+function renderTokens(nodes: HastNode[], counter: { value: number }) {
+  return nodes.map((node): React.ReactNode => {
+    counter.value += 1;
+    const key = `sh-${counter.value}`;
+    if (node.type === "text") {
+      return node.value ?? "";
+    }
+    return (
+      <span key={key} className={node.properties?.className}>
+        {renderTokens(node.children ?? [], counter)}
+      </span>
+    );
+  });
+}
+
 function Code({ children, ...props }: CodeProps) {
-  const codeHTML = highlight(children);
-  return <code dangerouslySetInnerHTML={{ __html: codeHTML }} {...props} />;
+  const nodes = generate(tokenize(children)) as HastNode[];
+  return <code {...props}>{renderTokens(nodes, { value: 0 })}</code>;
 }
 
 function slugify(str: string): string {
@@ -129,14 +159,15 @@ const components = {
 };
 
 interface CustomMDXProps {
+  source: string;
   components?: Record<string, React.ComponentType<unknown>>;
 }
 
-export function CustomMDX(props: CustomMDXProps) {
+export function CustomMDX({ source, components: overrides }: CustomMDXProps) {
   return (
     <MDXRemote
-      {...props}
-      components={{ ...components, ...(props.components || {}) }}
+      source={source}
+      components={{ ...components, ...(overrides ?? {}) }}
     />
   );
 }

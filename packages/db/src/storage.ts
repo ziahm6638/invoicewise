@@ -1,5 +1,5 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { link, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, resolve, sep } from "node:path";
 import {
@@ -36,7 +36,24 @@ export type StorageClientConfig = CommonStorageConfig &
 type UploadInput = StoragePath & {
   file: Blob | Buffer | Uint8Array | ArrayBuffer;
   contentType?: string;
+  /** Optional abort signal so a stalled operation settles instead of hanging. */
+  signal?: AbortSignal;
 };
+
+type RemoveInput = StoragePath & {
+  /**
+   * Optional cooperative abort. Local filesystem calls cannot be cancelled
+   * once entered, so callers must treat an aborted operation as ambiguous and
+   * retain durable cleanup state rather than assuming no effect occurred.
+   */
+  signal?: AbortSignal;
+};
+
+/**
+ * Signed capability URLs are short lived. Callers may ask for less, never for
+ * more, so a leaked link has a bounded window.
+ */
+export const MAX_SIGNED_URL_TTL_SECONDS = 900;
 
 const MIME_TYPES: Record<string, string> = {
   ".csv": "text/csv",
@@ -89,25 +106,82 @@ function createLocalBackend(
   return {
     async upload(input: UploadInput) {
       const { absolutePath, path } = resolveStoragePath(input);
+      input.signal?.throwIfAborted();
       await mkdir(dirname(absolutePath), { recursive: true });
-      await writeFile(absolutePath, await bytes(input.file));
+      input.signal?.throwIfAborted();
+      const data = await bytes(input.file);
+      input.signal?.throwIfAborted();
+      await writeFile(absolutePath, data);
+      input.signal?.throwIfAborted();
       return { path };
     },
-    async download(input: StoragePath) {
+    async uploadIfAbsent(input: UploadInput) {
+      const { absolutePath, path } = resolveStoragePath(input);
+      input.signal?.throwIfAborted();
+      await mkdir(dirname(absolutePath), { recursive: true });
+      input.signal?.throwIfAborted();
+      const data = await bytes(input.file);
+      input.signal?.throwIfAborted();
+      // Write to a sibling temp file first and publish with `link`, which is
+      // atomic and never replaces an existing object. A reader can therefore
+      // never observe a partially written immutable object.
+      const temporaryPath = `${absolutePath}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporaryPath, data);
+        input.signal?.throwIfAborted();
+        try {
+          await link(temporaryPath, absolutePath);
+          input.signal?.throwIfAborted();
+          return { path, created: true };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+            return { path, created: false };
+          }
+          throw error;
+        }
+      } finally {
+        await rm(temporaryPath, { force: true }).catch(() => undefined);
+      }
+    },
+    async download(input: StoragePath & { signal?: AbortSignal }) {
       const { absolutePath } = resolveStoragePath(input);
+      input.signal?.throwIfAborted();
       const data = await readFile(absolutePath);
+      input.signal?.throwIfAborted();
       const contents = data.buffer.slice(
         data.byteOffset,
         data.byteOffset + data.byteLength,
       ) as ArrayBuffer;
       return new Blob([contents], { type: contentType(absolutePath) });
     },
-    async remove(input: StoragePath) {
+    async remove(input: RemoveInput) {
       const { absolutePath } = resolveStoragePath(input);
+      input.signal?.throwIfAborted();
       await rm(absolutePath, { force: true });
+      input.signal?.throwIfAborted();
     },
   };
 }
+
+const s3Status = (error: unknown) =>
+  (error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata
+    ?.httpStatusCode;
+
+const s3Name = (error: unknown) => (error as { name?: string } | null)?.name;
+
+/** The object already exists, so the immutable write is complete. */
+const isPreconditionFailure = (error: unknown) =>
+  s3Status(error) === 412 || s3Name(error) === "PreconditionFailed";
+
+/**
+ * S3-compatible stores return 409 when a conditional write races another
+ * in-flight write. That is a transient conflict, not proof that a stored
+ * object is complete.
+ */
+const isConditionalConflict = (error: unknown) =>
+  s3Status(error) === 409 || s3Name(error) === "ConditionalRequestConflict";
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function createS3Backend(
   config: Extract<StorageClientConfig, { backend: "s3" }>,
@@ -134,12 +208,49 @@ function createS3Backend(
           Body: await bytes(input.file),
           ContentType: input.contentType ?? contentType(path),
         }),
+        { abortSignal: input.signal },
       );
       return { path };
     },
-    async download(input: StoragePath) {
+    async uploadIfAbsent(input: UploadInput) {
+      const path = normalizePath(input.path);
+      const body = await bytes(input.file);
+      let conflict: unknown;
+
+      // A 409 means another conditional write is in flight: retry briefly and
+      // never treat it as proof that complete bytes already exist.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await client.send(
+            new PutObjectCommand({
+              Bucket: config.bucket,
+              Key: key(input),
+              Body: body,
+              ContentType: input.contentType ?? contentType(path),
+              IfNoneMatch: "*",
+            }),
+            { abortSignal: input.signal },
+          );
+          return { path, created: true };
+        } catch (error) {
+          if (isPreconditionFailure(error)) {
+            return { path, created: false };
+          }
+          if (!isConditionalConflict(error)) throw error;
+          conflict = error;
+          await sleep(50 * 2 ** attempt);
+        }
+      }
+
+      throw new Error(
+        "Conditional write conflicted with another writer; the immutable object was not verified",
+        { cause: conflict },
+      );
+    },
+    async download(input: StoragePath & { signal?: AbortSignal }) {
       const response = await client.send(
         new GetObjectCommand({ Bucket: config.bucket, Key: key(input) }),
+        { abortSignal: input.signal },
       );
       if (!response.Body) throw new Error("Storage object has no body");
       const data = Buffer.from(await response.Body.transformToByteArray());
@@ -151,9 +262,10 @@ function createS3Backend(
         type: response.ContentType ?? contentType(normalizePath(input.path)),
       });
     },
-    async remove(input: StoragePath) {
+    async remove(input: RemoveInput) {
       await client.send(
         new DeleteObjectCommand({ Bucket: config.bucket, Key: key(input) }),
+        { abortSignal: input.signal },
       );
     },
   };
@@ -178,12 +290,30 @@ export function createStorageClient(config: StorageClientConfig) {
     bucket,
     path,
     expireIn,
+    inboxId,
     options,
-  }: StoragePath & { expireIn: number; options?: { download?: boolean } }) => {
+  }: StoragePath & {
+    expireIn: number;
+    /**
+     * Workspace-owned inbox record this capability is bound to. The serving
+     * route re-checks the persisted binding before reading any object.
+     */
+    inboxId: string;
+    options?: { download?: boolean };
+  }) => {
+    if (!inboxId) throw new Error("Signed storage URLs require an inbox id");
+    if (!Number.isFinite(expireIn) || expireIn <= 0) {
+      throw new Error("Signed storage URLs require a positive expiry");
+    }
+    if (expireIn > MAX_SIGNED_URL_TTL_SECONDS) {
+      throw new Error(
+        `Signed storage URLs may not outlive ${MAX_SIGNED_URL_TTL_SECONDS} seconds`,
+      );
+    }
     const normalizedPath = normalizePath(path);
     const expires = Math.floor(Date.now() / 1000) + expireIn;
     const downloadFile = options?.download === true;
-    const value = `${bucket}/${normalizedPath}:${expires}:${downloadFile}`;
+    const value = `${bucket}/${normalizedPath}:${expires}:${downloadFile}:${inboxId}`;
     const url = new URL(
       `/storage/${encodeURIComponent(bucket)}/${normalizedPath
         .split("/")
@@ -193,6 +323,7 @@ export function createStorageClient(config: StorageClientConfig) {
     );
     url.searchParams.set("expires", String(expires));
     url.searchParams.set("signature", signature(value));
+    url.searchParams.set("inbox", inboxId);
     if (downloadFile) url.searchParams.set("download", "1");
 
     return url.toString();
@@ -204,15 +335,20 @@ export function createStorageClient(config: StorageClientConfig) {
     expires,
     providedSignature,
     download: downloadFile,
+    inboxId,
   }: StoragePath & {
     expires: number;
     providedSignature: string;
     download: boolean;
+    inboxId: string;
   }) => {
-    if (expires < Math.floor(Date.now() / 1000)) return false;
+    if (!inboxId) return false;
+    if (!Number.isFinite(expires) || expires < Math.floor(Date.now() / 1000)) {
+      return false;
+    }
 
     const expected = signature(
-      `${bucket}/${normalizePath(path)}:${expires}:${downloadFile}`,
+      `${bucket}/${normalizePath(path)}:${expires}:${downloadFile}:${inboxId}`,
     );
     const expectedBuffer = Buffer.from(expected);
     const providedBuffer = Buffer.from(providedSignature);
@@ -276,6 +412,12 @@ const defaultStorageClient = () => {
 export const upload = (
   input: Parameters<ReturnType<typeof createStorageClient>["upload"]>[0],
 ) => defaultStorageClient().upload(input);
+
+export const uploadIfAbsent = (
+  input: Parameters<
+    ReturnType<typeof createStorageClient>["uploadIfAbsent"]
+  >[0],
+) => defaultStorageClient().uploadIfAbsent(input);
 
 export const download = (
   input: Parameters<ReturnType<typeof createStorageClient>["download"]>[0],

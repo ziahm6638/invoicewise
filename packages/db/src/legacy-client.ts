@@ -356,6 +356,8 @@ export function createClient() {
           async createSignedUrl(
             path: string,
             expireIn: number,
+            // Capability URLs are only minted against a workspace document.
+            inboxId: string,
             options?: { download?: boolean },
           ) {
             try {
@@ -365,6 +367,7 @@ export function createClient() {
                     bucket,
                     path,
                     expireIn,
+                    inboxId,
                     options,
                   }),
                 },

@@ -1,7 +1,11 @@
 {
   "name": "invoicewise",
   "private": true,
-  "workspaces": ["packages/*", "apps/*", "packages/email/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "packages/email/*"
+  ],
   "scripts": {
     "build": "turbo build",
     "clean": "git clean -xdf node_modules",
@@ -14,6 +18,10 @@
     "dev:dashboard": "turbo dev --filter=@invoicewise/dashboard",
     "build:dashboard": "turbo build --filter=@invoicewise/dashboard",
     "dev:website": "turbo dev --filter=@invoicewise/website ",
+    "verify": "bun --no-env-file scripts/verify/release.ts",
+    "verify:security": "bun --no-env-file scripts/verify/release.ts --security-only",
+    "verify:migrations": "bun --no-env-file scripts/verify/release.ts --migrations-only",
+    "verify:selftest": "bun --no-env-file test scripts/verify/verify-selftest.test.ts",
     "db:generate": "cd packages/db && DATABASE_PRIMARY_URL=\"$(grep ^DATABASE_PRIMARY_URL= ../../.env | cut -d= -f2-)\" bunx drizzle-kit generate",
     "db:migrate": "cd packages/db && bun --env-file=../../.env run migrate",
     "jobs:worker": "cd packages/jobs && bun --env-file=../../.env run worker",
@@ -22,11 +30,16 @@
     "lint": "turbo lint && manypkg check",
     "typecheck": "turbo typecheck"
   },
-  "dependencies": {
+  "packageManager": "bun@1.3.13",
+  "devDependencies": {
     "@biomejs/biome": "1.9.4",
     "@manypkg/cli": "^0.24.0",
     "turbo": "2.5.6",
     "typescript": "^5.9.2"
   },
-  "packageManager": "bun@1.2.21"
+  "manypkg": {
+    "ignoredRules": [
+      "EXTERNAL_MISMATCH"
+    ]
+  }
 }

@@ -168,6 +168,14 @@ export const connectDb = async () => db;
 
 export type Database = Awaited<ReturnType<typeof connectDb>>;
 
+/**
+ * The unwrapped primary connection. Authorization reads use this directly so
+ * membership, role and key checks never observe a stale replica.
+ */
+export type PrimaryDatabase = ReturnType<
+  typeof createDatabaseClient
+>["primaryDb"];
+
 export type DatabaseWithPrimary = Database & {
   $primary?: Database;
   usePrimaryOnly?: () => Database;

@@ -1,4 +1,4 @@
-import type { Database } from "@db/client";
+import type { Database, PrimaryDatabase } from "@db/client";
 import {
   inbox,
   inboxAccounts,
@@ -11,8 +11,29 @@ import {
 import { remove as removeStoredFile } from "@db/storage";
 import { buildSearchQuery } from "@invoicewise/db/utils/search-query";
 import { logger } from "@invoicewise/logger";
-import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { SQL } from "drizzle-orm/sql/sql";
+
+/**
+ * Product and API reads show accepted documents and legacy rows (null
+ * `intake_state`). An unfinished `reserved` intake is not an invoice yet, so
+ * it never appears in listings, exports or detail reads.
+ */
+const visibleIntakeState = () =>
+  or(isNull(inbox.intakeState), ne(inbox.intakeState, "reserved"))!;
 
 // Scoring functions for suggestion ranking
 function calculateAmountScore(
@@ -103,6 +124,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
   const whereConditions: SQL[] = [
     eq(inbox.teamId, teamId),
     ne(inbox.status, "deleted"),
+    visibleIntakeState(),
   ];
 
   // Apply status filter
@@ -268,7 +290,9 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
         eq(transactionMatchSuggestions.status, "pending"),
       ),
     )
-    .where(and(eq(inbox.id, id), eq(inbox.teamId, teamId)))
+    .where(
+      and(eq(inbox.id, id), eq(inbox.teamId, teamId), visibleIntakeState()),
+    )
     .limit(1);
 
   // If there's a suggestion, get the suggested transaction details
@@ -316,7 +340,13 @@ export function getInvoiceExportRows(db: Database, teamId: string) {
       judgments: inbox.judgments,
     })
     .from(inbox)
-    .where(and(eq(inbox.teamId, teamId), ne(inbox.status, "deleted")))
+    .where(
+      and(
+        eq(inbox.teamId, teamId),
+        ne(inbox.status, "deleted"),
+        visibleIntakeState(),
+      ),
+    )
     .orderBy(desc(inbox.createdAt));
 }
 
@@ -325,7 +355,10 @@ export type DeleteInboxParams = {
   teamId: string;
 };
 
-export async function deleteInbox(db: Database, params: DeleteInboxParams) {
+export async function deleteInbox(
+  db: InboxQueryDatabase,
+  params: DeleteInboxParams,
+) {
   const { id, teamId } = params;
 
   // First get the inbox item to check if it has attachments
@@ -386,12 +419,79 @@ export async function deleteInbox(db: Database, params: DeleteInboxParams) {
       status: "deleted",
       transactionId: null,
       attachmentId: null,
+      // Explicit deletion ends the intake binding: a later upload of the same
+      // bytes is a new document, and every capability URL stops working.
+      intakeState: "cancelled",
+      contentHash: null,
+      // Intent first: the deletion is durable even if the process dies before
+      // the object is removed, and the next cleanup pass finishes the job.
+      objectRemovalPending: true,
+      // Preserve any unresolved publication outcome. A reservation may still
+      // have an in-flight writer, so cancellation is conservative until
+      // explicit settlement or verified acceptance proves otherwise. The
+      // expression is evaluated against the current row inside this UPDATE;
+      // legacy rows have a null state, which must not yield a null flag.
+      objectRemovalAmbiguous: sql<boolean>`(${inbox.objectRemovalAmbiguous} or coalesce(${inbox.intakeState} = 'reserved', false))`,
     })
-    .where(and(eq(inbox.id, id), eq(inbox.teamId, teamId)))
+    .where(
+      and(
+        eq(inbox.id, id),
+        eq(inbox.teamId, teamId),
+        ne(inbox.status, "deleted"),
+      ),
+    )
     .returning();
 
   if (result.filePath?.length) {
-    await removeStoredFile({ bucket: "vault", path: result.filePath });
+    const bindingIssue = documentBindingIssue({
+      teamId,
+      filePath: result.filePath,
+    });
+
+    if (bindingIssue) {
+      // The persisted path is not a document path for this workspace (for
+      // example an inconsistent legacy row pointing into another tenant).
+      // Never touch that object; leave the row deleted and record why.
+      await recordIntakeRemovalFailure(db, {
+        id,
+        teamId,
+        error: `Object retained: ${bindingIssue}`,
+      }).catch(() => undefined);
+    } else if (
+      await isStoredPathSharedByLiveDocument(db, {
+        id,
+        teamId,
+        filePath: result.filePath,
+      })
+    ) {
+      // Legacy rows (`<team>/inbox/<filename>`) could share one object. The
+      // bytes still belong to another live document, so only this record
+      // goes; whichever sharer is deleted last removes the object. The check
+      // runs after this row's tombstone committed, so two concurrent deletes
+      // cannot both skip the removal.
+      await clearObjectRemovalPending(db, { id, teamId }).catch(
+        () => undefined,
+      );
+    } else {
+      try {
+        // If removal fails the record stays cancelled (capability URLs and the
+        // asset route already refuse the retained bytes) and the durable flag
+        // lets a later cleanup finish the removal.
+        await removeStoredFile({ bucket: "vault", path: result.filePath });
+        await clearObjectRemovalPending(db, { id, teamId }).catch(
+          () => undefined,
+        );
+      } catch (error) {
+        await recordIntakeRemovalFailure(db, {
+          id,
+          teamId,
+          error: `Object removal failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }).catch(() => undefined);
+        throw error;
+      }
+    }
   }
 
   return deleted;
@@ -414,6 +514,7 @@ export async function getInboxSearch(
     const whereConditions: SQL[] = [
       eq(inbox.teamId, teamId),
       ne(inbox.status, "deleted"),
+      visibleIntakeState(),
       // Exclude items that are already matched to other transactions
       sql`${inbox.transactionId} IS NULL`,
     ];
@@ -717,8 +818,11 @@ export type UpdateInboxParams = {
   id: string;
   teamId: string;
   transactionId?: string | null;
+  /**
+   * `deleted` is deliberately absent: deletion must go through `deleteInbox`,
+   * which tombstones the intake binding and removes the stored object.
+   */
   status?:
-    | "deleted"
     | "new"
     | "archived"
     | "processing"
@@ -728,62 +832,32 @@ export type UpdateInboxParams = {
     | "suggested_match";
 };
 
-export async function updateInbox(db: Database, params: UpdateInboxParams) {
+export async function updateInbox(
+  db: InboxQueryDatabase,
+  params: UpdateInboxParams,
+) {
   const { id, teamId, ...data } = params;
 
-  // Special handling for status: "deleted" - need to clean up transaction attachments
-  if (data.status === "deleted") {
-    // First get the inbox item to check if it has attachments
-    const [result] = await db
-      .select({
-        id: inbox.id,
-        transactionId: inbox.transactionId,
-        attachmentId: inbox.attachmentId,
-      })
-      .from(inbox)
-      .where(and(eq(inbox.id, id), eq(inbox.teamId, teamId)))
-      .limit(1);
-
-    if (result?.attachmentId && result?.transactionId) {
-      // Delete the specific transaction attachment for this inbox item
-      await db
-        .delete(transactionAttachments)
-        .where(
-          and(
-            eq(transactionAttachments.id, result.attachmentId),
-            eq(transactionAttachments.teamId, teamId),
-          ),
-        );
-
-      // Check if this transaction still has other attachments before resetting tax info
-      const remainingAttachments = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(transactionAttachments)
-        .where(
-          and(
-            eq(transactionAttachments.transactionId, result.transactionId),
-            eq(transactionAttachments.teamId, teamId),
-          ),
-        );
-
-      // Only reset tax rate and type if no more attachments exist for this transaction
-      if (remainingAttachments[0]?.count === 0) {
-        await db
-          .update(transactions)
-          .set({
-            taxRate: null,
-            taxType: null,
-          })
-          .where(eq(transactions.id, result.transactionId));
-      }
-    }
+  if ((data.status as string | undefined) === "deleted") {
+    // Defence in depth for untyped callers; the API schemas reject it too.
+    throw new Error("Use deleteInbox to delete an inbox item");
   }
 
   // Update the inbox record
   await db
     .update(inbox)
     .set(data)
-    .where(and(eq(inbox.id, id), eq(inbox.teamId, teamId)));
+    .where(
+      and(
+        eq(inbox.id, id),
+        eq(inbox.teamId, teamId),
+        // A worker that finishes after an explicit deletion must not restore
+        // the record or its invoice status.
+        ne(inbox.status, "deleted"),
+        // A reservation is not an invoice yet and cannot be edited.
+        visibleIntakeState(),
+      ),
+    );
 
   // Return the updated record with transaction data
   const [result] = await db
@@ -811,7 +885,9 @@ export async function updateInbox(db: Database, params: UpdateInboxParams) {
     })
     .from(inbox)
     .leftJoin(transactions, eq(inbox.transactionId, transactions.id))
-    .where(and(eq(inbox.id, id), eq(inbox.teamId, teamId)))
+    .where(
+      and(eq(inbox.id, id), eq(inbox.teamId, teamId), visibleIntakeState()),
+    )
     .limit(1);
 
   return result;
@@ -1088,17 +1164,682 @@ export type GetInboxByFilePathParams = {
   teamId: string;
 };
 
+export type InboxIntakeState = "reserved" | "accepted" | "cancelled" | null;
+
+/**
+ * Intake binding reads are deliberately usable with either the replica-aware
+ * client or the primary connection, so authorization-sensitive callers can
+ * read the primary without a widened cast.
+ */
+export type InboxQueryDatabase = Database | PrimaryDatabase;
+
+export type InboxIntakeBinding = {
+  id: string;
+  createdAt: string;
+  teamId: string | null;
+  filePath: string[] | null;
+  fileName: string | null;
+  contentType: string | null;
+  size: number | null;
+  status: string | null;
+  intakeState: InboxIntakeState;
+  contentHash: string | null;
+  intakeError: string | null;
+  objectRemovalPending: boolean | null;
+  objectRemovalAmbiguous: boolean | null;
+};
+
+/** The only storage namespace that may hold workspace documents. */
+export const DOCUMENT_NAMESPACE = "inbox";
+
+export type DocumentBindingLike = {
+  teamId: string | null;
+  filePath: string[] | null;
+};
+
+/**
+ * One validator for every persisted document binding.
+ *
+ * A stored path is only usable when it belongs to the record's exact workspace
+ * and lives in the document namespace, with unambiguous segments. Legacy rows
+ * that point at another workspace (or at a non-document namespace such as
+ * `assets`) are rejected before any storage access, so no read, signature,
+ * worker run or deletion can touch another tenant's object.
+ */
+export function documentBindingIssue(
+  binding: DocumentBindingLike,
+): string | null {
+  const { teamId, filePath } = binding;
+
+  if (!teamId) return "The record has no workspace.";
+  if (!filePath?.length) return "The record has no stored document path.";
+  if (filePath.length < 3) {
+    return "The stored path is not a workspace document path.";
+  }
+  if (filePath[0] !== teamId) {
+    return "The stored path belongs to another workspace.";
+  }
+  if (filePath[1] !== DOCUMENT_NAMESPACE) {
+    return "The stored path is not in the document namespace.";
+  }
+
+  for (const segment of filePath) {
+    if (
+      !segment ||
+      segment === "." ||
+      segment === ".." ||
+      segment.includes("/") ||
+      segment.includes("\\")
+    ) {
+      return "The stored path contains an ambiguous segment.";
+    }
+  }
+
+  return null;
+}
+
+export const isValidDocumentBinding = (binding: DocumentBindingLike) =>
+  documentBindingIssue(binding) === null;
+
+const intakeBindingColumns = {
+  id: inbox.id,
+  createdAt: inbox.createdAt,
+  teamId: inbox.teamId,
+  filePath: inbox.filePath,
+  fileName: inbox.fileName,
+  contentType: inbox.contentType,
+  size: inbox.size,
+  status: inbox.status,
+  intakeState: inbox.intakeState,
+  contentHash: inbox.contentHash,
+  intakeError: inbox.intakeError,
+  objectRemovalPending: inbox.objectRemovalPending,
+  objectRemovalAmbiguous: inbox.objectRemovalAmbiguous,
+};
+
+/**
+ * Resolves the persisted workspace binding for an intake record. Every read,
+ * sign, retry, delete and worker path derives storage location and metadata
+ * from this row rather than from client input.
+ */
+export async function getInboxIntakeBinding(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId?: string },
+): Promise<InboxIntakeBinding | undefined> {
+  const conditions = [eq(inbox.id, params.id)];
+  if (params.teamId) conditions.push(eq(inbox.teamId, params.teamId));
+
+  const [result] = await db
+    .select(intakeBindingColumns)
+    .from(inbox)
+    .where(and(...conditions))
+    .limit(1);
+
+  // Every read path inherits the shared binding guard: a row whose persisted
+  // path does not belong to its own workspace is never usable.
+  if (!result || !isValidDocumentBinding(result)) return undefined;
+
+  return result;
+}
+
+/**
+ * Row-locked binding read used to serialize lifecycle transitions (retry
+ * decisions, cleanup claims) on the canonical inbox record.
+ */
+export async function getInboxIntakeBindingForUpdate(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string },
+): Promise<InboxIntakeBinding | undefined> {
+  const [result] = await db
+    .select(intakeBindingColumns)
+    .from(inbox)
+    .where(and(eq(inbox.id, params.id), eq(inbox.teamId, params.teamId)))
+    .limit(1)
+    .for("update");
+
+  if (!result || !isValidDocumentBinding(result)) return undefined;
+
+  return result;
+}
+
+export async function findInboxIntakeByContentHash(
+  db: InboxQueryDatabase,
+  params: { teamId: string; contentHash: string },
+): Promise<InboxIntakeBinding | undefined> {
+  const [result] = await db
+    .select(intakeBindingColumns)
+    .from(inbox)
+    .where(
+      and(
+        eq(inbox.teamId, params.teamId),
+        eq(inbox.contentHash, params.contentHash),
+        inArray(inbox.intakeState, ["reserved", "accepted"]),
+        ne(inbox.status, "deleted"),
+      ),
+    )
+    .limit(1);
+
+  if (!result || !isValidDocumentBinding(result)) return undefined;
+
+  return result;
+}
+
+export type ReserveInboxIntakeParams = {
+  id: string;
+  teamId: string;
+  filePath: string[];
+  fileName: string;
+  displayName: string;
+  contentType: string;
+  size: number;
+  contentHash: string;
+  referenceId?: string;
+  website?: string;
+  inboxAccountId?: string;
+};
+
+/**
+ * Durably reserves an intake record before any object is written. Returns
+ * `undefined` when a concurrent request already reserved or accepted the same
+ * workspace content, so the caller can resume that record instead.
+ */
+export async function reserveInboxIntake(
+  db: InboxQueryDatabase,
+  params: ReserveInboxIntakeParams,
+): Promise<InboxIntakeBinding | undefined> {
+  const [result] = await db
+    .insert(inbox)
+    .values({
+      id: params.id,
+      teamId: params.teamId,
+      filePath: params.filePath,
+      fileName: params.fileName,
+      displayName: params.displayName,
+      contentType: params.contentType,
+      size: params.size,
+      contentHash: params.contentHash,
+      intakeState: "reserved",
+      referenceId: params.referenceId,
+      website: params.website,
+      inboxAccountId: params.inboxAccountId,
+      status: "new",
+    })
+    .onConflictDoNothing()
+    .returning(intakeBindingColumns);
+
+  return result;
+}
+
+export type AcceptInboxIntakeParams = {
+  id: string;
+  teamId: string;
+  contentHash: string;
+  contentType: string;
+  size: number;
+  fileName: string;
+  pageCount?: number | null;
+};
+
+/** Finalizes accepted content and makes the record visible as processing. */
+export async function acceptInboxIntake(
+  db: InboxQueryDatabase,
+  params: AcceptInboxIntakeParams,
+): Promise<InboxIntakeBinding | undefined> {
+  const [result] = await db
+    .update(inbox)
+    .set({
+      intakeState: "accepted",
+      intakeError: null,
+      // Acceptance and removal intent describe opposite lifecycle outcomes.
+      // Clear any intent recorded by an earlier failed attempt before the row
+      // becomes visible as processing, so a later cleanup pass cannot reclaim
+      // accepted bytes.
+      objectRemovalPending: false,
+      objectRemovalAmbiguous: false,
+      contentHash: params.contentHash,
+      contentType: params.contentType,
+      size: params.size,
+      fileName: params.fileName,
+      status: "processing",
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        // Only a reservation may become accepted. An already accepted record
+        // must never be moved back into an earlier state by a late writer, and
+        // a cancelled or deleted record must never resurrect.
+        eq(inbox.intakeState, "reserved"),
+        ne(inbox.status, "deleted"),
+      ),
+    )
+    .returning(intakeBindingColumns);
+
+  return result;
+}
+
+/**
+ * Records why an unaccepted attempt did not finish. The record stays reserved
+ * so the next attempt with the same content resumes the same object path
+ * instead of creating a second document.
+ */
+export async function recordInboxIntakeError(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string; error: string },
+) {
+  await db
+    .update(inbox)
+    .set({ intakeError: params.error.slice(0, 2000) })
+    .where(and(eq(inbox.id, params.id), eq(inbox.teamId, params.teamId)));
+}
+
+export async function cancelInboxIntake(
+  db: InboxQueryDatabase,
+  params: {
+    id: string;
+    teamId: string;
+    error?: string;
+    /** Cleanup paths may only end reservations, never accepted work. */
+    onlyReserved?: boolean;
+  },
+) {
+  const conditions = [
+    eq(inbox.id, params.id),
+    eq(inbox.teamId, params.teamId),
+    ne(inbox.status, "deleted"),
+  ];
+  if (params.onlyReserved) {
+    conditions.push(eq(inbox.intakeState, "reserved"));
+  }
+
+  const [result] = await db
+    .update(inbox)
+    .set({
+      intakeState: "cancelled",
+      contentHash: null,
+      status: "deleted",
+      intakeError: params.error?.slice(0, 2000) ?? null,
+      // Removal intent is durable with the cancellation: a crash before the
+      // object is removed is recovered by the next cleanup pass.
+      objectRemovalPending: true,
+      // Preserve any unresolved publication outcome and treat a reservation
+      // as ambiguous: it may still have an in-flight writer. Do not use a
+      // stale pre-update read for this decision.
+      objectRemovalAmbiguous: sql<boolean>`(${inbox.objectRemovalAmbiguous} or coalesce(${inbox.intakeState} = 'reserved', false))`,
+    })
+    .where(and(...conditions))
+    .returning({ id: inbox.id, filePath: inbox.filePath });
+
+  return result;
+}
+
+/**
+ * Conditionally ends one unaccepted reservation. Returns the claim only when
+ * this caller is the one that moved `reserved` to `cancelled`, so cleanup can
+ * never delete a document that finished accepting in the meantime.
+ */
+export async function claimReservedIntakeForDiscard(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string },
+): Promise<{ id: string; filePath: string[] | null } | undefined> {
+  const [result] = await db
+    .update(inbox)
+    .set({
+      intakeState: "cancelled",
+      contentHash: null,
+      status: "deleted",
+      intakeError: "Unaccepted intake reservation discarded",
+      // Intent first, effect second: a crash after this claim is recovered.
+      objectRemovalPending: true,
+      // The reservation may have had an in-flight writer before this claim
+      // acquired the row lock; keep the ambiguity until explicit settlement.
+      objectRemovalAmbiguous: true,
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        eq(inbox.intakeState, "reserved"),
+        ne(inbox.status, "deleted"),
+      ),
+    )
+    .returning({ id: inbox.id, filePath: inbox.filePath });
+
+  return result;
+}
+
+/**
+ * Claims a pending removal whose publication outcome was ambiguous. The
+ * returned object is removed, but the tombstone and ambiguity marker stay set.
+ * There is no pass-count or TTL that can prove a remote write will not arrive
+ * later; only explicit provider/operator settlement may clear it.
+ */
+export async function claimAmbiguousObjectRemovalForDiscard(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string },
+): Promise<{ id: string; filePath: string[] | null } | undefined> {
+  const [result] = await db
+    .update(inbox)
+    .set({
+      intakeState: "cancelled",
+      contentHash: null,
+      status: "deleted",
+      objectRemovalPending: true,
+      objectRemovalAmbiguous: true,
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        eq(inbox.objectRemovalPending, true),
+        eq(inbox.objectRemovalAmbiguous, true),
+        // Accepted content is never eligible for removal. A late writer is
+        // excluded by the same condition, because acceptance sets
+        // `accepted` before releasing the canonical row lock.
+        inArray(inbox.intakeState, ["reserved", "cancelled"]),
+      ),
+    )
+    .returning({ id: inbox.id, filePath: inbox.filePath });
+
+  return result;
+}
+
+/**
+ * Claims a non-ambiguous pending removal. These rows have no outstanding
+ * writer (for example an explicit delete); the caller may clear the tombstone
+ * after the object has been removed successfully.
+ */
+export async function claimSettledObjectRemovalForDiscard(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string },
+): Promise<{ id: string; filePath: string[] | null } | undefined> {
+  const [result] = await db
+    .update(inbox)
+    .set({
+      intakeState: "cancelled",
+      contentHash: null,
+      status: "deleted",
+      objectRemovalPending: true,
+      objectRemovalAmbiguous: false,
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        eq(inbox.objectRemovalPending, true),
+        eq(inbox.objectRemovalAmbiguous, false),
+        inArray(inbox.intakeState, ["reserved", "cancelled"]),
+      ),
+    )
+    .returning({ id: inbox.id, filePath: inbox.filePath });
+
+  return result;
+}
+
+/**
+ * Clears a stale removal tombstone that was accidentally left on an accepted
+ * row. It never removes the object; accepted bytes remain owned by the
+ * document binding.
+ */
+export async function clearAcceptedObjectRemovalIntent(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string },
+) {
+  await db
+    .update(inbox)
+    .set({
+      objectRemovalPending: false,
+      objectRemovalAmbiguous: false,
+      intakeError: null,
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        eq(inbox.intakeState, "accepted"),
+        eq(inbox.objectRemovalPending, true),
+      ),
+    );
+}
+
+/**
+ * Persists removal intent for an object that may exist at the record's path.
+ * Called before releasing the row lock on a failed publication, so the intent
+ * survives a crash and the next cleanup pass reclaims the bytes.
+ */
+export async function recordInboxIntakeRemovalIntent(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string; error: string },
+) {
+  await db
+    .update(inbox)
+    .set({
+      intakeError: params.error.slice(0, 2000),
+      objectRemovalPending: true,
+      // A failed publication cannot prove that the remote write did not
+      // complete after the local abort. Keep the reconciliation tombstone
+      // until verified acceptance or explicit provider/operator settlement.
+      objectRemovalAmbiguous: true,
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        // A concurrent retry may have accepted the row after the failed
+        // transaction released its lock. Never re-attach removal intent to
+        // accepted content.
+        eq(inbox.intakeState, "reserved"),
+      ),
+    );
+}
+
+/**
+ * Records a removal failure durably. The record keeps `object_removal_pending`
+ * so the next cleanup pass revisits it instead of orphaning the bytes.
+ */
+export async function recordIntakeRemovalFailure(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string; error: string },
+) {
+  await db
+    .update(inbox)
+    .set({
+      intakeError: params.error.slice(0, 2000),
+      objectRemovalPending: true,
+      // Preserve the row's existing ambiguity. A removal failure on an
+      // explicit delete still has no publication writer, while an ambiguous
+      // publication must remain ambiguous.
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        inArray(inbox.intakeState, ["reserved", "cancelled"]),
+      ),
+    );
+}
+
+/**
+ * Unaccepted reservations that never finished. They hold no processing intent
+ * and never become accepted invoices; operators may discard them explicitly.
+ * There is deliberately no automatic retention schedule in this slice.
+ */
+export async function listStaleReservedIntake(
+  db: InboxQueryDatabase,
+  params: { olderThanMs: number; limit?: number },
+): Promise<InboxIntakeBinding[]> {
+  const cutoff = new Date(Date.now() - params.olderThanMs).toISOString();
+
+  const rows = await db
+    .select(intakeBindingColumns)
+    .from(inbox)
+    .where(
+      and(
+        eq(inbox.intakeState, "reserved"),
+        lt(inbox.createdAt, cutoff),
+        ne(inbox.status, "deleted"),
+      ),
+    )
+    .orderBy(asc(inbox.createdAt), asc(inbox.id))
+    .limit(params.limit ?? 50);
+
+  // Cleanup must never touch an object whose persisted path is not this
+  // workspace's document path.
+  return rows.filter((row) => isValidDocumentBinding(row));
+}
+
+export type InboxIntakeBindingCursor = {
+  /** Stable timestamp/id tuple used by the explicit cleanup helper. */
+  createdAt: string;
+  id: string;
+};
+
+export type PendingObjectRemovalPage = {
+  rows: InboxIntakeBinding[];
+  /** Pass this back as `after` to continue a full pass. */
+  nextCursor: InboxIntakeBindingCursor | null;
+  /** True when another page exists after this one. */
+  hasMore: boolean;
+};
+
+/**
+ * Documents whose object removal is still outstanding. Removal failures and
+ * ambiguous publications are durable, so a later cleanup pass can finish the
+ * work instead of leaving the bytes behind forever. The cursor is over
+ * `(created_at, id)`, which is immutable and deterministic even while a row
+ * remains pending across passes.
+ */
+export async function listPendingObjectRemovals(
+  db: InboxQueryDatabase,
+  params: { limit?: number; after?: InboxIntakeBindingCursor } = {},
+): Promise<PendingObjectRemovalPage> {
+  const limit = Math.max(1, params.limit ?? 50);
+  const conditions = [eq(inbox.objectRemovalPending, true)];
+
+  if (params.after) {
+    const cursor = params.after;
+    conditions.push(
+      or(
+        gt(inbox.createdAt, cursor.createdAt),
+        and(eq(inbox.createdAt, cursor.createdAt), gt(inbox.id, cursor.id)),
+      )!,
+    );
+  }
+
+  // Fetch one extra row to determine whether another page exists without a
+  // second query. The cursor advances over raw rows, including rows later
+  // filtered by the binding validator, so invalid legacy rows cannot cause a
+  // loop over the same page.
+  const rows = await db
+    .select(intakeBindingColumns)
+    .from(inbox)
+    .where(and(...conditions))
+    .orderBy(asc(inbox.createdAt), asc(inbox.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const pageRows = rows.slice(0, limit);
+  const last = pageRows.at(-1);
+
+  return {
+    rows: pageRows.filter((row) => isValidDocumentBinding(row)),
+    nextCursor:
+      hasMore && last ? { createdAt: last.createdAt, id: last.id } : null,
+    hasMore,
+  };
+}
+
+/**
+ * True when another live (not deleted) record in the workspace points at the
+ * same stored object. New intake paths are unique per record, but legacy rows
+ * used `<team>/inbox/<filename>` and may share one object, which must not be
+ * removed while any of them is still in use.
+ */
+export async function isStoredPathSharedByLiveDocument(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string; filePath: string[] },
+) {
+  const [shared] = await db
+    .select({ id: inbox.id })
+    .from(inbox)
+    .where(
+      and(
+        eq(inbox.teamId, params.teamId),
+        ne(inbox.id, params.id),
+        ne(inbox.status, "deleted"),
+        eq(inbox.filePath, params.filePath),
+      ),
+    )
+    .limit(1);
+
+  return Boolean(shared);
+}
+
+/** Clears the outstanding-removal flag once the bytes are proven gone. */
+export async function clearObjectRemovalPending(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string },
+) {
+  await db
+    .update(inbox)
+    .set({
+      objectRemovalPending: false,
+      objectRemovalAmbiguous: false,
+      intakeError: null,
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        // Ambiguous rows require explicit settlement; this generic clear must
+        // never erase an unresolved remote outcome.
+        eq(inbox.objectRemovalAmbiguous, false),
+      ),
+    );
+}
+
+/**
+ * Explicitly settles an ambiguous removal after provider/operator evidence
+ * proves no late write can still arrive. This is the only automatic-code path
+ * other than verified accepted retry that may clear the ambiguity marker; the
+ * cleanup helper itself never guesses settlement from a pass count.
+ */
+export async function settleAmbiguousObjectRemoval(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string; evidence: string },
+) {
+  const [result] = await db
+    .update(inbox)
+    .set({
+      objectRemovalPending: false,
+      objectRemovalAmbiguous: false,
+      intakeError: `Ambiguous removal settled: ${params.evidence}`.slice(
+        0,
+        2000,
+      ),
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        eq(inbox.intakeState, "cancelled"),
+        eq(inbox.objectRemovalPending, true),
+        eq(inbox.objectRemovalAmbiguous, true),
+      ),
+    )
+    .returning({ id: inbox.id });
+
+  return result;
+}
+
 export async function getInboxByFilePath(
-  db: Database,
+  db: InboxQueryDatabase,
   params: GetInboxByFilePathParams,
 ) {
   const { filePath, teamId } = params;
 
   const [result] = await db
-    .select({
-      id: inbox.id,
-      status: inbox.status,
-    })
+    .select(intakeBindingColumns)
     .from(inbox)
     .where(
       and(
@@ -1108,6 +1849,10 @@ export async function getInboxByFilePath(
       ),
     )
     .limit(1);
+
+  // A legacy payload path only counts when the matched row itself holds a
+  // valid binding for this workspace.
+  if (!result || !isValidDocumentBinding(result)) return undefined;
 
   return result;
 }
@@ -1132,7 +1877,8 @@ export async function getProcessedInvoiceHistory(
 }
 
 export async function getExistingInboxAttachments(
-  db: Database,
+  db: InboxQueryDatabase,
+  teamId: string,
   referenceIds: string[],
 ) {
   if (referenceIds.length === 0) return [];
@@ -1140,7 +1886,17 @@ export async function getExistingInboxAttachments(
   return db
     .select({ referenceId: inbox.referenceId })
     .from(inbox)
-    .where(inArray(inbox.referenceId, referenceIds));
+    .where(
+      and(
+        eq(inbox.teamId, teamId),
+        inArray(inbox.referenceId, referenceIds),
+        ne(inbox.status, "deleted"),
+        // A reservation is not a delivered attachment: the next sync must try
+        // to recover it instead of skipping it as already handled. Legacy rows
+        // predate the intake state and count as accepted.
+        or(isNull(inbox.intakeState), eq(inbox.intakeState, "accepted")),
+      ),
+    );
 }
 
 export type CreateInboxParams = {
@@ -1239,14 +1995,22 @@ export type UpdateInboxWithProcessedDataParams = {
 
 export async function updateInboxWithProcessedData(
   db: Database,
-  params: UpdateInboxWithProcessedDataParams,
+  params: UpdateInboxWithProcessedDataParams & { teamId?: string },
 ) {
-  const { id, ...updateData } = params;
+  const { id, teamId, ...updateData } = params;
 
   const [result] = await db
     .update(inbox)
     .set(updateData)
-    .where(eq(inbox.id, id))
+    .where(
+      and(
+        eq(inbox.id, id),
+        // Extraction that finishes after the invoice was deleted must not
+        // recreate derived state or emit downstream work.
+        ne(inbox.status, "deleted"),
+        ...(teamId ? [eq(inbox.teamId, teamId)] : []),
+      ),
+    )
     .returning({
       id: inbox.id,
       teamId: inbox.teamId,

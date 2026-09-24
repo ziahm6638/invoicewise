@@ -2,11 +2,13 @@ import { auth } from "@api/auth";
 import { updateUserSchema } from "@api/schemas/users";
 import { resend } from "@api/services/resend";
 import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
+import { primaryDb } from "@invoicewise/db/client";
 import {
+  TeamPermissionError,
   deleteUser,
+  getTeamRole,
   getUserById,
   getUserInvites,
-  hasTeamAccess,
   updateUser,
 } from "@invoicewise/db/queries";
 import { TRPCError } from "@trpc/server";
@@ -21,7 +23,8 @@ export const userRouter = createTRPCRouter({
     .mutation(async ({ ctx: { db, requestHeaders, session }, input }) => {
       if (
         input.teamId &&
-        !(await hasTeamAccess(db, input.teamId, session.user.id))
+        // Fresh primary read rather than a replica-eligible membership lookup.
+        !(await getTeamRole(primaryDb, input.teamId, session.user.id))
       ) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
@@ -40,13 +43,28 @@ export const userRouter = createTRPCRouter({
     }),
 
   delete: protectedProcedure.mutation(async ({ ctx: { db, session } }) => {
-    const [data] = await Promise.all([
-      deleteUser(db, session.user.id),
-      resend.contacts.remove({
+    let data: Awaited<ReturnType<typeof deleteUser>>;
+
+    try {
+      data = await deleteUser(db, session.user.id);
+    } catch (error) {
+      if (error instanceof TeamPermissionError) {
+        throw new TRPCError({ code: error.code, message: error.message });
+      }
+
+      throw error;
+    }
+
+    // Marketing-audience cleanup is best effort and must not fail a deletion
+    // that already succeeded.
+    try {
+      await resend.contacts.remove({
         email: session.user.email!,
         audienceId: process.env.RESEND_AUDIENCE_ID!,
-      }),
-    ]);
+      });
+    } catch (error) {
+      console.error("Failed to remove deleted user from Resend", error);
+    }
 
     return data;
   }),

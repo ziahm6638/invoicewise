@@ -163,7 +163,9 @@ export function InboxDetails() {
             {data.attachmentUrl ? (
               <FileViewer
                 mimeType={data.contentType}
-                url={data.attachmentUrl}
+                // Same-origin, session-scoped read. The capability URL is only
+                // used for the explicit "Open original" download link.
+                url={`/api/proxy?id=${data.id}`}
                 key={data.id}
                 maxWidth={560}
               />

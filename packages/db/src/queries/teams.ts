@@ -1,6 +1,9 @@
-import type { Database } from "@db/client";
+import type { Database, PrimaryDatabase } from "@db/client";
 import {
+  apiKeys,
+  authSessions,
   bankConnections,
+  oauthAccessTokens,
   teams,
   transactionCategories,
   users,
@@ -12,22 +15,23 @@ import {
   getTaxTypeForCountry,
 } from "@invoicewise/categories";
 import { and, eq } from "drizzle-orm";
+import {
+  TeamPermissionError,
+  type TeamRole,
+  canAssignRole,
+  canDeleteWorkspace,
+  canManageMember,
+  canTransferOwnership,
+  countTeamOwners,
+  getTeamMemberRow,
+  isTeamRole,
+  lockTeamRow,
+} from "./team-permissions";
 
-export const hasTeamAccess = async (
-  db: Database,
-  teamId: string,
-  userId: string,
-): Promise<boolean> => {
-  const result = await db
-    .select({ teamId: usersOnTeam.teamId })
-    .from(usersOnTeam)
-    .where(and(eq(usersOnTeam.teamId, teamId), eq(usersOnTeam.userId, userId)))
-    .limit(1);
-
-  return result.length > 0;
-};
-
-export const getTeamById = async (db: Database, id: string) => {
+export const getTeamById = async (
+  db: Database | PrimaryDatabase,
+  id: string,
+) => {
   const [result] = await db
     .select({
       id: teams.id,
@@ -311,31 +315,86 @@ type LeaveTeamParams = {
   teamId: string;
 };
 
-export async function leaveTeam(db: Database, params: LeaveTeamParams) {
-  // First verify the user is actually a member of this team
-  const hasAccess = await hasTeamAccess(db, params.teamId, params.userId);
-  if (!hasAccess) {
-    throw new Error("User is not a member of this team");
-  }
-
-  // Set team_id to null for the user
-  await db
+/**
+ * Revokes everything that could still act on behalf of a user in a workspace
+ * once their membership ends: active team pointer, sessions pointed at the
+ * workspace, API keys and OAuth tokens.
+ */
+async function revokeMembershipAccess(
+  tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  teamId: string,
+  userId: string,
+) {
+  await tx
     .update(users)
     .set({ teamId: null })
-    .where(and(eq(users.id, params.userId), eq(users.teamId, params.teamId)));
+    .where(and(eq(users.id, userId), eq(users.teamId, teamId)));
 
-  // Delete the user from users_on_team and return the deleted row
-  const [deleted] = await db
-    .delete(usersOnTeam)
+  await tx
+    .update(authSessions)
+    .set({ activeOrganizationId: null })
     .where(
       and(
-        eq(usersOnTeam.teamId, params.teamId),
-        eq(usersOnTeam.userId, params.userId),
+        eq(authSessions.userId, userId),
+        eq(authSessions.activeOrganizationId, teamId),
       ),
-    )
-    .returning();
+    );
 
-  return deleted;
+  await tx
+    .delete(apiKeys)
+    .where(and(eq(apiKeys.teamId, teamId), eq(apiKeys.userId, userId)));
+
+  await tx
+    .update(oauthAccessTokens)
+    .set({ revoked: true, revokedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(oauthAccessTokens.teamId, teamId),
+        eq(oauthAccessTokens.userId, userId),
+        eq(oauthAccessTokens.revoked, false),
+      ),
+    );
+}
+
+export async function leaveTeam(db: Database, params: LeaveTeamParams) {
+  return db.transaction(async (tx) => {
+    if (!(await lockTeamRow(tx, params.teamId))) {
+      throw new TeamPermissionError("NOT_FOUND", "Team not found");
+    }
+
+    const member = await getTeamMemberRow(tx, params.teamId, params.userId);
+
+    if (!member) {
+      throw new TeamPermissionError(
+        "FORBIDDEN",
+        "User is not a member of this team",
+      );
+    }
+
+    if (
+      member.role === "owner" &&
+      (await countTeamOwners(tx, params.teamId)) <= 1
+    ) {
+      throw new TeamPermissionError(
+        "CONFLICT",
+        "The last owner cannot leave until ownership is transferred",
+      );
+    }
+
+    const [deleted] = await tx
+      .delete(usersOnTeam)
+      .where(
+        and(
+          eq(usersOnTeam.teamId, params.teamId),
+          eq(usersOnTeam.userId, params.userId),
+        ),
+      )
+      .returning();
+
+    await revokeMembershipAccess(tx, params.teamId, params.userId);
+
+    return deleted;
+  });
 }
 
 type DeleteTeamParams = {
@@ -344,23 +403,45 @@ type DeleteTeamParams = {
 };
 
 export async function deleteTeam(db: Database, params: DeleteTeamParams) {
-  // First verify the user is actually a member of this team
-  const hasAccess = await hasTeamAccess(db, params.teamId, params.userId);
-  if (!hasAccess) {
-    throw new Error("User is not a member of this team");
-  }
+  return db.transaction(async (tx) => {
+    if (!(await lockTeamRow(tx, params.teamId))) {
+      throw new TeamPermissionError("NOT_FOUND", "Team not found");
+    }
 
-  const [result] = await db
-    .delete(teams)
-    .where(eq(teams.id, params.teamId))
-    .returning({
-      id: teams.id,
-    });
+    const actor = await getTeamMemberRow(tx, params.teamId, params.userId);
 
-  return result;
+    if (!canDeleteWorkspace(actor?.role)) {
+      throw new TeamPermissionError(
+        "FORBIDDEN",
+        "Only the workspace owner can delete it",
+      );
+    }
+
+    const [result] = await tx
+      .delete(teams)
+      .where(eq(teams.id, params.teamId))
+      .returning({
+        id: teams.id,
+      });
+
+    // Membership rows, API keys and OAuth tokens cascade with the team, but
+    // the active-team pointers on users and sessions do not.
+    await tx
+      .update(users)
+      .set({ teamId: null })
+      .where(eq(users.teamId, params.teamId));
+
+    await tx
+      .update(authSessions)
+      .set({ activeOrganizationId: null })
+      .where(eq(authSessions.activeOrganizationId, params.teamId));
+
+    return result;
+  });
 }
 
 type DeleteTeamMemberParams = {
+  actorUserId: string;
   userId: string;
   teamId: string;
 };
@@ -369,50 +450,163 @@ export async function deleteTeamMember(
   db: Database,
   params: DeleteTeamMemberParams,
 ) {
-  // First verify the user is actually a member of this team
-  const hasAccess = await hasTeamAccess(db, params.teamId, params.userId);
-  if (!hasAccess) {
-    throw new Error("User is not a member of this team");
-  }
+  return db.transaction(async (tx) => {
+    if (!(await lockTeamRow(tx, params.teamId))) {
+      throw new TeamPermissionError("NOT_FOUND", "Team not found");
+    }
 
-  const [deleted] = await db
-    .delete(usersOnTeam)
-    .where(
-      and(
-        eq(usersOnTeam.userId, params.userId),
-        eq(usersOnTeam.teamId, params.teamId),
-      ),
-    )
-    .returning();
+    const actor = await getTeamMemberRow(tx, params.teamId, params.actorUserId);
+    const target = await getTeamMemberRow(tx, params.teamId, params.userId);
 
-  return deleted;
+    if (!target) {
+      throw new TeamPermissionError("NOT_FOUND", "Member not found");
+    }
+
+    const ownerCount = await countTeamOwners(tx, params.teamId);
+
+    if (target.role === "owner") {
+      // Only an owner may remove an owner, and never the last one.
+      if (!canTransferOwnership(actor?.role)) {
+        throw new TeamPermissionError(
+          "FORBIDDEN",
+          "Only the workspace owner can remove an owner",
+        );
+      }
+
+      if (ownerCount <= 1) {
+        throw new TeamPermissionError(
+          "CONFLICT",
+          "The last owner cannot be removed until ownership is transferred",
+        );
+      }
+    } else if (
+      !canManageMember({
+        actorRole: actor?.role,
+        actorUserId: params.actorUserId,
+        targetRole: target.role,
+        targetUserId: params.userId,
+        ownerCount,
+      })
+    ) {
+      throw new TeamPermissionError(
+        "FORBIDDEN",
+        "Not allowed to remove this member",
+      );
+    }
+
+    const [deleted] = await tx
+      .delete(usersOnTeam)
+      .where(
+        and(
+          eq(usersOnTeam.userId, params.userId),
+          eq(usersOnTeam.teamId, params.teamId),
+        ),
+      )
+      .returning();
+
+    await revokeMembershipAccess(tx, params.teamId, params.userId);
+
+    return deleted;
+  });
 }
 
 type UpdateTeamMemberParams = {
+  actorUserId: string;
   userId: string;
   teamId: string;
-  role: "owner" | "member";
+  role: TeamRole;
 };
 
 export async function updateTeamMember(
   db: Database,
   params: UpdateTeamMemberParams,
 ) {
-  const { userId, teamId, role } = params;
+  const { actorUserId, userId, teamId, role } = params;
 
-  // First verify the user is actually a member of this team
-  const hasAccess = await hasTeamAccess(db, teamId, userId);
-  if (!hasAccess) {
-    throw new Error("User is not a member of this team");
+  if (!isTeamRole(role)) {
+    throw new TeamPermissionError("FORBIDDEN", "Unknown role");
   }
 
-  const [updated] = await db
-    .update(usersOnTeam)
-    .set({ role })
-    .where(and(eq(usersOnTeam.userId, userId), eq(usersOnTeam.teamId, teamId)))
-    .returning();
+  return db.transaction(async (tx) => {
+    if (!(await lockTeamRow(tx, teamId))) {
+      throw new TeamPermissionError("NOT_FOUND", "Team not found");
+    }
 
-  return updated;
+    const actor = await getTeamMemberRow(tx, teamId, actorUserId);
+    const target = await getTeamMemberRow(tx, teamId, userId);
+
+    if (!target) {
+      throw new TeamPermissionError("NOT_FOUND", "Member not found");
+    }
+
+    if (!canAssignRole(actor?.role, role)) {
+      throw new TeamPermissionError(
+        "FORBIDDEN",
+        "Not allowed to assign this role",
+      );
+    }
+
+    const ownerCount = await countTeamOwners(tx, teamId);
+
+    if (target.role === "owner" && role !== "owner") {
+      // Taking ownership away: only an owner may do it, and never the last one.
+      if (!canTransferOwnership(actor?.role)) {
+        throw new TeamPermissionError(
+          "FORBIDDEN",
+          "Only the workspace owner can change an owner's role",
+        );
+      }
+
+      if (ownerCount <= 1) {
+        throw new TeamPermissionError(
+          "CONFLICT",
+          "The last owner cannot be demoted until ownership is transferred",
+        );
+      }
+    } else if (
+      !canManageMember({
+        actorRole: actor?.role,
+        actorUserId,
+        targetRole: target.role,
+        targetUserId: userId,
+        ownerCount,
+      })
+    ) {
+      throw new TeamPermissionError(
+        "FORBIDDEN",
+        "Not allowed to change this member's role",
+      );
+    }
+
+    const [updated] = await tx
+      .update(usersOnTeam)
+      .set({ role })
+      .where(
+        and(eq(usersOnTeam.userId, userId), eq(usersOnTeam.teamId, teamId)),
+      )
+      .returning();
+
+    // Losing admin/owner privileges must not leave a privileged API key or
+    // OAuth grant behind. Demotion to member drops every write scope.
+    if (role === "member") {
+      await tx
+        .delete(apiKeys)
+        .where(and(eq(apiKeys.teamId, teamId), eq(apiKeys.userId, userId)));
+
+      await tx
+        .update(oauthAccessTokens)
+        .set({ revoked: true, revokedAt: new Date().toISOString() })
+        .where(
+          and(
+            eq(oauthAccessTokens.teamId, teamId),
+            eq(oauthAccessTokens.userId, userId),
+            eq(oauthAccessTokens.revoked, false),
+          ),
+        );
+    }
+
+    return updated;
+  });
 }
 
 type GetAvailablePlansResult = {

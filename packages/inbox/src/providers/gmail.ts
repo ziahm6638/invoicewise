@@ -5,7 +5,7 @@ import { ensureFileExtension } from "@invoicewise/utils";
 import type { Credentials } from "google-auth-library";
 import { type Auth, type gmail_v1, google } from "googleapis";
 import { decodeBase64Url } from "../attachments";
-import { generateDeterministicId } from "../generate-id";
+import { gmailAttachmentReferenceIds } from "../generate-id";
 import type {
   Attachment,
   EmailAttachment,
@@ -353,11 +353,15 @@ export class GmailProvider implements OAuthProviderInterface {
         message.payload.parts,
       );
 
-      const attachments: Attachment[] = rawAttachments.map((att) => {
-        const filename = ensureFileExtension(att.filename, att.mimeType);
-        const referenceId = generateDeterministicId(
-          `${message.id}_${filename}`,
-        );
+      const filenames = rawAttachments.map((att) =>
+        ensureFileExtension(att.filename, att.mimeType),
+      );
+      // Two attachments named invoice.pdf in one message are two documents.
+      const referenceIds = gmailAttachmentReferenceIds(message.id, filenames);
+
+      const attachments: Attachment[] = rawAttachments.map((att, index) => {
+        const filename = filenames[index]!;
+        const referenceId = referenceIds[index]!;
 
         return {
           id: referenceId,

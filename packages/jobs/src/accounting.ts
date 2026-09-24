@@ -7,6 +7,7 @@ import {
   getActiveAccountingConnection,
   getActiveAccountingConnectionByProvider,
   getWorkflowJobByKey,
+  isValidDocumentBinding,
   recordAccountingAlreadyPosted,
   recordAccountingPostFailure,
   recordAccountingPostSuccess,
@@ -28,6 +29,7 @@ type StorageSigner = {
     bucket: string;
     path: string | string[];
     expireIn: number;
+    inboxId: string;
     options?: { download?: boolean };
   }) => Promise<string>;
 };
@@ -315,13 +317,20 @@ export const postAccountingDraft = (
       }).pipe(Effect.zipRight(Effect.fail(error)));
 
     let attachment = null;
-    if (invoice.filePath?.length) {
+    if (
+      invoice.filePath?.length &&
+      isValidDocumentBinding({
+        teamId: invoice.teamId,
+        filePath: invoice.filePath,
+      })
+    ) {
       const signed = yield* Effect.tryPromise({
         try: async () => ({
           url: await storage.signedUrl({
             bucket: "vault",
             path: invoice.filePath!,
             expireIn: 900,
+            inboxId: invoice.id,
           }),
           fileName: invoice.fileName,
           contentType: invoice.contentType,

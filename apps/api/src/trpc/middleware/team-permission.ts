@@ -1,9 +1,16 @@
 import type { Session } from "@api/utils/auth";
-import { teamCache } from "@invoicewise/cache/team-cache";
 import type { Database } from "@invoicewise/db/client";
-import { hasTeamAccess } from "@invoicewise/db/queries";
+import { primaryDb } from "@invoicewise/db/client";
+import { type TeamRole, getTeamRole } from "@invoicewise/db/queries";
 import { TRPCError } from "@trpc/server";
 
+/**
+ * Resolves the caller's role for their active workspace on every request.
+ *
+ * This deliberately reads the primary database instead of a cache: membership
+ * and role changes (removal, demotion) must take effect on the next request
+ * without relying on cache invalidation across instances.
+ */
 export const withTeamPermission = async <TReturn>(opts: {
   ctx: {
     session?: Session | null;
@@ -14,6 +21,7 @@ export const withTeamPermission = async <TReturn>(opts: {
       session?: Session | null;
       db: Database;
       teamId: string | null;
+      teamRole: TeamRole | null;
     };
   }) => Promise<TReturn>;
 }) => {
@@ -29,19 +37,13 @@ export const withTeamPermission = async <TReturn>(opts: {
   }
 
   const teamId = ctx.session?.teamId ?? null;
+  let teamRole: TeamRole | null = null;
 
   // If teamId is null, user has no team assigned but this is now allowed
   if (teamId !== null) {
-    const cacheKey = `user:${userId}:team:${teamId}`;
-    let hasAccess = await teamCache.get(cacheKey);
+    teamRole = await getTeamRole(primaryDb, teamId, userId);
 
-    if (hasAccess === undefined) {
-      hasAccess = await hasTeamAccess(ctx.db, teamId, userId);
-
-      await teamCache.set(cacheKey, hasAccess);
-    }
-
-    if (!hasAccess) {
+    if (!teamRole) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "No permission to access this team",
@@ -53,6 +55,7 @@ export const withTeamPermission = async <TReturn>(opts: {
     ctx: {
       session: ctx.session,
       teamId,
+      teamRole,
       db: ctx.db,
     },
   });

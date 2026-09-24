@@ -34,7 +34,7 @@ export function PostAuthor({ author }: Props) {
         <span className="text-xs text-[#878787]">{authorData.tagline}</span>
       </div>
       <div className="ml-auto">
-        <PostCopyURL slug={author} />
+        <PostCopyURL />
       </div>
     </div>
   );

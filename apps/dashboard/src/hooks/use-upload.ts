@@ -1,9 +1,10 @@
+import type { AssetKind } from "@/lib/asset-kinds";
 import { uploadFile as upload } from "@/utils/upload";
 import { useState } from "react";
 
 interface UploadParams {
   file: File;
-  path: string[];
+  kind: AssetKind;
   bucket: string;
 }
 
@@ -17,21 +18,21 @@ export function useUpload() {
 
   const uploadFile = async ({
     file,
-    path,
+    kind,
     bucket,
   }: UploadParams): Promise<UploadResult> => {
     setLoading(true);
 
     try {
       const result = await upload({
-        path,
+        kind,
         file,
         bucket,
       });
 
       return {
         url: result.url,
-        path,
+        path: result.path,
       };
     } finally {
       setLoading(false);

@@ -1,4 +1,4 @@
-import type { Database } from "@db/client";
+import type { Database, PrimaryDatabase } from "@db/client";
 import { workflowJobs } from "@db/schema";
 import {
   and,
@@ -25,7 +25,7 @@ export type EnqueueWorkflowJobParams = {
 };
 
 export async function enqueueWorkflowJob(
-  db: Database,
+  db: Database | PrimaryDatabase,
   params: EnqueueWorkflowJobParams,
 ) {
   const [inserted] = await db
@@ -273,6 +273,29 @@ export async function getWorkflowJobByKey(
         eq(workflowJobs.name, params.name),
         eq(workflowJobs.idempotencyKey, params.idempotencyKey),
         eq(workflowJobs.teamId, params.teamId),
+      ),
+    )
+    .limit(1);
+  return job;
+}
+
+/**
+ * An already queued or running intake job for one canonical inbox id. Used to
+ * make an explicit retry idempotent while work is still pending.
+ */
+export async function findPendingIntakeJob(
+  db: Database | PrimaryDatabase,
+  params: { teamId: string; inboxId: string },
+) {
+  const [job] = await db
+    .select()
+    .from(workflowJobs)
+    .where(
+      and(
+        eq(workflowJobs.name, "process-attachment"),
+        eq(workflowJobs.teamId, params.teamId),
+        inArray(workflowJobs.status, ["queued", "running"]),
+        sql`${workflowJobs.payload} ->> 'inboxId' = ${params.inboxId}`,
       ),
     )
     .limit(1);

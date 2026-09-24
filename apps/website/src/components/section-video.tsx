@@ -4,14 +4,16 @@ import { Button } from "@invoicewise/ui/button";
 import { Icons } from "@invoicewise/ui/icons";
 import { motion } from "framer-motion";
 import dynamic from "next/dynamic";
-import { useRef, useState } from "react";
+import { type RefObject, useRef, useState } from "react";
 
 const ReactHlsPlayer = dynamic(() => import("react-hls-player"), {
   ssr: false,
 });
 
 export function SectionVideo() {
-  const playerRef = useRef(undefined);
+  const playerRef = useRef<HTMLVideoElement>(
+    null,
+  ) as RefObject<HTMLVideoElement>;
   const [isPlaying, setPlaying] = useState(false);
   const [isMuted, setMuted] = useState(true);
 

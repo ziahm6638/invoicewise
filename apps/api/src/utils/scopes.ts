@@ -1,15 +1,17 @@
-export const SCOPES = [
-  "inbox.read",
-  "inbox.write",
-  "teams.read",
-  "teams.write",
-  "users.read",
-  "users.write",
-  "apis.all", // All API scopes
-  "apis.read", // All read scopes
-] as const;
+// The scope vocabulary and alias expansion live in the database package so the
+// authorization helpers and the API share exactly one list.
+export {
+  RESOURCE_SCOPES,
+  SCOPE_ALIASES,
+  SCOPES,
+  expandScopes,
+  isResourceScope,
+  isScope,
+  type ResourceScope,
+  type Scope,
+  type ScopeAlias,
+} from "@invoicewise/db/utils/scopes";
 
-export type Scope = (typeof SCOPES)[number];
 export type ScopePreset = "all_access" | "read_only" | "restricted";
 
 export const scopePresets = [
@@ -52,21 +54,4 @@ export const scopesToName = (scopes: string[]) => {
     description: "restricted access to some resources",
     preset: "restricted",
   };
-};
-
-export const expandScopes = (scopes: string[]): string[] => {
-  if (scopes.includes("apis.all")) {
-    // Return all scopes except any that start with "apis."
-    return SCOPES.filter((scope) => !scope.startsWith("apis."));
-  }
-
-  if (scopes.includes("apis.read")) {
-    // Return all read scopes except any that start with "apis."
-    return SCOPES.filter(
-      (scope) => scope.endsWith(".read") && !scope.startsWith("apis."),
-    );
-  }
-
-  // For custom scopes, filter out any "apis." scopes
-  return scopes.filter((scope) => !scope.startsWith("apis."));
 };

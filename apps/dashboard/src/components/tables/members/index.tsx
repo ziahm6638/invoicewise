@@ -1,6 +1,7 @@
 "use client";
 
 import { InviteTeamMembersModal } from "@/components/modals/invite-team-members-modal";
+import { useTeamQuery } from "@/hooks/use-team";
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
 import { Button } from "@invoicewise/ui/button";
@@ -25,9 +26,13 @@ export function DataTable() {
   const trpc = useTRPC();
   const [isOpen, onOpenChange] = useState(false);
   const { data: user } = useUserQuery();
+  const { data: team } = useTeamQuery();
   const { data } = useSuspenseQuery({
     ...trpc.team.members.queryOptions(),
   });
+
+  // UI gating mirrors the server's decision; the server still enforces it.
+  const canManageMembers = team?.permissions?.manageMembers ?? false;
 
   const table = useReactTable({
     getRowId: (row) => row.id,
@@ -42,6 +47,7 @@ export function DataTable() {
     meta: {
       currentUser: data?.find((member) => member?.user?.id === user?.id),
       totalOwners: data?.filter((member) => member?.role === "owner").length,
+      canManageMembers,
     },
   });
 
@@ -60,10 +66,12 @@ export function DataTable() {
           autoCorrect="off"
           spellCheck="false"
         />
-        <Dialog open={isOpen} onOpenChange={onOpenChange}>
-          <Button onClick={() => onOpenChange(true)}>Invite member</Button>
-          <InviteTeamMembersModal onOpenChange={onOpenChange} />
-        </Dialog>
+        {canManageMembers && (
+          <Dialog open={isOpen} onOpenChange={onOpenChange}>
+            <Button onClick={() => onOpenChange(true)}>Invite member</Button>
+            <InviteTeamMembersModal onOpenChange={onOpenChange} />
+          </Dialog>
+        )}
       </div>
       <Table>
         <TableBody>

@@ -2,14 +2,26 @@ import { getSession } from "@/lib/auth";
 import { getDiscount, getPlans } from "@/utils/plans";
 import { api } from "@/utils/polar";
 import { db } from "@invoicewise/db/client";
-import { getTeamById } from "@invoicewise/db/queries";
+import { canManageBilling, getTeamById } from "@invoicewise/db/queries";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const GET = async (req: NextRequest) => {
   const session = await getSession();
 
   if (!session?.user?.id) {
-    throw new Error("You must be logged in");
+    return NextResponse.json(
+      { error: "Authentication required" },
+      { status: 401 },
+    );
+  }
+
+  // Billing stays with the workspace owner, checked live on this endpoint so
+  // the dashboard/tRPC gate cannot be bypassed by calling the route directly.
+  if (!canManageBilling(session.teamRole)) {
+    return NextResponse.json(
+      { error: "Only the workspace owner can manage billing" },
+      { status: 403 },
+    );
   }
 
   const plan = req.nextUrl.searchParams.get("plan");
@@ -22,17 +34,17 @@ export const GET = async (req: NextRequest) => {
   const selectedPlan = plans[plan as keyof typeof plans];
 
   if (!selectedPlan) {
-    throw new Error("Invalid plan");
+    return NextResponse.json({ error: "Invalid plan" }, { status: 400 });
   }
 
   if (!teamId || teamId !== session.teamId) {
-    throw new Error("Team not found");
+    return NextResponse.json({ error: "Team not found" }, { status: 403 });
   }
 
   const team = await getTeamById(db, teamId);
 
   if (!team) {
-    throw new Error("Team not found");
+    return NextResponse.json({ error: "Team not found" }, { status: 403 });
   }
 
   const discountId = getDiscount(planType);

@@ -36,6 +36,8 @@ declare module "@tanstack/table-core" {
     // Members table meta
     currentUser?: RouterOutputs["team"]["members"][number];
     totalOwners?: number;
+    /** Server-decided capabilities for the viewer, surfaced for UI gating only. */
+    canManageMembers?: boolean;
   }
 
   interface ColumnMeta<TData extends RowData, TValue> {

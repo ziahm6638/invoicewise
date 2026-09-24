@@ -1,7 +1,9 @@
 "use client";
 
+import type { AssistantMessage } from "./types";
+
 type Props = {
-  messages: any;
+  messages: AssistantMessage[];
 };
 
 export function ChatList({ messages }: Props) {
@@ -12,7 +14,7 @@ export function ChatList({ messages }: Props) {
   return (
     <div className="flex flex-col  p-4 pb-8">
       {messages
-        .filter((tool) => tool.display !== undefined)
+        .filter((message) => message.display !== undefined)
         .map((message, index) => (
           <div key={message.id}>
             {message.display}

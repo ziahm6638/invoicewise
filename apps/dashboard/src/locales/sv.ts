@@ -61,6 +61,7 @@ export default {
   },
   roles: {
     owner: "Ägare",
+    admin: "Administratör",
     member: "Medlem",
   },
   tracker_status: {

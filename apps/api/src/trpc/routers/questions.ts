@@ -3,7 +3,11 @@ import {
   questionKeySchema,
   updateQuestionSchema,
 } from "@api/schemas/questions";
-import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
+import {
+  adminProcedure,
+  createTRPCRouter,
+  workspaceProcedure,
+} from "@api/trpc/init";
 import {
   createUserQuestion,
   deleteUserQuestion,
@@ -20,17 +24,17 @@ const mutationError = (error: unknown) =>
   });
 
 export const questionsRouter = createTRPCRouter({
-  list: protectedProcedure.query(({ ctx: { db, teamId } }) =>
+  list: workspaceProcedure.query(({ ctx: { db, teamId } }) =>
     getUserQuestions(db, teamId!),
   ),
 
-  versions: protectedProcedure
+  versions: workspaceProcedure
     .input(questionKeySchema)
     .query(({ ctx: { db, teamId }, input }) =>
       getUserQuestionVersions(db, { teamId: teamId!, ...input }),
     ),
 
-  create: protectedProcedure
+  create: adminProcedure
     .input(questionInputSchema)
     .mutation(({ ctx: { db, teamId, session }, input }) =>
       createUserQuestion(db, {
@@ -40,7 +44,7 @@ export const questionsRouter = createTRPCRouter({
       }),
     ),
 
-  update: protectedProcedure
+  update: adminProcedure
     .input(updateQuestionSchema)
     .mutation(async ({ ctx: { db, teamId, session }, input }) => {
       try {
@@ -57,7 +61,7 @@ export const questionsRouter = createTRPCRouter({
       }
     }),
 
-  delete: protectedProcedure
+  delete: adminProcedure
     .input(questionKeySchema)
     .mutation(async ({ ctx: { db, teamId, session }, input }) => {
       try {

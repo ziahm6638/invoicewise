@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useRef } from "react";
+import { type MutableRefObject, useRef } from "react";
 import { useDraggable } from "react-use-draggable-scroll";
 import { chatExamples } from "./examples";
 
@@ -22,8 +22,12 @@ const itemVariant = {
   show: { y: 0, opacity: 1 },
 };
 
-export function ChatExamples({ onSubmit }) {
-  const ref = useRef(undefined);
+type Props = {
+  onSubmit: (value: string) => void;
+};
+
+export function ChatExamples({ onSubmit }: Props) {
+  const ref = useRef<HTMLDivElement>(null) as MutableRefObject<HTMLDivElement>;
   const { events } = useDraggable(ref);
 
   const totalLength = chatExamples.reduce((accumulator, currentString) => {

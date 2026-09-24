@@ -1,6 +1,10 @@
 "use client";
 
-import { useTeamMutation, useTeamQuery } from "@/hooks/use-team";
+import {
+  useTeamMutation,
+  useTeamPermissions,
+  useTeamQuery,
+} from "@/hooks/use-team";
 import { useUpload } from "@/hooks/use-upload";
 import { Avatar, AvatarFallback, AvatarImage } from "@invoicewise/ui/avatar";
 import {
@@ -11,24 +15,26 @@ import {
   CardTitle,
 } from "@invoicewise/ui/card";
 import { Spinner } from "@invoicewise/ui/spinner";
-import { stripSpecialCharacters } from "@invoicewise/utils";
 import { useRef } from "react";
 
 export function CompanyLogo() {
   const inputRef = useRef<HTMLInputElement>(null);
   const { isLoading, uploadFile } = useUpload();
   const { data } = useTeamQuery();
+  const permissions = useTeamPermissions();
   const { mutate: updateTeam } = useTeamMutation();
 
   const handleUpload = async (evt: React.ChangeEvent<HTMLInputElement>) => {
+    if (!permissions.manageWorkspaceSettings) {
+      return;
+    }
+
     const { files } = evt.target;
     const selectedFile = files as FileList;
 
-    const filename = stripSpecialCharacters(selectedFile[0]?.name ?? "");
-
     const { url } = await uploadFile({
       bucket: "avatars",
-      path: [data?.id ?? "", filename],
+      kind: "logo",
       file: selectedFile[0] as File,
     });
 

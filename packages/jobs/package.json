@@ -12,6 +12,8 @@
   },
   "exports": {
     ".": "./src/client.ts",
+    "./intake": "./src/intake.ts",
+    "./intake-failure": "./src/intake-failure.ts",
     "./runner": "./src/runner.ts",
     "./schema": "./src/schema.ts",
     "./accounting": "./src/accounting.ts",

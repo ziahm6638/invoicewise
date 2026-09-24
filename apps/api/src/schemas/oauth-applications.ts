@@ -1,3 +1,4 @@
+import { SCOPES } from "@api/utils/scopes";
 import { z } from "@hono/zod-openapi";
 
 // Create OAuth Application Schema
@@ -51,7 +52,7 @@ export const createOAuthApplicationSchema = z.object({
       example: ["https://myapp.com/callback"],
     }),
   scopes: z
-    .array(z.string())
+    .array(z.enum(SCOPES))
     .default([])
     .openapi({
       description: "Array of scopes requested by the application",
@@ -119,7 +120,7 @@ export const updateOAuthApplicationSchema = z.object({
       example: ["https://myapp.com/callback"],
     }),
   scopes: z
-    .array(z.string())
+    .array(z.enum(SCOPES))
     .optional()
     .openapi({
       description: "Array of scopes requested by the application",
@@ -257,7 +258,7 @@ export const clientSecretResponseSchema = z.object({
 export const authorizeOAuthApplicationSchema = z.object({
   clientId: z.string(),
   decision: z.enum(["allow", "deny"]),
-  scopes: z.array(z.string()),
+  scopes: z.array(z.enum(SCOPES)),
   redirectUri: z.string().url(),
   state: z.string().optional(),
   codeChallenge: z.string().optional(),

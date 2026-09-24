@@ -1,47 +1,40 @@
-import path from "node:path";
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { NodeCanvasFactory } from "./canvas-factory";
-import "pdfjs-dist/build/pdf.worker.mjs";
+import { renderPdfPageIsolated } from "@invoicewise/documents";
 
-const pdfjsPath = path.join(process.cwd(), "node_modules/pdfjs-dist");
+/**
+ * Bounds for preview rendering. A preview is only a first-page thumbnail, so
+ * it must never allocate a canvas from an attacker-controlled MediaBox.
+ */
+const PREVIEW_MAX_DIMENSION = 10_000;
+const PREVIEW_MAX_PIXELS = 25_000_000;
+const PREVIEW_SCALE = 2;
+const PREVIEW_TIMEOUT_MS = 12_000;
 
+/**
+ * Renders the first page of a PDF through the isolated PDF worker.
+ *
+ * pdf.js cannot be interrupted on the main thread in Node/Bun, so the render
+ * happens in a child process that is terminated on timeout or on exceeding the
+ * page bounds. Returns null when the document cannot be rendered inside those
+ * bounds.
+ */
 export async function getPdfImage(data: ArrayBuffer) {
-  const canvasFactory = new NodeCanvasFactory();
-  const loadingTask = getDocument({
-    data,
-    cMapPacked: true,
-    isEvalSupported: false,
-    cMapUrl: path.join(pdfjsPath, `cmaps${path.sep}`),
-    standardFontDataUrl: path.join(pdfjsPath, `standard_fonts${path.sep}`),
-  });
+  const result = await renderPdfPageIsolated(
+    new Uint8Array(data),
+    {
+      timeoutMs: PREVIEW_TIMEOUT_MS,
+      maxPages: 50,
+      maxPageDimension: PREVIEW_MAX_DIMENSION,
+      maxTotalPixels: PREVIEW_MAX_PIXELS,
+      maxChars: 0,
+    },
+    {
+      page: 1,
+      scale: PREVIEW_SCALE,
+      maxDimension: PREVIEW_MAX_DIMENSION,
+      maxPixels: PREVIEW_MAX_PIXELS,
+    },
+  );
 
-  try {
-    const pdfDocument = await loadingTask.promise;
-
-    // Use page 1 for the image
-    const page = await pdfDocument.getPage(1);
-
-    const viewport = page.getViewport({ scale: 2.0 });
-
-    const canvasAndContext = canvasFactory.create(
-      viewport.width,
-      viewport.height,
-    );
-
-    const renderContext = {
-      canvasContext: canvasAndContext.context,
-      viewport,
-      canvasFactory,
-    };
-
-    // @ts-expect-error
-    const renderTask = page.render(renderContext);
-    await renderTask.promise;
-
-    // Return image as PNG buffer
-    const canvas = canvasAndContext.canvas;
-    return canvas.toBuffer("image/png");
-  } catch (error) {
-    return null;
-  }
+  if (!result.ok) return null;
+  return Buffer.from(result.result.png);
 }

@@ -31,3 +31,4 @@ export const protectedMiddleware: MiddlewareHandler[] = [
 ];
 
 export { withRequiredScope } from "./scope";
+export { withRequiredTeamRole } from "./team-role";

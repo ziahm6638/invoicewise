@@ -21,7 +21,7 @@ export async function UsersChart() {
             minimumFractionDigits: 0,
             maximumFractionDigits: 0,
             useGrouping: true,
-          }).format(users)}
+          }).format(users ?? 0)}
         </span>
       </div>
     </div>

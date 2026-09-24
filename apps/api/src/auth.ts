@@ -13,6 +13,7 @@ import {
 } from "@invoicewise/db/schema";
 import bcrypt from "bcryptjs";
 import { betterAuth } from "better-auth";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { bearer, organization } from "better-auth/plugins";
 import { eq } from "drizzle-orm";
 
@@ -31,6 +32,23 @@ const cookieDomain = process.env.BETTER_AUTH_COOKIE_DOMAIN;
 if (!authSecret) {
   throw new Error("BETTER_AUTH_SECRET is required in production");
 }
+
+/**
+ * Native organization endpoints that mutate membership, roles or invitations.
+ * They are disabled in favour of the secured workspace flows; see the `hooks`
+ * comment on the `betterAuth` options below.
+ */
+const NATIVE_MEMBERSHIP_MUTATIONS = new Set([
+  "/organization/add-member",
+  "/organization/remove-member",
+  "/organization/update-member-role",
+  "/organization/invite-member",
+  "/organization/accept-invitation",
+  "/organization/reject-invitation",
+  "/organization/cancel-invitation",
+  "/organization/leave",
+  "/organization/update",
+]);
 
 async function sendAuthEmail({
   to,
@@ -66,6 +84,26 @@ export const auth = betterAuth({
   appName: "InvoiceWise",
   baseURL,
   secret: authSecret,
+  /**
+   * The organization plugin exposes a second mutation surface for membership
+   * and invitations. Its hooks do not report the acting user for every
+   * operation (removing a member only reports the member), so rather than keep
+   * a parallel copy of the permission matrix we disable those endpoints and
+   * route all membership changes through the secured tRPC team flows, which
+   * serialize on the team row and share one permission matrix.
+   *
+   * Read endpoints and active-workspace switching stay enabled.
+   */
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (NATIVE_MEMBERSHIP_MUTATIONS.has(ctx.path)) {
+        throw new APIError("FORBIDDEN", {
+          message:
+            "Membership and invitation changes must go through the workspace API",
+        });
+      }
+    }),
+  },
   trustedOrigins: [
     baseURL,
     ...(process.env.ALLOWED_API_ORIGINS?.split(",").filter(Boolean) ?? []),
@@ -199,6 +237,12 @@ export type Session = {
     full_name?: string;
   };
   teamId: string | null;
+  /**
+   * How the caller authenticated. API keys and OAuth tokens are bound to the
+   * workspace they were issued for; only a browser session may act across the
+   * workspaces its user belongs to.
+   */
+  authType?: "session" | "api_key" | "oauth";
   oauth?: {
     applicationId: string;
     clientId?: string | null;
@@ -228,5 +272,6 @@ export async function getAuthSession(
       full_name: result.user.name,
     },
     teamId: result.session.activeOrganizationId ?? null,
+    authType: "session",
   };
 }

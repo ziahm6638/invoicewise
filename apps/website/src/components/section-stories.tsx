@@ -12,14 +12,14 @@ import {
 } from "@invoicewise/ui/dialog";
 import { Icons } from "@invoicewise/ui/icons";
 import dynamic from "next/dynamic";
-import { useRef, useState } from "react";
+import { type RefObject, useRef, useState } from "react";
 import { type Story, StoryCard } from "./story-card";
 
 const ReactHlsPlayer = dynamic(() => import("react-hls-player"), {
   ssr: false,
 });
 
-const stories = [
+const stories: Story[] = [
   {
     id: 1,
     title: "“We are now saving 1-2 man-days each month.”",
@@ -207,7 +207,9 @@ const stories = [
 ];
 
 function Video({ src }: { src: string }) {
-  const playerRef = useRef(undefined);
+  const playerRef = useRef<HTMLVideoElement>(
+    null,
+  ) as RefObject<HTMLVideoElement>;
   const [isPlaying, setPlaying] = useState(false);
 
   const togglePlay = () => {

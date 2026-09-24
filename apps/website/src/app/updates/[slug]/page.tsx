@@ -15,7 +15,9 @@ export async function generateStaticParams() {
   }));
 }
 
-export async function generateMetadata(props): Promise<Metadata | undefined> {
+export async function generateMetadata(props: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata | undefined> {
   const params = await props.params;
   const post = getBlogPosts().find((post) => post.slug === params.slug);
   if (!post) {
@@ -38,17 +40,13 @@ export async function generateMetadata(props): Promise<Metadata | undefined> {
       type: "article",
       publishedTime,
       url: `${baseUrl}/updates/${post.slug}`,
-      images: [
-        {
-          url: image,
-        },
-      ],
+      ...(image ? { images: [{ url: image }] } : {}),
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: [image],
+      ...(image ? { images: [image] } : {}),
     },
   };
 }
@@ -66,24 +64,22 @@ export default async function Page(props: {
     notFound();
   }
 
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    headline: post.metadata.title,
+    datePublished: post.metadata.publishedAt,
+    dateModified: post.metadata.publishedAt,
+    description: post.metadata.summary,
+    image: `${baseUrl}${post.metadata.image}`,
+    url: `${baseUrl}/updates/${post.slug}`,
+  };
+
   return (
     <div className="container max-w-[1140px] flex justify-center">
-      <script
-        type="application/ld+json"
-        suppressHydrationWarning
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
-            "@context": "https://schema.org",
-            "@type": "BlogPosting",
-            headline: post.metadata.title,
-            datePublished: post.metadata.publishedAt,
-            dateModified: post.metadata.publishedAt,
-            description: post.metadata.summary,
-            image: `${baseUrl}${post.metadata.image}`,
-            url: `${baseUrl}/updates/${post.slug}`,
-          }),
-        }}
-      />
+      <script type="application/ld+json" suppressHydrationWarning>
+        {JSON.stringify(jsonLd)}
+      </script>
 
       <article className="max-w-[680px] pt-[80px] md:pt-[150px] w-full">
         <PostStatus status={post.metadata.tag} />

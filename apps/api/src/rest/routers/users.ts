@@ -3,11 +3,8 @@ import type { Context } from "@api/rest/types";
 import { updateUserSchema, userSchema } from "@api/schemas/users";
 import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
-import {
-  getUserById,
-  hasTeamAccess,
-  updateUser,
-} from "@invoicewise/db/queries";
+import { primaryDb } from "@invoicewise/db/client";
+import { getTeamRole, getUserById, updateUser } from "@invoicewise/db/queries";
 import { HTTPException } from "hono/http-exception";
 import { withRequiredScope } from "../middleware";
 
@@ -79,14 +76,22 @@ app.openapi(
     const session = c.get("session");
     const body = c.req.valid("json");
 
-    if (
-      body.teamId &&
-      !(await hasTeamAccess(db, body.teamId, session.user.id))
-    ) {
-      throw new HTTPException(403, { message: "Team not found" });
-    }
-
     if (body.teamId) {
+      // Switching the active workspace is a browser-session action. A
+      // credential stays bound to the workspace it was issued for.
+      if ((session.authType ?? "session") !== "session") {
+        throw new HTTPException(403, {
+          message: "Credentials cannot switch the active workspace",
+        });
+      }
+
+      // Fresh primary read rather than a replica-eligible membership lookup.
+      const role = await getTeamRole(primaryDb, body.teamId, session.user.id);
+
+      if (!role) {
+        throw new HTTPException(403, { message: "Team not found" });
+      }
+
       await auth.api.setActiveOrganization({
         body: { organizationId: body.teamId },
         headers: c.req.raw.headers,

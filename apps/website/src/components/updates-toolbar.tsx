@@ -21,7 +21,17 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { FaXTwitter } from "react-icons/fa6";
 import { CopyInput } from "./copy-input";
 
-const popupCenter = ({ url, title, w, h }) => {
+const popupCenter = ({
+  url,
+  title,
+  w,
+  h,
+}: {
+  url: string;
+  title: string;
+  w: number;
+  h: number;
+}) => {
   const dualScreenLeft =
     window.screenLeft !== undefined ? window.screenLeft : window.screenX;
   const dualScreenTop =
@@ -56,20 +66,24 @@ const popupCenter = ({ url, title, w, h }) => {
   return newWindow;
 };
 
-export function UpdatesToolbar({ posts }) {
-  const pathname = usePathname();
-  const currentIndex = posts.findIndex((a) => pathname.endsWith(a.slug)) ?? 0;
+type Post = { slug: string; title?: string };
 
-  const currentPost = posts[currentIndex];
+export function UpdatesToolbar({ posts }: { posts: Post[] }) {
+  const pathname = usePathname();
+  const currentIndex = posts.findIndex((post) => pathname.endsWith(post.slug));
+
+  const currentPost = currentIndex >= 0 ? posts[currentIndex] : undefined;
 
   const handlePrev = () => {
     if (currentIndex > 0) {
       const nextPost = posts[currentIndex - 1];
 
-      const element = document.getElementById(nextPost?.slug);
-      element?.scrollIntoView({
-        behavior: "smooth",
-      });
+      const slug = nextPost?.slug;
+      if (slug) {
+        document.getElementById(slug)?.scrollIntoView({
+          behavior: "smooth",
+        });
+      }
     }
   };
 
@@ -77,11 +91,12 @@ export function UpdatesToolbar({ posts }) {
     if (currentIndex !== posts.length - 1) {
       const nextPost = posts[currentIndex + 1];
 
-      const element = document.getElementById(nextPost?.slug);
-
-      element?.scrollIntoView({
-        behavior: "smooth",
-      });
+      const slug = nextPost?.slug;
+      if (slug) {
+        document.getElementById(slug)?.scrollIntoView({
+          behavior: "smooth",
+        });
+      }
     }
   };
 
@@ -89,9 +104,11 @@ export function UpdatesToolbar({ posts }) {
   useHotkeys("arrowLeft", () => handlePrev(), [handlePrev]);
 
   const handleOnShare = () => {
+    if (!currentPost) return;
+    const title = currentPost.title ?? currentPost.slug;
     const popup = popupCenter({
-      url: `https://twitter.com/intent/tweet?text=${currentPost.title} https://midday.ai/updates/${currentPost.slug}`,
-      title: currentPost.title,
+      url: `https://twitter.com/intent/tweet?text=${title} https://midday.ai/updates/${currentPost.slug}`,
+      title,
       w: 800,
       h: 400,
     });

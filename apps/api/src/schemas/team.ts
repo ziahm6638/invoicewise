@@ -165,9 +165,9 @@ export const updateTeamMemberSchema = z.object({
     description: "Unique identifier of the user whose role to update",
     example: "456e7890-f12a-34b5-c678-901234567890",
   }),
-  role: z.enum(["owner", "member"]).openapi({
+  role: z.enum(["owner", "admin", "member"]).openapi({
     description:
-      "New role for the team member. 'owner' has full permissions, 'member' has limited permissions",
+      "New role for the team member. 'owner' controls ownership, deletion and billing, 'admin' manages members, questions and integrations, 'member' uses invoice features",
     example: "member",
   }),
 });
@@ -179,9 +179,9 @@ export const inviteTeamMembersSchema = z
         description: "Email address of the person to invite",
         example: "john.doe@acme.com",
       }),
-      role: z.enum(["owner", "member"]).openapi({
+      role: z.enum(["owner", "admin", "member"]).openapi({
         description:
-          "Role to assign to the invited member. 'owner' has full permissions, 'member' has limited permissions",
+          "Role to assign to the invited member. Only an owner may invite an owner; admins cannot invite owners",
         example: "member",
       }),
     }),
@@ -206,9 +206,9 @@ export const teamMemberResponseSchema = z.object({
     description: "Unique identifier of the user",
     example: "123e4567-e89b-12d3-a456-426614174000",
   }),
-  role: z.enum(["owner", "member"]).openapi({
+  role: z.enum(["owner", "admin", "member"]).openapi({
     description:
-      "Role of the team member. 'owner' has full permissions, 'member' has limited permissions",
+      "Role of the team member. 'owner' controls ownership, deletion and billing, 'admin' manages members, questions and integrations, 'member' uses invoice features",
     example: "owner",
   }),
   fullName: z.string().openapi({

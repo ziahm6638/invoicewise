@@ -5,17 +5,19 @@ import {
   createUserQuestion,
   deleteUserQuestion,
   getInboxByFilePath,
+  getInboxIntakeBinding,
   getUserQuestions,
   getWorkflowJob,
   updateInboxWithProcessedData,
   updateUserQuestion,
 } from "@invoicewise/db/queries";
-import { inbox, teams, users } from "@invoicewise/db/schema";
+import { inbox, teams, users, workflowJobs } from "@invoicewise/db/schema";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
 import type { InvoiceExtraction } from "@invoicewise/documents";
 import { eq } from "drizzle-orm";
 import { Effect, Logger } from "effect";
 import { enqueueWorkflow, workflowKey } from "./client";
+import { acceptIntakeUpload } from "./intake";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
 
 const required = (name: string) => {
@@ -173,7 +175,7 @@ async function main() {
   process.env.TYPESAFE_BASE_URL = `http://127.0.0.1:${typeSafeStub.port}`;
   let teamId: string | undefined;
   let userId: string | undefined;
-  const filePath = ["verification", suffix, "synthetic-invoice.pdf"];
+  const legacyLeftoverPath = ["verification", suffix, "synthetic-invoice.pdf"];
   try {
     const [team] = await database.db
       .insert(teams)
@@ -280,18 +282,33 @@ async function main() {
       status: "pending",
     });
 
-    const input = {
-      name: "process-attachment" as const,
+    // Intake owns object identity: reserve, store immutably, validate, then
+    // queue. The verifier never invents a storage path.
+    const accepted = await acceptIntakeUpload(database.db, storage, {
       teamId,
-      idempotencyKey: workflowKey.attachment(teamId, filePath),
-      payload: {
-        filePath,
-        size: bytes.length,
-        mimetype: "application/pdf",
-        teamId,
-      },
-    };
-    const enqueued = await enqueueWorkflow(database.db, input);
+      bytes,
+      declaredMimeType: "application/pdf",
+      fileName: "synthetic-invoice.pdf",
+    });
+    if (accepted.status !== "accepted") {
+      throw new Error(`Intake validation failed: ${accepted.message}`);
+    }
+    const filePath = accepted.filePath;
+    const [enqueued] = await database.db
+      .select()
+      .from(workflowJobs)
+      .where(
+        eq(
+          workflowJobs.idempotencyKey,
+          workflowKey.attachment(teamId, accepted.inboxId),
+        ),
+      )
+      .limit(1);
+    if (!enqueued) throw new Error("Intake did not queue processing");
+
+    // Lose the stored object and prove the worker retries rather than
+    // silently succeeding or inventing a record.
+    await storage.remove({ bucket: "vault", path: filePath });
 
     await runBatch();
     const afterFailure = await getWorkflowJob(database.db, {
@@ -314,7 +331,10 @@ async function main() {
       id: enqueued.id,
       teamId,
     });
-    const invoice = await getInboxByFilePath(database.db, { filePath, teamId });
+    const invoice = await getInboxIntakeBinding(database.db, {
+      id: accepted.inboxId,
+      teamId,
+    });
     const [persisted] = invoice
       ? await database.db
           .select()
@@ -322,7 +342,20 @@ async function main() {
           .where(eq(inbox.id, invoice.id))
           .limit(1)
       : [];
-    const repeated = await enqueueWorkflow(database.db, input);
+    // Replaying the accepted bytes is idempotent and never stores a second
+    // object or second processing intent.
+    const repeatedIntake = await acceptIntakeUpload(database.db, storage, {
+      teamId,
+      bytes,
+      declaredMimeType: "application/pdf",
+      fileName: "synthetic-invoice.pdf",
+    });
+    const repeated = await enqueueWorkflow(database.db, {
+      name: "process-attachment",
+      teamId,
+      idempotencyKey: workflowKey.attachment(teamId, accepted.inboxId),
+      payload: { inboxId: accepted.inboxId, teamId },
+    });
     const judgments = persisted?.judgments ?? [];
     const defaultJudgments = judgments.filter(
       (judgment) => judgment.source === "default",
@@ -344,6 +377,9 @@ async function main() {
       defaultJudgments.length !== 4 ||
       !approvalJudgment ||
       !failedJudgment ||
+      repeatedIntake.status !== "accepted" ||
+      !repeatedIntake.deduplicated ||
+      repeatedIntake.inboxId !== accepted.inboxId ||
       !repeated.deduplicated ||
       repeated.id !== enqueued.id
     ) {
@@ -360,11 +396,25 @@ async function main() {
         defaultJudgmentCount: defaultJudgments.length,
         configuredJudgmentAnswered: true,
         configuredJudgmentFailed: true,
+        replayDeduplicated: repeatedIntake.deduplicated,
         idempotentRepeat: repeated.deduplicated,
       }),
     );
   } finally {
-    await storage.remove({ bucket: "vault", path: filePath });
+    await storage.remove({ bucket: "vault", path: legacyLeftoverPath });
+    if (teamId) {
+      const cleanup = await database.db
+        .select({ filePath: inbox.filePath })
+        .from(inbox)
+        .where(eq(inbox.teamId, teamId));
+      for (const row of cleanup) {
+        if (row.filePath?.length) {
+          await storage
+            .remove({ bucket: "vault", path: row.filePath })
+            .catch(() => undefined);
+        }
+      }
+    }
     if (teamId) await database.db.delete(teams).where(eq(teams.id, teamId));
     if (userId) await database.db.delete(users).where(eq(users.id, userId));
     typeSafeStub.stop(true);

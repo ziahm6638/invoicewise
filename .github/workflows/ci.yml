@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Runs the same authoritative command a developer runs locally:
+  # `bun run verify`. It installs from the frozen lockfile, gates lint,
+  # typecheck and the workspace unit suites plus the verifier negative
+  # controls, proves fresh/upgrade/recovery migrations from the pinned prior
+  # schema, builds the dashboard, website, API executable and worker
+  # executable, and drives the two-tenant production-entrypoint smoke with a
+  # loopback provider trap and no application `.env`.
+  verify:
+    name: verify (frozen install, migrations, builds, e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun 1.3.13
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      # The pinned MinIO image's default command only prints help, so the
+      # disposable services are started with explicit server commands. The
+      # verification runner then creates the private bucket through the S3 API;
+      # no `mc` container and no compose volume is involved.
+      - name: Prove the service bootstrap refuses unowned containers
+        run: bash scripts/verify/ci-services.sh --self-check
+
+      - name: Start disposable Postgres 17, Redis and MinIO
+        run: bash scripts/verify/ci-services.sh
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify release
+        run: bun run verify
+
+      - name: Upload redacted failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-evidence
+          path: .verify-artifacts
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Dependency and secret checks also run as their own job so their result is
+  # visible separately from the build (the full `verify` run includes them too). The policy, owner and outstanding advisory inventory
+  # are documented in docs/development.md; new high/critical advisories fail the
+  # job.
+  security:
+    name: security (dependency + secret checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun 1.3.13
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Dependency and secret checks
+        run: bun run verify:security
+
+      - name: Review dependency changes in this pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+      - name: Upload redacted failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-evidence
+          path: .verify-artifacts
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: warn

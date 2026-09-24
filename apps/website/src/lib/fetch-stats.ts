@@ -2,40 +2,33 @@
 
 import type { Database } from "@invoicewise/supabase/types";
 import { createServerClient } from "@supabase/ssr";
+import { emptyStats, isStatsConfigured } from "./stats-config";
 
 export async function fetchStats() {
+  if (!isStatsConfigured()) {
+    return emptyStats;
+  }
+
   const supabase = createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_KEY!,
     {
       cookies: {
-        get() {
-          return null;
-        },
-        set() {
-          return null;
-        },
-        remove() {
-          return null;
-        },
+        getAll: () => [],
+        setAll: () => {},
       },
     },
   );
 
-  const supabaseStorage = createServerClient<Database>(
+  // The storage schema is not part of the generated public Database type, so
+  // this read stays on the untyped client.
+  const supabaseStorage = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_KEY!,
     {
       cookies: {
-        get() {
-          return null;
-        },
-        set() {
-          return null;
-        },
-        remove() {
-          return null;
-        },
+        getAll: () => [],
+        setAll: () => {},
       },
       db: { schema: "storage" },
     },
