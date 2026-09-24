@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { Effect, Layer } from "effect";
 import sharp from "sharp";
 import { renderPdfPageIsolated } from "../isolated";
+import { layoutRuns } from "../layout";
 import {
   TypeSafe,
   type TypeSafeAnswer,
@@ -14,6 +15,7 @@ import {
 import {
   type InvoiceExtraction,
   type InvoiceJudgmentQuestion,
+  extractInvoiceLines,
   extractInvoiceText,
   judgeInvoice,
   processInvoice,
@@ -342,6 +344,68 @@ describe("invoice extraction from real PDFs", () => {
 });
 
 describe("TypeSafe invoice extraction", () => {
+  test("reads a right-column supplier block as a column, not merged with the customer's rows", async () => {
+    // The supplier block sits right of the "Invoice to" block, so the VAT
+    // line shares its baseline with the customer's street.
+    const run = (x: number, y: number, text: string) => ({
+      x,
+      y,
+      width: text.length * 5,
+      height: 10,
+      text,
+    });
+    const lines = layoutRuns([
+      run(50, 39, "TAX INVOICE"),
+      run(320, 39, "Pennine Plumbing & Heating Ltd"),
+      run(320, 61, "14 Mill Lane"),
+      run(320, 74, "Hebden Bridge"),
+      run(50, 87, "Invoice to:"),
+      run(320, 87, "West Yorkshire"),
+      run(50, 100, "Calder Property Group"),
+      run(320, 100, "HX7 8AD"),
+      run(50, 113, "5 Market Street"),
+      run(320, 113, "VAT No. GB 612 7788 03"),
+      run(50, 127, "Halifax HX1 1PB"),
+      run(50, 157, "Invoice #"),
+      run(150, 157, "PPH-0931"),
+    ]);
+    const requests: Request[] = [];
+    const extraction = await Effect.runPromise(
+      extractInvoiceLines(lines).pipe(
+        Effect.provide(
+          oracle(
+            {
+              supplier_vat_number: "GB612778803",
+              invoice_number: "PPH-0931",
+            },
+            requests,
+          ),
+        ),
+      ),
+    );
+
+    expect(extraction.supplierVatNumber).toBe("GB612778803");
+    // TypeSafe reads each side-by-side block as its own column, and the VAT
+    // candidate's row is its own column's text, not the customer's street.
+    const request = requests.find(
+      (entry) => entry.questions.supplier_vat_number,
+    )!;
+    expect((request.state as { invoice: string }).invoice).toContain(
+      [
+        "L000| Pennine Plumbing & Heating Ltd",
+        "L001| 14 Mill Lane",
+        "L002| Hebden Bridge",
+        "L003| West Yorkshire",
+        "L004| HX7 8AD",
+        "L005| VAT No. GB 612 7788 03",
+      ].join("\n"),
+    );
+    expect(
+      (request.questions.supplier_vat_number!.criteria as Record<string, any>)
+        .vat_0.row,
+    ).toBe("L005: VAT No. GB 612 7788 03");
+  });
+
   test("copies selected candidates into the structured invoice", async () => {
     const result = await Effect.runPromise(
       extractInvoiceText(invoiceText, "InvoiceWise Ltd").pipe(

@@ -18,6 +18,8 @@ export type Candidate<T> = {
   line: number;
   /** Text immediately labelling the value: to its left on the row, or above it. */
   label?: string | null;
+  /** Horizontal extent of the label and value on the row, when known. */
+  span?: { x: number; xEnd: number };
 };
 
 type Found<T> = Omit<Candidate<T>, "id">;
@@ -46,8 +48,27 @@ export const withIds = <T>(
   return out;
 };
 
-const overlaps = (a: LineSegment, b: LineSegment) =>
+type Extent = { x: number; xEnd: number };
+
+const overlaps = (a: Extent, b: Extent) =>
   Math.min(a.xEnd, b.xEnd) - Math.max(a.x, b.x) > 0;
+
+/**
+ * The candidate's printed row. A row that runs across columns (a customer
+ * block beside the supplier block) is narrowed to the candidate's own column,
+ * so a value is not read with whatever shares its baseline.
+ */
+export const candidateRow = (
+  lines: readonly DocumentLine[],
+  candidate: Pick<Candidate<unknown>, "line" | "span">,
+): string => {
+  const line = lines[candidate.line]!;
+  const { span } = candidate;
+  const own = span
+    ? line.segments.filter((segment) => overlaps(segment, span))
+    : [];
+  return own.length > 0 ? own.map((segment) => segment.text).join("  ") : line.text;
+};
 
 /** The segment directly below `segment`, within the next two rows. */
 const segmentBelow = (
@@ -117,20 +138,35 @@ export const labeledValues = (
       const rest = segment.text.slice(match.index + match[0].length);
       const inline = take(rest);
       if (inline) {
-        found.push({ value: inline, line: index, label: labelText });
+        found.push({
+          value: inline,
+          line: index,
+          label: labelText,
+          span: { x: segment.x, xEnd: segment.xEnd },
+        });
         return;
       }
       if (clean(rest)) return;
       const next = line.segments[position + 1];
       const beside = next ? take(next.text) : null;
-      if (beside) {
-        found.push({ value: beside, line: index, label: labelText });
+      if (next && beside) {
+        found.push({
+          value: beside,
+          line: index,
+          label: labelText,
+          span: { x: segment.x, xEnd: next.xEnd },
+        });
         return;
       }
       const below = segmentBelow(lines, index, segment);
       const stacked = below ? take(below.segment.text) : null;
       if (below && stacked) {
-        found.push({ value: stacked, line: below.line, label: labelText });
+        found.push({
+          value: stacked,
+          line: below.line,
+          label: labelText,
+          span: { x: below.segment.x, xEnd: below.segment.xEnd },
+        });
       }
     });
   });
@@ -155,6 +191,7 @@ export const patternValues = (
           value: clean(match[0]),
           line: index,
           label: labelFor(lines, index, segment, within),
+          span: { x: segment.x, xEnd: segment.xEnd },
         });
       }
     }

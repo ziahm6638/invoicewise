@@ -167,3 +167,91 @@ export const readableCharacters = (value: string) =>
 
 export const documentPlainText = (lines: readonly DocumentLine[]) =>
   lines.map((line) => line.text).join("\n");
+
+/** A printed row, or the part of it in one column, in reading order. */
+export type ReadingRow = { line: number; text: string };
+
+const WORDY = /\p{L}{2,}/u;
+
+/**
+ * Splits two blocks printed side by side (a supplier header beside a customer
+ * address) at a clear vertical gutter.
+ */
+const splitColumns = (
+  lines: readonly DocumentLine[],
+  indices: number[],
+): ReadingRow[] | null => {
+  const extents = indices
+    .flatMap((index) => lines[index]!.segments)
+    .map((segment) => ({ x: segment.x, xEnd: segment.xEnd }))
+    .sort((a, b) => a.x - b.x);
+  let gutter: { x: number; width: number } | null = null;
+  let reach = extents[0]!.xEnd;
+  for (const extent of extents.slice(1)) {
+    const width = extent.x - reach;
+    if (width > 0 && (!gutter || width > gutter.width)) {
+      gutter = { x: extent.x, width };
+    }
+    reach = Math.max(reach, extent.xEnd);
+  }
+  if (!gutter) return null;
+  const at = gutter.x;
+  const sides = indices.map((index) => {
+    const segments = lines[index]!.segments;
+    return {
+      index,
+      left: segments.filter((segment) => segment.x < at),
+      right: segments.filter((segment) => segment.x >= at),
+    };
+  });
+  const rights = sides.filter((side) => side.right.length > 0);
+  const wordyRights = rights.filter((side) =>
+    side.right.some((segment) => WORDY.test(segment.text)),
+  );
+  // Independent blocks each have rows the other lacks; a table or a
+  // label/value list fills its right side on every row, mostly with numbers.
+  const independent =
+    sides.some((side) => side.left.length === 0) &&
+    sides.some((side) => side.right.length === 0) &&
+    wordyRights.length * 2 > rights.length;
+  if (!independent) return null;
+  const rows = (side: "left" | "right") =>
+    sides
+      .filter((entry) => entry[side].length > 0)
+      .map((entry) => ({
+        line: entry.index,
+        text: joinSegments(entry[side]),
+      }));
+  return [...rows("left"), ...rows("right")];
+};
+
+/**
+ * Document rows in reading order: row by row, except that blocks printed side
+ * by side are read one column at a time, so a supplier's details are not
+ * interleaved with the customer's address beside them.
+ */
+export function readingRows(lines: readonly DocumentLine[]): ReadingRow[] {
+  const out: ReadingRow[] = [];
+  let region: number[] = [];
+  const flush = () => {
+    const split = region.length > 1 ? splitColumns(lines, region) : null;
+    out.push(
+      ...(split ??
+        region.map((index) => ({ line: index, text: lines[index]!.text }))),
+    );
+    region = [];
+  };
+  lines.forEach((line, index) => {
+    const previous = lines[index - 1];
+    if (
+      previous &&
+      (previous.page !== line.page ||
+        line.top - previous.top > Math.max(previous.height, line.height) * 2.5)
+    ) {
+      flush();
+    }
+    region.push(index);
+  });
+  flush();
+  return out;
+}

@@ -15,6 +15,7 @@ import {
   documentPlainText,
   linesFromPlainText,
   readableCharacters,
+  readingRows,
 } from "../layout";
 import type { GetDocumentRequest } from "../types";
 import {
@@ -24,6 +25,7 @@ import {
   addressCandidates,
   amountCandidates,
   bicCandidates,
+  candidateRow,
   currencyCandidates,
   dateCandidates,
   descriptionCandidates,
@@ -394,8 +396,8 @@ const lineId = (index: number) => `L${String(index).padStart(3, "0")}`;
 const taggedDocument = (lines: readonly DocumentLine[], maxChars: number) => {
   const out: string[] = [];
   let size = 0;
-  for (const [index, line] of lines.entries()) {
-    const row = `${lineId(index)}| ${line.text}`;
+  for (const { line, text } of readingRows(lines)) {
+    const row = `${lineId(line)}| ${text}`;
     if (size + row.length + 1 > maxChars) break;
     out.push(row);
     size += row.length + 1;
@@ -423,7 +425,7 @@ const choiceQuestion = <T>(
               ...(candidate.label ? { label: candidate.label } : {}),
               ...(lines[candidate.line]
                 ? {
-                    row: `${lineId(candidate.line)}: ${lines[candidate.line]!.text.slice(0, 160)}`,
+                    row: `${lineId(candidate.line)}: ${candidateRow(lines, candidate).slice(0, 160)}`,
                   }
                 : {}),
             },
