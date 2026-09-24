@@ -1,22 +1,59 @@
 import { Effect } from "effect";
-import { extractPdfTextIsolated } from "../isolated";
+import {
+  type IsolatedPdfFailureCode,
+  type IsolatedPdfLimits,
+  extractPdfTextIsolated,
+  ocrImageIsolated,
+  renderPdfPageIsolated,
+} from "../isolated";
+import {
+  type DocumentLine,
+  type DocumentPageSource,
+  type DocumentText,
+  documentPlainText,
+  linesFromPlainText,
+  readableCharacters,
+} from "../layout";
 import type { GetDocumentRequest } from "../types";
+import {
+  type Candidate,
+  accountNameCandidates,
+  accountNumberCandidates,
+  addressCandidates,
+  amountCandidates,
+  bicCandidates,
+  currencyCandidates,
+  dateCandidates,
+  descriptionCandidates,
+  ibanCandidates,
+  ibanChecksumValid,
+  invoiceNumberCandidates,
+  purchaseOrderCandidates,
+  sortCodeCandidates,
+  supplierNameCandidates,
+  vatNumberCandidates,
+} from "./candidates";
 import {
   TypeSafe,
   type TypeSafeAnswer,
   TypeSafeError,
   type TypeSafeQuestion,
 } from "./client";
+import { addDays } from "./dates";
+import {
+  type InvoiceLineItem,
+  type LineItemRow,
+  lineItemRows,
+} from "./line-items";
 
-export type InvoiceLineItem = {
-  description: string | null;
-  quantity: number | null;
-  unitPrice: number | null;
-  total: number | null;
-};
+export type { InvoiceLineItem } from "./line-items";
+
+/** How the invoice text was obtained. */
+export type InvoiceTextSource = "text-layer" | "ocr" | "mixed" | "text";
 
 export type InvoiceExtraction = {
   supplierName: string | null;
+  supplierAddress: string | null;
   supplierVatNumber: string | null;
   invoiceNumber: string | null;
   invoiceDate: string | null;
@@ -35,6 +72,7 @@ export type InvoiceExtraction = {
   };
   description: string | null;
   purchaseOrderReference: string | null;
+  textSource: InvoiceTextSource;
 };
 
 export type InvoiceJudgmentQuestion =
@@ -98,6 +136,12 @@ export type InvoiceJudgment =
       confidence: number;
     })
   | (InvoiceJudgmentDetails & {
+      /** The check has nothing to evaluate yet, e.g. no earlier invoices to compare with. */
+      status: "not_applicable";
+      type: InvoiceJudgmentQuestion["type"];
+      reason: string;
+    })
+  | (InvoiceJudgmentDetails & {
       status: "failed";
       type: InvoiceJudgmentQuestion["type"];
       error: string;
@@ -113,14 +157,14 @@ export type ProcessedInvoice = {
   judgments: InvoiceJudgment[];
 };
 
-type Candidate<T> = {
-  id: string;
-  value: T;
-  source: string;
-};
-
 const ABSENT = "absent";
-const MAX_TEXT_LENGTH = 60_000;
+/** Rows sent to TypeSafe; a long document keeps its first rows. */
+const MAX_LINES = 400;
+/** Document text in `state`, well inside the model's 32k-token state budget. */
+const MAX_STATE_CHARS = 40_000;
+/** Document text given to judgments alongside the structured extraction. */
+const MAX_JUDGMENT_TEXT_CHARS = 16_000;
+const MAX_LINE_ITEM_QUESTIONS = 120;
 
 /** Bounds for the isolated PDF text extraction used by the invoice pipeline. */
 const PDF_TEXT_LIMITS = {
@@ -130,6 +174,21 @@ const PDF_TEXT_LIMITS = {
   maxTotalPixels: 100_000_000,
   maxChars: 400_000,
 } as const;
+
+/** A page with fewer letters and digits than this has no usable text layer. */
+const MIN_PAGE_TEXT = 40;
+/** Scanned pages OCR'd per document; later pages keep whatever text they had. */
+const MAX_OCR_PAGES = 10;
+/** Rendering resolution for OCR; tesseract is most accurate around 300 DPI. */
+const OCR_DPI = 300;
+const OCR_LIMITS: IsolatedPdfLimits = {
+  timeoutMs: 60_000,
+  maxPages: PDF_TEXT_LIMITS.maxPages,
+  maxPageDimension: 5_000,
+  maxTotalPixels: 15_000_000,
+  maxChars: PDF_TEXT_LIMITS.maxChars,
+  maxProcessRssBytes: 640 * 1024 * 1024,
+};
 
 export const DEFAULT_INVOICE_JUDGMENTS: readonly InvoiceJudgmentQuestion[] = [
   {
@@ -151,7 +210,7 @@ export const DEFAULT_INVOICE_JUDGMENTS: readonly InvoiceJudgmentQuestion[] = [
       "Is the VAT calculation on `currentInvoice` arithmetically correct, so net amount plus VAT amount equals gross amount?",
     criteria: {
       yes: "The stated amounts reconcile, allowing normal currency rounding.",
-      no: "The amounts are missing or do not reconcile.",
+      no: "The amounts do not reconcile.",
     },
   },
   {
@@ -173,191 +232,160 @@ export const DEFAULT_INVOICE_JUDGMENTS: readonly InvoiceJudgmentQuestion[] = [
       "Are `currentInvoice.bankDetails` consistent with bank details on previous invoices from the same supplier?",
     criteria: {
       yes: "The material bank identifiers match a previous invoice from this supplier.",
-      no: "They differ, are absent, or there is no prior bank detail for this supplier to compare.",
+      no: "They differ from the bank details on a previous invoice from this supplier.",
     },
   },
 ];
 
-const cleanLines = (text: string) =>
-  text
-    .replaceAll("\u0000", "")
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .slice(0, 250);
+// --- Reading the document ------------------------------------------------------
 
-const unique = <T>(candidates: Candidate<T>[]) => {
-  const seen = new Set<string>();
-  return candidates.filter((candidate) => {
-    const key = JSON.stringify(candidate.value);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-};
+const readError = (reason: string, retryable: boolean) =>
+  new TypeSafeError({ reason, retryable });
 
-const fromLabels = (
-  lines: string[],
-  patterns: readonly RegExp[],
-  prefix: string,
-): Candidate<string>[] => {
-  const found: Candidate<string>[] = [];
-  for (const line of lines) {
-    for (const pattern of patterns) {
-      const match = pattern.exec(line);
-      const value = match?.[1]?.trim();
-      if (value) {
-        found.push({ id: `${prefix}_${found.length}`, value, source: line });
-        break;
-      }
-    }
-  }
-  return unique(found);
-};
+const RETRYABLE_READ_FAILURES: readonly IsolatedPdfFailureCode[] = [
+  "busy",
+  "monitor_unavailable",
+  "task_failed",
+];
 
-const DATE_PATTERN =
-  /\b(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4})\b/gi;
+const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg"]);
 
-const dateCandidates = (lines: string[]): Candidate<string>[] => {
-  const found: Candidate<string>[] = [];
-  for (const line of lines) {
-    for (const match of line.matchAll(DATE_PATTERN)) {
-      found.push({
-        id: `date_${found.length}`,
-        value: match[0],
-        source: line,
+const fetchDocument = (documentUrl: string) =>
+  Effect.tryPromise({
+    try: async () => {
+      const response = await fetch(documentUrl, {
+        signal: AbortSignal.timeout(30_000),
       });
-    }
-  }
-  return unique(found);
-};
-
-const MONEY_PATTERN =
-  /(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF|£|€|\$)\s*-?\d[\d.,]*|\b-?\d[\d.,]*\s*(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\b/gi;
-
-const parseMoney = (raw: string): number | null => {
-  const cleaned = raw.replace(/[^\d,.-]/g, "");
-  if (!cleaned) return null;
-  const comma = cleaned.lastIndexOf(",");
-  const dot = cleaned.lastIndexOf(".");
-  let normalized = cleaned;
-  if (comma >= 0 && dot >= 0) {
-    const decimal = comma > dot ? "," : ".";
-    normalized = cleaned
-      .replace(decimal === "," ? /\./g : /,/g, "")
-      .replace(decimal, ".");
-  } else if (comma >= 0) {
-    normalized = /,\d{2}$/.test(cleaned)
-      ? cleaned.replace(",", ".")
-      : cleaned.replace(/,/g, "");
-  }
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : null;
-};
-
-const amountCandidates = (lines: string[]): Candidate<number>[] => {
-  const found: Candidate<number>[] = [];
-  for (const line of lines) {
-    for (const match of line.matchAll(MONEY_PATTERN)) {
-      const value = parseMoney(match[0]);
-      if (value !== null) {
-        found.push({
-          id: `amount_${found.length}`,
-          value,
-          source: line,
-        });
+      if (!response.ok) {
+        throw new Error(`Unable to fetch the document (${response.status})`);
       }
-    }
-  }
-  return unique(found);
-};
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    catch: (error) =>
+      readError(
+        error instanceof Error ? error.message : "Unable to fetch the document",
+        true,
+      ),
+  });
 
-const currencyCandidates = (text: string): Candidate<string>[] => {
-  const currencies = new Set<string>();
-  for (const match of text.matchAll(
-    /\b(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\b/g,
-  )) {
-    currencies.add(match[0]);
-  }
-  if (text.includes("£")) currencies.add("GBP");
-  if (text.includes("€")) currencies.add("EUR");
-  if (text.includes("$") && currencies.size === 0) currencies.add("USD");
-  return [...currencies].map((value, index) => ({
-    id: `currency_${index}`,
-    value,
-    source: `Currency marker in the invoice resolves to ${value}`,
-  }));
-};
+const ocrScale = (width: number, height: number) =>
+  Math.min(
+    OCR_DPI / 72,
+    OCR_LIMITS.maxPageDimension / Math.max(width, height, 1),
+    Math.sqrt(OCR_LIMITS.maxTotalPixels / Math.max(width * height, 1)),
+  );
 
-const supplierCandidates = (lines: string[]): Candidate<string>[] =>
-  lines
-    .slice(0, 40)
-    .filter(
-      (line) =>
-        /[A-Za-z]{2}/.test(line) &&
-        line.length <= 100 &&
-        !/^(invoice|bill to|ship to|date|due|vat|tax|subtotal|total|description|quantity|qty|unit|price|purchase order|po\b)/i.test(
-          line,
+const ocrImage = (image: Uint8Array, page: number) =>
+  Effect.promise(() => ocrImageIsolated(image, OCR_LIMITS, { page })).pipe(
+    Effect.flatMap((result) =>
+      result.ok
+        ? Effect.succeed(result.result.lines)
+        : Effect.fail(
+            readError(
+              `OCR failed (${result.code}): ${result.message}`,
+              RETRYABLE_READ_FAILURES.includes(result.code),
+            ),
+          ),
+    ),
+  );
+
+/**
+ * Reads the text of a PDF page by page: the text layer where a page has one,
+ * OCR of the rendered page where it does not (a scan or an image-only export).
+ */
+const readPdf = (bytes: Uint8Array) =>
+  Effect.gen(function* () {
+    // Text extraction runs in a killable process with explicit output
+    // bounds: pdf.js cannot be interrupted on this thread in Node/Bun, and a
+    // hostile PDF must not pin the extraction process.
+    const extracted = yield* Effect.promise(() =>
+      extractPdfTextIsolated(bytes, PDF_TEXT_LIMITS),
+    );
+    if (!extracted.ok) {
+      return yield* Effect.fail(
+        readError(
+          `PDF text extraction failed (${extracted.code}): ${extracted.message}`,
+          RETRYABLE_READ_FAILURES.includes(extracted.code),
         ),
-    )
-    .map((value, index) => ({
-      id: `supplier_${index}`,
-      value,
-      source: value,
-    }));
-
-const normalizeDate = (raw: string | null): string | null => {
-  if (!raw) return null;
-  const iso = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(raw);
-  if (iso) {
-    return `${iso[1]}-${iso[2]!.padStart(2, "0")}-${iso[3]!.padStart(2, "0")}`;
-  }
-  const local = /^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})$/.exec(raw);
-  if (local) {
-    const year = local[3]!.length === 2 ? `20${local[3]}` : local[3]!;
-    return `${year}-${local[2]!.padStart(2, "0")}-${local[1]!.padStart(2, "0")}`;
-  }
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime())
-    ? null
-    : parsed.toISOString().slice(0, 10);
-};
-
-const lineItemCandidates = (lines: string[]): Candidate<InvoiceLineItem>[] => {
-  const items: Candidate<InvoiceLineItem>[] = [];
-  for (const line of lines) {
-    if (
-      /\b(subtotal|net total|vat|tax|gross|amount due|total due|total)\b/i.test(
-        line,
-      )
-    ) {
-      continue;
-    }
-    const piped =
-      /^(.+?)\s*\|\s*(\d+(?:\.\d+)?)\s*\|\s*((?:[A-Z]{3}|[£€$])?\s*\d[\d.,]*)\s*\|\s*((?:[A-Z]{3}|[£€$])?\s*\d[\d.,]*)$/i.exec(
-        line,
       );
-    if (!piped) continue;
-    const unitPrice = parseMoney(piped[3]!);
-    const total = parseMoney(piped[4]!);
-    if (unitPrice === null || total === null) continue;
-    items.push({
-      id: `line_item_${items.length}`,
-      value: {
-        description: piped[1]!.trim() || null,
-        quantity: Number(piped[2]),
-        unitPrice,
-        total,
-      },
-      source: line,
-    });
+    }
+    const lines: DocumentLine[] = [];
+    const pageSources: DocumentPageSource[] = [];
+    let ocrPages = 0;
+    for (const [index, page] of extracted.result.pages.entries()) {
+      const hasText =
+        readableCharacters(documentPlainText(page.lines)) >= MIN_PAGE_TEXT;
+      if (hasText || ocrPages >= MAX_OCR_PAGES) {
+        lines.push(...page.lines);
+        pageSources.push("text-layer");
+        continue;
+      }
+      ocrPages += 1;
+      const rendered = yield* Effect.promise(() =>
+        renderPdfPageIsolated(bytes, OCR_LIMITS, {
+          page: index + 1,
+          scale: ocrScale(page.width, page.height),
+        }),
+      );
+      if (!rendered.ok) {
+        return yield* Effect.fail(
+          readError(
+            `Rendering page ${index + 1} for OCR failed (${rendered.code}): ${rendered.message}`,
+            RETRYABLE_READ_FAILURES.includes(rendered.code),
+          ),
+        );
+      }
+      lines.push(...(yield* ocrImage(rendered.result.png, index + 1)));
+      pageSources.push("ocr");
+    }
+    return { lines, pageSources } satisfies DocumentText;
+  });
+
+const readDocument = (request: GetDocumentRequest) =>
+  Effect.gen(function* () {
+    if (request.content?.trim()) {
+      const document: DocumentText = {
+        lines: linesFromPlainText(request.content),
+        pageSources: [],
+      };
+      return { document, textSource: "text" as InvoiceTextSource };
+    }
+    if (!request.documentUrl) {
+      return yield* Effect.fail(
+        readError("Document URL or content is required", false),
+      );
+    }
+    const bytes = yield* fetchDocument(request.documentUrl);
+    const document: DocumentText = IMAGE_MIME_TYPES.has(request.mimetype)
+      ? { lines: yield* ocrImage(bytes, 1), pageSources: ["ocr"] }
+      : yield* readPdf(bytes);
+    const sources = new Set(document.pageSources);
+    const textSource: InvoiceTextSource =
+      sources.size > 1 ? "mixed" : sources.has("ocr") ? "ocr" : "text-layer";
+    return { document, textSource };
+  });
+
+// --- Extraction ----------------------------------------------------------------
+
+const lineId = (index: number) => `L${String(index).padStart(3, "0")}`;
+
+const taggedDocument = (lines: readonly DocumentLine[], maxChars: number) => {
+  const out: string[] = [];
+  let size = 0;
+  for (const [index, line] of lines.entries()) {
+    const row = `${lineId(index)}| ${line.text}`;
+    if (size + row.length + 1 > maxChars) break;
+    out.push(row);
+    size += row.length + 1;
   }
-  return items;
+  return out.join("\n");
 };
 
 const choiceQuestion = <T>(
+  lines: readonly DocumentLine[],
   candidates: Candidate<T>[],
   instructions: unknown,
+  facts: (candidate: Candidate<T>) => Record<string, unknown> = () => ({}),
 ): TypeSafeQuestion | undefined =>
   candidates.length === 0
     ? undefined
@@ -367,291 +395,390 @@ const choiceQuestion = <T>(
         criteria: Object.fromEntries([
           ...candidates.map((candidate) => [
             candidate.id,
-            { value: candidate.value, source: candidate.source },
+            {
+              value: candidate.value,
+              ...facts(candidate),
+              ...(candidate.label ? { label: candidate.label } : {}),
+              ...(lines[candidate.line]
+                ? {
+                    row: `${lineId(candidate.line)}: ${lines[candidate.line]!.text.slice(0, 160)}`,
+                  }
+                : {}),
+            },
           ]),
-          [ABSENT, "The invoice does not state this value."],
+          [ABSENT, "None of these; the invoice does not state this value."],
         ]),
       };
 
-const pick = <T>(
+const pick = <C extends { id: string }>(
   answers: Record<string, TypeSafeAnswer>,
   questionId: string,
-  candidates: Candidate<T>[],
-): T | null => {
+  candidates: readonly C[],
+): C | null => {
   const answer = answers[questionId];
   if (!answer || answer.type !== "choice" || answer.choice === ABSENT) {
     return null;
   }
-  return (
-    candidates.find((candidate) => candidate.id === answer.choice)?.value ??
-    null
-  );
+  return candidates.find((candidate) => candidate.id === answer.choice) ?? null;
 };
 
-const questionsFor = (input: {
-  supplier: Candidate<string>[];
-  vatNumber: Candidate<string>[];
-  invoiceNumber: Candidate<string>[];
-  dates: Candidate<string>[];
-  currencies: Candidate<string>[];
-  amounts: Candidate<number>[];
-  accountName: Candidate<string>[];
-  accountNumber: Candidate<string>[];
-  sortCode: Candidate<string>[];
-  iban: Candidate<string>[];
-  bic: Candidate<string>[];
-  description: Candidate<string>[];
-  purchaseOrder: Candidate<string>[];
-  lineItems: Candidate<InvoiceLineItem>[];
-  companyName?: string | null;
-}) => {
-  const questions: Record<string, TypeSafeQuestion> = {};
-  const add = (id: string, question: TypeSafeQuestion | undefined) => {
-    if (question) questions[id] = question;
-  };
-  add(
-    "supplier_name",
-    choiceQuestion(input.supplier, {
-      question:
-        "Which candidate is the legal supplier issuing this invoice? Pick absent when none is a supplier name.",
-      recipientCompany: input.companyName ?? null,
-      warning:
-        "The recipient/customer is not the supplier, even when its name appears prominently.",
-    }),
+const SUPPLIER_RULES = [
+  "The supplier is the business that issued this invoice and is owed the money.",
+  "The customer being billed (`recipientCompany`, usually under 'Bill to', 'Invoice to' or 'Customer') is never the supplier.",
+];
+
+const lineItemQuestion = (row: LineItemRow): TypeSafeQuestion => ({
+  type: "noul",
+  instructions: {
+    question:
+      "Is `row` a purchased line item (a good or service being charged for), rather than a table heading, a subtotal or total, a tax summary, a discount note or payment detail?",
+    tableHeader: row.header,
+    row: row.source,
+  },
+  criteria: {
+    true: "A row describing a purchased good or service with its price.",
+    false: "Anything else.",
+  },
+});
+
+const PAYMENT_TERMS =
+  /\b(?:(?:payment\s+)?terms?|due|payable|pay(?:ment)?\s+within)\b[^\n.]{0,40}?\b(\d{1,3})\s*days?\b|\bnet\s*(\d{1,3})\b/i;
+
+const stripLeadingName = (address: string, name: string | null) => {
+  if (!name) return address;
+  const prefix = name.toLowerCase().replace(/\.$/, "");
+  return address.toLowerCase().startsWith(prefix)
+    ? address.slice(prefix.length).replace(/^[\s.,]+/, "") || address
+    : address;
+};
+
+/** An extraction with none of these found says nothing about the invoice. */
+const hasInvoiceContent = (extraction: InvoiceExtraction) =>
+  Boolean(
+    extraction.supplierName ||
+      extraction.invoiceNumber ||
+      extraction.invoiceDate ||
+      extraction.grossAmount !== null ||
+      extraction.netAmount !== null ||
+      extraction.lineItems.length > 0,
   );
-  add(
-    "supplier_vat_number",
-    choiceQuestion(
-      input.vatNumber,
-      "Which candidate is the supplier's VAT registration number?",
-    ),
-  );
-  add(
-    "invoice_number",
-    choiceQuestion(
-      input.invoiceNumber,
-      "Which candidate is the invoice number?",
-    ),
-  );
-  add(
-    "invoice_date",
-    choiceQuestion(input.dates, "Which candidate is the invoice issue date?"),
-  );
-  add(
-    "due_date",
-    choiceQuestion(input.dates, "Which candidate is the payment due date?"),
-  );
-  add(
-    "currency",
-    choiceQuestion(
-      input.currencies,
-      "Which ISO 4217 currency applies to the invoice amounts?",
-    ),
-  );
-  add(
-    "net_amount",
-    choiceQuestion(
-      input.amounts,
-      "Which candidate is the net or subtotal amount before VAT/tax?",
-    ),
-  );
-  add(
-    "vat_amount",
-    choiceQuestion(input.amounts, "Which candidate is the VAT or tax amount?"),
-  );
-  add(
-    "gross_amount",
-    choiceQuestion(
-      input.amounts,
-      "Which candidate is the final gross total or amount due?",
-    ),
-  );
-  add(
-    "bank_account_name",
-    choiceQuestion(
-      input.accountName,
-      "Which candidate is the bank account holder name for payment?",
-    ),
-  );
-  add(
-    "bank_account_number",
-    choiceQuestion(
-      input.accountNumber,
-      "Which candidate is the bank account number for payment?",
-    ),
-  );
-  add(
-    "bank_sort_code",
-    choiceQuestion(
-      input.sortCode,
-      "Which candidate is the bank sort code for payment?",
-    ),
-  );
-  add(
-    "bank_iban",
-    choiceQuestion(input.iban, "Which candidate is the payment IBAN?"),
-  );
-  add(
-    "bank_bic",
-    choiceQuestion(
-      input.bic,
-      "Which candidate is the payment BIC or SWIFT code?",
-    ),
-  );
-  add(
-    "description",
-    choiceQuestion(
-      input.description,
-      "Which candidate best describes the goods or services invoiced?",
-    ),
-  );
-  add(
-    "purchase_order_reference",
-    choiceQuestion(
-      input.purchaseOrder,
-      "Which candidate is the customer's purchase-order reference?",
-    ),
-  );
-  for (const candidate of input.lineItems) {
-    questions[candidate.id] = {
-      type: "noul",
-      instructions: {
-        question:
-          "Is `candidate` a purchased line item, rather than a heading, invoice total, tax summary or payment detail?",
-        candidate: candidate.source,
-      },
-      criteria: {
-        true: "A row describing a purchased good or service with its quantity and price.",
-        false: "Anything else.",
-      },
+
+/**
+ * Extracts an invoice from laid-out document lines. Code finds every
+ * candidate value; TypeSafe reads the tagged document and selects which
+ * candidate each field is (or that the invoice does not state it), and
+ * confirms which table rows are purchased items; code copies the choices.
+ */
+export const extractInvoiceLines = (
+  allLines: readonly DocumentLine[],
+  companyName?: string | null,
+  textSource: InvoiceTextSource = "text",
+): Effect.Effect<InvoiceExtraction, TypeSafeError, TypeSafe> =>
+  Effect.gen(function* () {
+    const typeSafe = yield* TypeSafe;
+    const lines = allLines.slice(0, MAX_LINES);
+    const plain = documentPlainText(lines);
+    if (readableCharacters(plain) < 20) {
+      return yield* Effect.fail(
+        readError(
+          "The document has no readable text, even after OCR. Upload a clearer copy.",
+          false,
+        ),
+      );
+    }
+
+    const rows = lineItemRows(lines).slice(0, MAX_LINE_ITEM_QUESTIONS);
+    const dates = dateCandidates(lines);
+    const candidates = {
+      supplier: supplierNameCandidates(lines),
+      address: addressCandidates(lines),
+      vatNumber: vatNumberCandidates(lines),
+      invoiceNumber: invoiceNumberCandidates(lines),
+      currencies: currencyCandidates(plain),
+      amounts: amountCandidates(lines),
+      accountName: accountNameCandidates(lines),
+      accountNumber: accountNumberCandidates(lines),
+      sortCode: sortCodeCandidates(lines),
+      iban: ibanCandidates(lines),
+      bic: bicCandidates(lines),
+      description: descriptionCandidates(
+        lines,
+        rows.flatMap((row) =>
+          row.value.description
+            ? [{ value: row.value.description, line: row.line }]
+            : [],
+        ),
+      ),
+      purchaseOrder: purchaseOrderCandidates(lines),
     };
-  }
-  return questions;
-};
 
+    const recipientCompany = companyName ?? null;
+    const questions: Record<string, TypeSafeQuestion> = {};
+    const add = (id: string, question: TypeSafeQuestion | undefined) => {
+      if (question) questions[id] = question;
+    };
+    add(
+      "supplier_name",
+      choiceQuestion(lines, candidates.supplier, {
+        question:
+          "Which candidate is the name of the supplier that issued this invoice?",
+        recipientCompany,
+        rules: [
+          ...SUPPLIER_RULES,
+          "Prefer the business name exactly as printed, without an address or registration text.",
+        ],
+      }),
+    );
+    add(
+      "supplier_address",
+      choiceQuestion(lines, candidates.address, {
+        question:
+          "Which candidate is the postal address of the supplier that issued this invoice?",
+        recipientCompany,
+        rules: [
+          ...SUPPLIER_RULES,
+          "The address printed under 'Bill to', 'Invoice to', 'Ship to' or 'Deliver to' belongs to the customer, not the supplier.",
+          "Prefer the most complete supplier address (street, town and postcode) that leaves out the business name.",
+        ],
+      }),
+    );
+    add(
+      "supplier_vat_number",
+      choiceQuestion(lines, candidates.vatNumber, {
+        question:
+          "Which candidate is the supplier's own VAT registration number?",
+        recipientCompany,
+        rules: ["A VAT number printed for the customer is not the supplier's."],
+      }),
+    );
+    add(
+      "invoice_number",
+      choiceQuestion(
+        lines,
+        candidates.invoiceNumber,
+        "Which candidate is this invoice's own invoice number?",
+      ),
+    );
+    add(
+      "invoice_date",
+      choiceQuestion(
+        lines,
+        dates,
+        "Which candidate is the date this invoice was issued (the invoice date or tax point)?",
+      ),
+    );
+    add(
+      "due_date",
+      choiceQuestion(
+        lines,
+        dates,
+        "Which candidate is the date by which this invoice must be paid (the due date)?",
+      ),
+    );
+    add(
+      "currency",
+      choiceQuestion(
+        lines,
+        candidates.currencies,
+        "Which ISO 4217 currency are this invoice's amounts in?",
+      ),
+    );
+    add(
+      "net_amount",
+      choiceQuestion(
+        lines,
+        candidates.amounts,
+        "Which candidate is the invoice's net total (the subtotal before VAT or tax)?",
+      ),
+    );
+    add(
+      "vat_amount",
+      choiceQuestion(
+        lines,
+        candidates.amounts,
+        "Which candidate is the invoice's total VAT or tax amount (a money amount, not a percentage rate)?",
+      ),
+    );
+    add(
+      "gross_amount",
+      choiceQuestion(
+        lines,
+        candidates.amounts,
+        "Which candidate is the invoice's final total including VAT (the total or amount due)?",
+      ),
+    );
+    add(
+      "bank_account_name",
+      choiceQuestion(
+        lines,
+        candidates.accountName,
+        "Which candidate is the name on the bank account this invoice should be paid into?",
+      ),
+    );
+    add(
+      "bank_account_number",
+      choiceQuestion(
+        lines,
+        candidates.accountNumber,
+        "Which candidate is the bank account number this invoice should be paid into (not a company registration number or phone number)?",
+      ),
+    );
+    add(
+      "bank_sort_code",
+      choiceQuestion(
+        lines,
+        candidates.sortCode,
+        "Which candidate is the UK bank sort code this invoice should be paid to?",
+      ),
+    );
+    add(
+      "bank_iban",
+      choiceQuestion(
+        lines,
+        candidates.iban,
+        "Which candidate is the IBAN this invoice should be paid to?",
+        (candidate) => ({
+          checksumValid: ibanChecksumValid(candidate.value),
+        }),
+      ),
+    );
+    add(
+      "bank_bic",
+      choiceQuestion(
+        lines,
+        candidates.bic,
+        "Which candidate is the BIC or SWIFT code of the bank this invoice should be paid to?",
+      ),
+    );
+    add(
+      "description",
+      choiceQuestion(
+        lines,
+        candidates.description,
+        "Which candidate best summarises the goods or services this invoice charges for?",
+      ),
+    );
+    add(
+      "purchase_order_reference",
+      choiceQuestion(
+        lines,
+        candidates.purchaseOrder,
+        "Which candidate is the customer's purchase-order number or order reference?",
+      ),
+    );
+    const itemQuestions = Object.fromEntries(
+      rows.map((row) => [row.id, lineItemQuestion(row)]),
+    );
+
+    const state = {
+      invoice: taggedDocument(lines, MAX_STATE_CHARS),
+      recipientCompany,
+    };
+    const evaluate = (batch: Record<string, TypeSafeQuestion>) =>
+      Object.keys(batch).length === 0
+        ? Effect.succeed({} as Record<string, TypeSafeAnswer>)
+        : typeSafe.evaluate({ state, questions: batch }).pipe(
+            Effect.flatMap(({ answers }) =>
+              Object.keys(batch).some((id) => answers[id] === undefined)
+                ? Effect.fail(
+                    new TypeSafeError({
+                      reason: "TypeSafe omitted an invoice extraction answer",
+                      retryable: false,
+                    }),
+                  )
+                : Effect.succeed(answers),
+            ),
+          );
+    // Field choices and row checks are independent; asking them in two
+    // parallel requests keeps each inside the model's context budget.
+    const [fieldAnswers, itemAnswers] = yield* Effect.all(
+      [evaluate(questions), evaluate(itemQuestions)],
+      { concurrency: 2 },
+    );
+
+    const supplierName =
+      pick(fieldAnswers, "supplier_name", candidates.supplier)?.value ?? null;
+    const address = pick(
+      fieldAnswers,
+      "supplier_address",
+      candidates.address,
+    )?.value;
+    const invoiceDate = pick(fieldAnswers, "invoice_date", dates)?.iso ?? null;
+    let dueDate = pick(fieldAnswers, "due_date", dates)?.iso ?? null;
+    if (!dueDate && invoiceDate) {
+      const terms = PAYMENT_TERMS.exec(plain);
+      const days = Number(terms?.[1] ?? terms?.[2]);
+      if (Number.isInteger(days) && days > 0) {
+        dueDate = addDays(invoiceDate, days);
+      }
+    }
+
+    const extraction: InvoiceExtraction = {
+      supplierName: supplierName?.replace(/\.$/, "") ?? null,
+      supplierAddress: address ? stripLeadingName(address, supplierName) : null,
+      supplierVatNumber:
+        pick(fieldAnswers, "supplier_vat_number", candidates.vatNumber)
+          ?.value ?? null,
+      invoiceNumber:
+        pick(fieldAnswers, "invoice_number", candidates.invoiceNumber)?.value ??
+        null,
+      invoiceDate,
+      dueDate,
+      currency:
+        pick(fieldAnswers, "currency", candidates.currencies)?.value ?? null,
+      netAmount:
+        pick(fieldAnswers, "net_amount", candidates.amounts)?.value ?? null,
+      vatAmount:
+        pick(fieldAnswers, "vat_amount", candidates.amounts)?.value ?? null,
+      grossAmount:
+        pick(fieldAnswers, "gross_amount", candidates.amounts)?.value ?? null,
+      lineItems: rows
+        .filter((row) => {
+          const answer = itemAnswers[row.id];
+          return answer?.type === "noul" && answer.noul >= 0.5;
+        })
+        .map((row) => row.value),
+      bankDetails: {
+        accountName:
+          pick(fieldAnswers, "bank_account_name", candidates.accountName)
+            ?.value ?? null,
+        accountNumber:
+          pick(fieldAnswers, "bank_account_number", candidates.accountNumber)
+            ?.value ?? null,
+        sortCode:
+          pick(fieldAnswers, "bank_sort_code", candidates.sortCode)?.value ??
+          null,
+        iban: pick(fieldAnswers, "bank_iban", candidates.iban)?.value ?? null,
+        bic: pick(fieldAnswers, "bank_bic", candidates.bic)?.value ?? null,
+      },
+      description:
+        pick(fieldAnswers, "description", candidates.description)?.value ??
+        null,
+      purchaseOrderReference:
+        pick(fieldAnswers, "purchase_order_reference", candidates.purchaseOrder)
+          ?.value ?? null,
+      textSource,
+    };
+
+    if (!hasInvoiceContent(extraction)) {
+      return yield* Effect.fail(
+        readError(
+          "No invoice details could be read from this document. Check that it is an invoice and upload a clearer copy.",
+          false,
+        ),
+      );
+    }
+    return extraction;
+  });
+
+/** Extracts an invoice from text that is already laid out one row per line. */
 export const extractInvoiceText = (
   text: string,
   companyName?: string | null,
 ): Effect.Effect<InvoiceExtraction, TypeSafeError, TypeSafe> =>
-  Effect.gen(function* () {
-    const typeSafe = yield* TypeSafe;
-    const documentText = text.slice(0, MAX_TEXT_LENGTH);
-    const lines = cleanLines(documentText);
-    const candidates = {
-      supplier: supplierCandidates(lines),
-      vatNumber: fromLabels(
-        lines,
-        [
-          /\b(?:supplier\s+)?vat\s*(?:number|no\.?|registration)?\s*[:#]?\s*([A-Z]{0,2}[A-Z0-9][A-Z0-9 .-]{5,18})\s*$/i,
-        ],
-        "vat",
-      ),
-      invoiceNumber: fromLabels(
-        lines,
-        [/\binvoice\s*(?:number|no\.?|#)\s*[:#]?\s*([A-Z0-9][A-Z0-9./_-]*)/i],
-        "invoice_number",
-      ),
-      dates: dateCandidates(lines),
-      currencies: currencyCandidates(documentText),
-      amounts: amountCandidates(lines),
-      accountName: fromLabels(
-        lines,
-        [/\baccount\s*(?:name|holder)\s*[:#]?\s*(.+)$/i],
-        "account_name",
-      ),
-      accountNumber: fromLabels(
-        lines,
-        [/\baccount\s*(?:number|no\.?)\s*[:#]?\s*([A-Z0-9 -]+)$/i],
-        "account_number",
-      ),
-      sortCode: fromLabels(
-        lines,
-        [/\bsort\s*code\s*[:#]?\s*([0-9 -]+)$/i],
-        "sort_code",
-      ),
-      iban: fromLabels(
-        lines,
-        [/\biban\s*[:#]?\s*([A-Z]{2}[0-9A-Z ]{12,32})$/i],
-        "iban",
-      ),
-      bic: fromLabels(
-        lines,
-        [/\b(?:bic|swift)\s*[:#]?\s*([A-Z0-9]{8,11})$/i],
-        "bic",
-      ),
-      description: fromLabels(
-        lines,
-        [/^(?:description|services?|work)\s*[:#]?\s*(.+)$/i],
-        "description",
-      ),
-      purchaseOrder: fromLabels(
-        lines,
-        [
-          /\b(?:purchase\s+order|p\.?o\.?)\s*(?:number|no\.?|reference|ref\.?|#)?\s*[:#]?\s*([A-Z0-9][A-Z0-9./_-]*)/i,
-        ],
-        "purchase_order",
-      ),
-      lineItems: lineItemCandidates(lines),
-      companyName,
-    };
-    const questions = questionsFor(candidates);
-    const answers =
-      Object.keys(questions).length === 0
-        ? {}
-        : (yield* typeSafe.evaluate({
-            state: { documentText, recipientCompany: companyName ?? null },
-            questions,
-          })).answers;
-    if (Object.keys(questions).some((id) => answers[id] === undefined)) {
-      return yield* Effect.fail(
-        new TypeSafeError({
-          reason: "TypeSafe omitted an invoice extraction answer",
-          retryable: false,
-        }),
-      );
-    }
+  extractInvoiceLines(linesFromPlainText(text), companyName, "text");
 
-    return {
-      supplierName: pick(answers, "supplier_name", candidates.supplier),
-      supplierVatNumber: pick(
-        answers,
-        "supplier_vat_number",
-        candidates.vatNumber,
-      ),
-      invoiceNumber: pick(answers, "invoice_number", candidates.invoiceNumber),
-      invoiceDate: normalizeDate(
-        pick(answers, "invoice_date", candidates.dates),
-      ),
-      dueDate: normalizeDate(pick(answers, "due_date", candidates.dates)),
-      currency: pick(answers, "currency", candidates.currencies),
-      netAmount: pick(answers, "net_amount", candidates.amounts),
-      vatAmount: pick(answers, "vat_amount", candidates.amounts),
-      grossAmount: pick(answers, "gross_amount", candidates.amounts),
-      lineItems: candidates.lineItems
-        .filter((candidate) => {
-          const answer = answers[candidate.id];
-          return answer?.type === "noul" && answer.noul >= 0.5;
-        })
-        .map((candidate) => candidate.value),
-      bankDetails: {
-        accountName: pick(answers, "bank_account_name", candidates.accountName),
-        accountNumber: pick(
-          answers,
-          "bank_account_number",
-          candidates.accountNumber,
-        ),
-        sortCode: pick(answers, "bank_sort_code", candidates.sortCode),
-        iban: pick(answers, "bank_iban", candidates.iban),
-        bic: pick(answers, "bank_bic", candidates.bic),
-      },
-      description: pick(answers, "description", candidates.description),
-      purchaseOrderReference: pick(
-        answers,
-        "purchase_order_reference",
-        candidates.purchaseOrder,
-      ),
-    };
-  });
+// --- Judgments -------------------------------------------------------------------
 
 const toTypeSafeQuestion = (
   question: InvoiceJudgmentQuestion,
@@ -760,11 +887,72 @@ const failedJudgment = (
   error,
 });
 
+const notApplicable = (
+  question: InvoiceJudgmentQuestion,
+  source: "default" | "custom",
+  reason: string,
+): InvoiceJudgment => ({
+  ...judgmentDetails(question, source),
+  status: "not_applicable",
+  type: question.type,
+  reason,
+});
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
+
+const hasBankDetails = (extraction: unknown) =>
+  Object.values(asRecord(asRecord(extraction).bankDetails)).some(
+    (value) => typeof value === "string" && value.trim() !== "",
+  );
+
+const NO_HISTORY =
+  "There are no earlier invoices in this workspace to compare with yet.";
+
+/**
+ * Default checks whose premise does not hold for this invoice. They compare
+ * against history or need specific extracted values; without those there is
+ * nothing to judge, and the honest answer is "not applicable", not "no".
+ * Custom questions are always asked.
+ */
+const inapplicableReason = (
+  question: InvoiceJudgmentQuestion,
+  extraction: InvoiceExtraction,
+  previousInvoices: readonly PreviousInvoice[],
+): string | null => {
+  switch (question.id) {
+    case "likely_duplicate":
+    case "known_supplier":
+      return previousInvoices.length === 0 ? NO_HISTORY : null;
+    case "bank_details_consistent":
+      if (!hasBankDetails(extraction)) {
+        return "No bank details were found on this invoice to compare.";
+      }
+      if (previousInvoices.length === 0) return NO_HISTORY;
+      return previousInvoices.some((invoice) =>
+        hasBankDetails(invoice.extraction),
+      )
+        ? null
+        : "No earlier invoice has bank details to compare with.";
+    case "vat_calculation_correct":
+      return extraction.netAmount === null ||
+        extraction.vatAmount === null ||
+        extraction.grossAmount === null
+        ? "The net, VAT and gross amounts were not all found on this invoice."
+        : null;
+    default:
+      return null;
+  }
+};
+
 export const judgeInvoice = (
   extraction: InvoiceExtraction,
   previousInvoices: readonly PreviousInvoice[],
   customQuestions: readonly InvoiceJudgmentQuestion[] = [],
   defaultQuestions: readonly InvoiceJudgmentQuestion[] = DEFAULT_INVOICE_JUDGMENTS,
+  invoiceText?: string | null,
 ): Effect.Effect<InvoiceJudgment[], TypeSafeError, TypeSafe> =>
   Effect.gen(function* () {
     const typeSafe = yield* TypeSafe;
@@ -772,27 +960,36 @@ export const judgeInvoice = (
       ...defaultQuestions.map((question) => ({
         question,
         source: "default" as const,
+        skip: inapplicableReason(question, extraction, previousInvoices),
       })),
       ...customQuestions.map((question) => ({
         question,
         source: "custom" as const,
+        skip: null,
       })),
     ];
-    const wireIds = configured.map((_, index) => `judgment_${index}`);
-    const response = yield* typeSafe.evaluate({
-      state: {
-        currentInvoice: extraction,
-        previousInvoices,
-      },
-      questions: Object.fromEntries(
-        configured.map(({ question }, index) => [
-          wireIds[index]!,
-          toTypeSafeQuestion(question),
-        ]),
-      ),
-    });
-    return configured.map(({ question, source }, index) => {
-      const answer = response.answers[wireIds[index]!];
+    const wireId = (index: number) => `judgment_${index}`;
+    const asked = configured.flatMap((entry, index) =>
+      entry.skip ? [] : [[wireId(index), toTypeSafeQuestion(entry.question)]],
+    );
+    const answers: Record<string, TypeSafeAnswer> =
+      asked.length === 0
+        ? {}
+        : (yield* typeSafe.evaluate({
+            state: {
+              currentInvoice: extraction,
+              // The document itself, so a question can be answered from what
+              // the invoice says even where no field captured it.
+              invoiceText: invoiceText
+                ? invoiceText.slice(0, MAX_JUDGMENT_TEXT_CHARS)
+                : null,
+              previousInvoices,
+            },
+            questions: Object.fromEntries(asked),
+          })).answers;
+    return configured.map(({ question, source, skip }, index) => {
+      if (skip) return notApplicable(question, source, skip);
+      const answer = answers[wireId(index)];
       if (!answer) {
         return failedJudgment(
           question,
@@ -812,53 +1009,16 @@ export const judgeInvoice = (
     });
   });
 
-const loadPdfText = (documentUrl: string) =>
-  Effect.tryPromise({
-    try: async () => {
-      const response = await fetch(documentUrl, {
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (!response.ok)
-        throw new Error(`Unable to fetch PDF (${response.status})`);
-      // Text extraction runs in a killable worker with explicit output
-      // bounds: pdf.js cannot be interrupted on this thread in Node/Bun, and a
-      // hostile PDF must not pin the extraction process.
-      const extracted = await extractPdfTextIsolated(
-        new Uint8Array(await response.arrayBuffer()),
-        PDF_TEXT_LIMITS,
-      );
-      if (!extracted.ok) {
-        throw new Error(
-          `PDF text extraction failed (${extracted.code}): ${extracted.message}`,
-        );
-      }
-      const value = extracted.result.text.replaceAll("\u0000", "").trim();
-      if (!value) throw new Error("PDF contains no extractable text");
-      return value;
-    },
-    catch: (error) =>
-      new TypeSafeError({
-        reason:
-          error instanceof Error ? error.message : "Unable to read invoice PDF",
-        retryable: false,
-      }),
-  });
-
 export const processInvoice = (
   request: GetDocumentRequest,
 ): Effect.Effect<ProcessedInvoice, TypeSafeError, TypeSafe> =>
   Effect.gen(function* () {
-    const text = request.content?.trim()
-      ? request.content
-      : request.documentUrl
-        ? yield* loadPdfText(request.documentUrl)
-        : yield* Effect.fail(
-            new TypeSafeError({
-              reason: "Document URL or content is required",
-              retryable: false,
-            }),
-          );
-    const extraction = yield* extractInvoiceText(text, request.companyName);
+    const { document, textSource } = yield* readDocument(request);
+    const extraction = yield* extractInvoiceLines(
+      document.lines,
+      request.companyName,
+      textSource,
+    );
     const defaultQuestions =
       request.defaultJudgmentQuestions ?? DEFAULT_INVOICE_JUDGMENTS;
     const configuredQuestions = [
@@ -870,6 +1030,7 @@ export const processInvoice = (
       request.previousInvoices ?? [],
       request.judgmentQuestions ?? [],
       defaultQuestions,
+      documentPlainText(document.lines.slice(0, MAX_LINES)),
     ).pipe(
       Effect.catchAll((error) =>
         Effect.succeed(

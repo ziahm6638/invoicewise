@@ -41,6 +41,10 @@ export function getDocumentTypeFromMimeType(mimetype: string): string {
   switch (mimetype) {
     case "application/pdf":
     case "application/octet-stream":
+    // Photos and scans of invoices are OCR'd and extracted like PDFs.
+    case "image/png":
+    case "image/jpeg":
+    case "image/jpg":
       return "invoice";
     default:
       return "receipt";
