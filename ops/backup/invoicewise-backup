@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Nightly dump of the InvoiceWise production databases on hp-slice, run by
+# invoicewise-backup.timer: the application database (invoicewise-db) and the
+# self-hosted Nango database (invoicewise-nango-db, which holds the encrypted
+# Xero/QuickBooks connections). Restore path: docs/deployment.md, "Backups".
+# Installed by ops/backup/install.sh; do not edit the copy on the host.
+#
+# Dumps land on the host's root NVMe disk, apart from the /mnt/ssd disk that
+# holds the live data; each is checked with pg_restore --list, checksummed and
+# kept for RETAIN_DAYS.
+set -euo pipefail
+umask 077
+
+readonly DIR=/var/backups/invoicewise
+readonly RETAIN_DAYS=14
+# container:user:database
+readonly DATABASES=(
+  invoicewise-db:invoicewise:invoicewise
+  invoicewise-nango-db:nango:nango
+)
+
+mkdir -p "$DIR"
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+for entry in "${DATABASES[@]}"; do
+  IFS=: read -r container user database <<<"$entry"
+  out="$DIR/${database}-${stamp}.dump"
+  docker exec "$container" pg_dump -U "$user" -d "$database" --format=custom >"$out.tmp"
+  docker exec -i "$container" pg_restore --list <"$out.tmp" >/dev/null
+  mv "$out.tmp" "$out"
+  (cd "$DIR" && sha256sum "$(basename "$out")" >"$(basename "$out").sha256")
+  echo "invoicewise backup: $out ($(du -h "$out" | cut -f1))"
+done
+
+find "$DIR" -name '*.dump*' -mtime "+$RETAIN_DAYS" -delete

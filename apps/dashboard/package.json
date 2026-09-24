@@ -27,6 +27,7 @@
     "@invoicewise/location": "workspace:*",
     "@invoicewise/ui": "workspace:*",
     "@invoicewise/utils": "workspace:*",
+    "@nangohq/frontend": "0.71.9",
     "@polar-sh/nextjs": "^0.4.0",
     "@polar-sh/sdk": "^0.33.1",
     "@radix-ui/react-icons": "^1.3.2",

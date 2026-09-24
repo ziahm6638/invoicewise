@@ -15,23 +15,19 @@ import {
   upsertAccountingConnection,
 } from "@invoicewise/db/queries";
 import { Effect, Schema } from "effect";
+import { BillRejectedError, postProviderBill } from "./accounting-providers";
 import { workflowKey } from "./client";
+import {
+  NangoRequestError,
+  asRecord,
+  getNangoConfig,
+  nangoRequest,
+} from "./nango";
 
-type NangoConfig = {
-  baseUrl: string;
-  secretKey: string;
-  integrationId: string;
-  draftBillAction: string;
-};
+export { getNangoConfig } from "./nango";
 
-type StorageSigner = {
-  signedUrl: (input: {
-    bucket: string;
-    path: string | string[];
-    expireIn: number;
-    inboxId: string;
-    options?: { download?: boolean };
-  }) => Promise<string>;
+type AttachmentStorage = {
+  download: (input: { bucket: string; path: string[] }) => Promise<Blob>;
 };
 
 export class AccountingPostError extends Schema.TaggedError<AccountingPostError>()(
@@ -39,82 +35,28 @@ export class AccountingPostError extends Schema.TaggedError<AccountingPostError>
   { reason: Schema.String, retryable: Schema.Boolean },
 ) {}
 
-class NangoRequestError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-  }
-
-  get retryable() {
-    return this.status === 424 || this.status === 429 || this.status >= 500;
-  }
+/**
+ * Whether each provider can be connected: its Nango settings are present and
+ * the integration (the provider's OAuth app) exists in Nango. A provider app
+ * still awaiting registration therefore reads as unavailable, not broken.
+ */
+export async function getAccountingProviderAvailability(env = process.env) {
+  return Promise.all(
+    (["xero", "quickbooks"] as const).map(async (provider) => {
+      try {
+        const config = getNangoConfig(provider, env);
+        await nangoRequest(
+          config,
+          `/integrations/${encodeURIComponent(config.integrationId)}`,
+          { method: "GET" },
+        );
+        return { provider, available: true };
+      } catch {
+        return { provider, available: false };
+      }
+    }),
+  );
 }
-
-const required = (env: NodeJS.ProcessEnv, name: string) => {
-  const value = env[name];
-  if (!value) throw new Error(`${name} must be configured`);
-  return value;
-};
-
-const providerPrefix = (provider: AccountingProvider) =>
-  provider === "xero" ? "NANGO_XERO" : "NANGO_QUICKBOOKS";
-
-export const getNangoConfig = (
-  provider: AccountingProvider,
-  env = process.env,
-): NangoConfig => {
-  const prefix = providerPrefix(provider);
-  return {
-    baseUrl: (env.NANGO_BASE_URL ?? "https://api.nango.dev").replace(/\/$/, ""),
-    secretKey: required(env, "NANGO_SECRET_KEY"),
-    integrationId: required(env, `${prefix}_INTEGRATION_ID`),
-    draftBillAction: env[`${prefix}_DRAFT_BILL_ACTION`] ?? "create-draft-bill",
-  };
-};
-
-const asRecord = (value: unknown): Record<string, unknown> =>
-  typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
-
-const errorMessage = (body: unknown, status: number) => {
-  const record = asRecord(body);
-  const error = asRecord(record.error);
-  const upstream = asRecord(error.upstream);
-  const upstreamBody = asRecord(upstream.body);
-  const message =
-    error.message ??
-    upstreamBody.message ??
-    record.message ??
-    `Nango returned HTTP ${status}`;
-  return typeof message === "string"
-    ? message
-    : `Nango returned HTTP ${status}`;
-};
-
-const nangoRequest = async (
-  config: NangoConfig,
-  path: string,
-  init: RequestInit,
-) => {
-  const response = await fetch(`${config.baseUrl}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${config.secretKey}`,
-      ...init.headers,
-    },
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new NangoRequestError(
-      errorMessage(body, response.status),
-      response.status,
-    );
-  }
-  return body;
-};
 
 export async function createAccountingConnectSession(
   input: { teamId: string; provider: AccountingProvider },
@@ -135,12 +77,19 @@ export async function createAccountingConnectSession(
   if (typeof data.token !== "string" || typeof data.expires_at !== "string") {
     throw new Error("Nango returned an invalid connect session");
   }
+  if (typeof data.connect_link !== "string" || !data.connect_link) {
+    throw new Error("Nango returned a connect session without a connect link");
+  }
+  const connectLink = data.connect_link;
   return {
     token: data.token,
-    connectLink:
-      typeof data.connect_link === "string" ? data.connect_link : null,
+    connectLink,
     expiresAt: data.expires_at,
     integrationId: config.integrationId,
+    // What the browser's Connect UI needs: the Nango API it talks to and
+    // where the self-hosted Connect UI is served (the session link's base).
+    apiUrl: config.publicUrl,
+    connectUrl: connectLink.replace(/[?#].*$/, ""),
   };
 }
 
@@ -219,38 +168,9 @@ export async function disconnectAccountingConnection(
   return disconnectAccountingConnectionRecord(db, input);
 }
 
-const triggerDraftBill = async (
-  connection: {
-    provider: AccountingProvider;
-    connectionId: string;
-  },
-  draft: Record<string, unknown>,
-  env = process.env,
-) => {
-  const config = getNangoConfig(connection.provider, env);
-  const body = asRecord(
-    await nangoRequest(config, "/action/trigger", {
-      method: "POST",
-      headers: {
-        "Connection-Id": connection.connectionId,
-        "Content-Type": "application/json",
-        "Provider-Config-Key": config.integrationId,
-      },
-      body: JSON.stringify({
-        action_name: config.draftBillAction,
-        input: draft,
-      }),
-    }),
-  );
-  if (typeof body.providerId !== "string") {
-    throw new Error("Nango draft-bill action did not return providerId");
-  }
-  return { providerId: body.providerId, duplicate: body.duplicate === true };
-};
-
 export const postAccountingDraft = (
   db: Database,
-  storage: StorageSigner,
+  storage: AttachmentStorage,
   input: { invoiceId: string; teamId: string },
   env = process.env,
 ) =>
@@ -316,6 +236,16 @@ export const postAccountingDraft = (
           }),
       }).pipe(Effect.zipRight(Effect.fail(error)));
 
+    const config = yield* Effect.try({
+      try: () => getNangoConfig(connection.provider, env),
+      catch: (error) =>
+        new AccountingPostError({
+          reason:
+            error instanceof Error ? error.message : "Nango is not configured",
+          retryable: false,
+        }),
+    }).pipe(Effect.catchAll(recordFailure));
+
     let attachment = null;
     if (
       invoice.filePath?.length &&
@@ -324,55 +254,73 @@ export const postAccountingDraft = (
         filePath: invoice.filePath,
       })
     ) {
-      const signed = yield* Effect.tryPromise({
+      const loaded = yield* Effect.tryPromise({
         try: async () => ({
-          url: await storage.signedUrl({
-            bucket: "vault",
-            path: invoice.filePath!,
-            expireIn: 900,
-            inboxId: invoice.id,
-          }),
-          fileName: invoice.fileName,
-          contentType: invoice.contentType,
+          fileName: invoice.fileName ?? "invoice.pdf",
+          contentType: invoice.contentType ?? "application/pdf",
+          data: await (
+            await storage.download({ bucket: "vault", path: invoice.filePath! })
+          ).arrayBuffer(),
         }),
         catch: () =>
           new AccountingPostError({
-            reason: "Unable to sign invoice attachment",
+            reason: "Unable to load invoice attachment",
             retryable: true,
           }),
       }).pipe(Effect.either);
-      if (signed._tag === "Left") {
-        return yield* recordFailure(signed.left);
+      if (loaded._tag === "Left") {
+        return yield* recordFailure(loaded.left);
       }
-      attachment = signed.right;
+      attachment = loaded.right;
     }
     const extraction = asRecord(invoice.extraction);
-    const draft = {
+    const text = (value: unknown) =>
+      typeof value === "string" && value.trim() ? value.trim() : null;
+    const amount = (value: unknown) =>
+      typeof value === "number" && Number.isFinite(value) ? value : null;
+    const bill = {
       idempotencyKey,
-      status: "draft",
-      supplier: {
-        name: extraction.supplierName ?? null,
-        taxNumber: extraction.supplierVatNumber ?? null,
-      },
-      invoiceNumber: extraction.invoiceNumber ?? null,
-      invoiceDate: extraction.invoiceDate ?? null,
-      dueDate: extraction.dueDate ?? null,
-      currency: extraction.currency ?? null,
-      netAmount: extraction.netAmount ?? null,
-      vatAmount: extraction.vatAmount ?? null,
-      grossAmount: extraction.grossAmount ?? null,
-      lineItems: Array.isArray(extraction.lineItems)
+      supplierName: text(extraction.supplierName),
+      supplierTaxNumber: text(extraction.supplierVatNumber),
+      invoiceNumber: text(extraction.invoiceNumber),
+      invoiceDate: text(extraction.invoiceDate),
+      dueDate: text(extraction.dueDate),
+      currency: text(extraction.currency),
+      netAmount: amount(extraction.netAmount),
+      vatAmount: amount(extraction.vatAmount),
+      grossAmount: amount(extraction.grossAmount),
+      description: text(extraction.description),
+      lineItems: (Array.isArray(extraction.lineItems)
         ? extraction.lineItems
-        : [],
-      attachment,
+        : []
+      ).map((item) => {
+        const line = asRecord(item);
+        return {
+          description: text(line.description),
+          quantity: amount(line.quantity),
+          unitPrice: amount(line.unitPrice),
+          total: amount(line.total),
+        };
+      }),
     };
     const posted = yield* Effect.tryPromise({
-      try: () => triggerDraftBill(connection, draft, env),
+      try: () =>
+        postProviderBill(
+          connection.provider,
+          config,
+          connection,
+          bill,
+          attachment,
+        ),
       catch: (error) =>
         new AccountingPostError({
           reason: error instanceof Error ? error.message : "Nango post failed",
           retryable:
-            error instanceof NangoRequestError ? error.retryable : true,
+            error instanceof BillRejectedError
+              ? false
+              : error instanceof NangoRequestError
+                ? error.retryable
+                : true,
         }),
     }).pipe(Effect.either);
 
@@ -387,7 +335,7 @@ export const postAccountingDraft = (
           provider: connection.provider,
           providerId: posted.right.providerId,
           idempotencyKey,
-          duplicate: posted.right.duplicate,
+          duplicate: false,
         }),
       catch: () =>
         new AccountingPostError({
@@ -395,10 +343,22 @@ export const postAccountingDraft = (
           retryable: true,
         }),
     });
+    if (posted.right.attachmentError) {
+      yield* Effect.logWarning(
+        "Accounting bill posted without its attachment",
+      ).pipe(
+        Effect.annotateLogs({
+          invoiceId: invoice.id,
+          provider: connection.provider,
+          reason: posted.right.attachmentError,
+        }),
+      );
+    }
     return {
       invoiceId: invoice.id,
-      status: posted.right.duplicate ? "already_posted" : "posted",
+      status: "posted",
       providerId: posted.right.providerId,
+      attached: posted.right.attached,
     };
   });
 

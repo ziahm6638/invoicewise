@@ -26,9 +26,19 @@ servers:
       clear:
         PORT: 3003
         TYPESAFE_BASE_URL: https://api.typesafe.ai
+        # Self-hosted Nango (the nango accessory below). The API reaches it on
+        # the kamal network; browsers reach its public host, and Nango returns
+        # its Connect UI host in each connect session.
+        NANGO_BASE_URL: http://invoicewise-nango:3003
+        NANGO_PUBLIC_URL: https://nango.invoicewise.uk
+        NANGO_XERO_INTEGRATION_ID: xero
+        NANGO_QUICKBOOKS_INTEGRATION_ID: quickbooks
       secret:
         # Invoice extraction and judgments run only in the workflow runner.
         - TYPESAFE_API_KEY
+        # The Nango prod environment secret key (NANGO_SECRET_KEY_PROD on the
+        # nango accessory): connect sessions, connections and proxied calls.
+        - NANGO_SECRET_KEY
     proxy:
       host: api.invoicewise.uk
       app_port: 3003
@@ -105,3 +115,49 @@ accessories:
     cmd: redis-server --appendonly yes
     directories:
       - /mnt/ssd/invoicewise/redis:/data
+  # Self-hosted Nango (free edition: auth and proxy) for Xero and QuickBooks
+  # OAuth. Its own Postgres keeps Nango's schema and upgrades apart from the
+  # InvoiceWise database; both are dumped nightly by ops/backup.
+  nango-db:
+    image: postgres:16.11-alpine
+    host: 100.90.24.83
+    env:
+      clear:
+        POSTGRES_USER: nango
+        POSTGRES_DB: nango
+      secret:
+        - POSTGRES_PASSWORD:NANGO_DB_PASSWORD
+    directories:
+      - /mnt/ssd/invoicewise/nango-postgres:/var/lib/postgresql/data
+  nango:
+    image: nangohq/nango-server:hosted-0.71.9
+    host: 100.90.24.83
+    # Loopback only: cloudflared publishes nango.invoicewise.uk (API, OAuth
+    # callback) and nango-connect.invoicewise.uk (Connect UI). The admin
+    # dashboard is refused on the public host and reached over an SSH tunnel.
+    port: 127.0.0.1:3020:3003
+    options:
+      publish: 127.0.0.1:3021:3009
+    env:
+      clear:
+        SERVER_PORT: 3003
+        NANGO_SERVER_URL: https://nango.invoicewise.uk
+        NANGO_DASHBOARD_API_URL: /
+        FLAG_SERVE_CONNECT_UI: true
+        NANGO_CONNECT_UI_PORT: 3009
+        NANGO_PUBLIC_CONNECT_URL: https://nango-connect.invoicewise.uk
+        FLAG_AUTH_ENABLED: false
+        NANGO_DASHBOARD_USERNAME: invoicewise-admin
+        NANGO_DB_HOST: invoicewise-nango-db
+        NANGO_DB_PORT: 5432
+        NANGO_DB_USER: nango
+        NANGO_DB_NAME: nango
+        NANGO_DB_SSL: false
+        NANGO_LOGS_ENABLED: false
+        NANGO_PROXY_BASE_URL_OVERRIDE_ENABLED: false
+        LOG_LEVEL: info
+      secret:
+        - NANGO_ENCRYPTION_KEY
+        - NANGO_DB_PASSWORD
+        - NANGO_DASHBOARD_PASSWORD
+        - NANGO_SECRET_KEY_PROD:NANGO_SECRET_KEY

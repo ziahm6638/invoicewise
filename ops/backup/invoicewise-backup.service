@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly pg_dump of the InvoiceWise and Nango databases
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/invoicewise-backup
+Nice=10
+IOSchedulingClass=idle

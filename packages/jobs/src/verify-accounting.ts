@@ -38,15 +38,17 @@ async function main() {
   process.env.WORKFLOW_RETRY_MAX_MS = "10";
   process.env.NANGO_SECRET_KEY = "nango-local-verification";
   process.env.NANGO_XERO_INTEGRATION_ID = "xero-invoicewise";
-  process.env.NANGO_XERO_DRAFT_BILL_ACTION = "create-draft-bill";
 
   const database = createDatabaseClient({
     primaryUrl: required("DATABASE_PRIMARY_URL"),
     isDevelopment: true,
   });
   const storage = createStorageClientFromEnv();
+  // The Xero organisation the stub serves: bills by idempotency key, and the
+  // attachments stored on each bill by file name.
   const providerIds = new Map<string, string>();
-  const actionAttempts = new Map<string, number>();
+  const attachments = new Map<string, Map<string, number>>();
+  const billAttempts = new Map<string, number>();
   let workspaceId = "";
   let connected = true;
   let connectSessions = 0;
@@ -108,46 +110,91 @@ async function main() {
             })
           : Response.json({ connections: [] });
       }
-      if (request.method === "POST" && url.pathname === "/action/trigger") {
-        const body = (await request.json()) as {
-          action_name: string;
-          input: Record<string, unknown>;
-        };
-        const supplier = body.input.supplier as Record<string, unknown>;
-        const attachment = body.input.attachment as Record<string, unknown>;
-        const key = String(body.input.idempotencyKey);
-        const attempts = (actionAttempts.get(key) ?? 0) + 1;
-        actionAttempts.set(key, attempts);
+      if (
+        request.method === "GET" &&
+        url.pathname === "/connection/xero-connection"
+      ) {
         if (
-          body.action_name !== "create-draft-bill" ||
-          body.input.status !== "draft" ||
-          supplier.name !== "Acme Supplies Ltd" ||
-          body.input.currency !== "GBP" ||
-          body.input.netAmount !== 100 ||
-          body.input.vatAmount !== 20 ||
-          body.input.grossAmount !== 120 ||
-          !Array.isArray(body.input.lineItems) ||
-          typeof attachment.url !== "string" ||
-          request.headers.get("connection-id") !== "xero-connection" ||
-          request.headers.get("provider-config-key") !== "xero-invoicewise"
+          url.searchParams.get("provider_config_key") !== "xero-invoicewise"
         ) {
           return Response.json(
-            { error: { message: "Invalid draft action" } },
+            { error: { message: "Unknown connection" } },
+            { status: 404 },
+          );
+        }
+        return Response.json({
+          connection_id: "xero-connection",
+          provider_config_key: "xero-invoicewise",
+          connection_config: { tenant_id: "xero-tenant" },
+          credentials: { expires_at: "2026-09-22T13:30:00.000Z" },
+        });
+      }
+      const proxied =
+        request.headers.get("connection-id") === "xero-connection" &&
+        request.headers.get("provider-config-key") === "xero-invoicewise" &&
+        request.headers.get("nango-proxy-xero-tenant-id") === "xero-tenant";
+      if (
+        request.method === "POST" &&
+        url.pathname === "/proxy/api.xro/2.0/Invoices"
+      ) {
+        const body = (await request.json()) as {
+          Invoices: Record<string, unknown>[];
+        };
+        const [bill] = body.Invoices;
+        const key = request.headers.get("nango-proxy-idempotency-key") ?? "";
+        billAttempts.set(key, (billAttempts.get(key) ?? 0) + 1);
+        const contact = bill?.Contact as Record<string, unknown> | undefined;
+        const lines = bill?.LineItems as Record<string, unknown>[] | undefined;
+        if (
+          !proxied ||
+          !key.startsWith("invoicewise:") ||
+          bill?.Type !== "ACCPAY" ||
+          bill.Status !== "DRAFT" ||
+          contact?.Name !== "Acme Supplies Ltd" ||
+          bill.CurrencyCode !== "GBP" ||
+          bill.LineAmountTypes !== "Exclusive" ||
+          lines?.[0]?.UnitAmount !== 100
+        ) {
+          return Response.json(
+            { Message: "A validation exception occurred" },
             { status: 400 },
           );
         }
+        // Xero replays the original response for a repeated Idempotency-Key.
         const existing = providerIds.get(key);
         if (existing)
-          return Response.json({ providerId: existing, duplicate: true });
-        const providerId = `xero-draft-${providerIds.size + 1}`;
+          return Response.json({ Invoices: [{ InvoiceID: existing }] });
+        const providerId = `xero-bill-${providerIds.size + 1}`;
         providerIds.set(key, providerId);
-        if (body.input.invoiceNumber === "FAIL-RETRY") {
+        attachments.set(providerId, new Map());
+        if (bill.InvoiceNumber === "FAIL-RETRY") {
           return Response.json(
             { error: { message: "Forced provider timeout" } },
             { status: 503 },
           );
         }
-        return Response.json({ providerId, duplicate: false });
+        return Response.json({ Invoices: [{ InvoiceID: providerId }] });
+      }
+      const attachment = url.pathname.match(
+        /^\/proxy\/api\.xro\/2\.0\/Invoices\/([^/]+)\/Attachments\/([^/]+)$/,
+      );
+      if (request.method === "POST" && attachment) {
+        const stored = attachments.get(decodeURIComponent(attachment[1]!));
+        const bytes = (await request.arrayBuffer()).byteLength;
+        if (
+          !proxied ||
+          !stored ||
+          request.headers.get("nango-proxy-content-type") !==
+            "application/pdf" ||
+          bytes === 0
+        ) {
+          return Response.json(
+            { Message: "Invalid attachment" },
+            { status: 400 },
+          );
+        }
+        stored.set(decodeURIComponent(attachment[2]!), bytes);
+        return Response.json({ Attachments: [{ AttachmentID: "attachment" }] });
       }
       if (
         request.method === "DELETE" &&
@@ -245,7 +292,7 @@ async function main() {
       invoiceId: postedInvoice.id,
       teamId,
     });
-    const callsBeforeDuplicate = actionAttempts.get(
+    const callsBeforeDuplicate = billAttempts.get(
       `invoicewise:${postedInvoice.id}`,
     );
     const duplicate = await Effect.runPromise(
@@ -258,7 +305,7 @@ async function main() {
     );
     const duplicateRefused =
       callsBeforeDuplicate ===
-      actionAttempts.get(`invoicewise:${postedInvoice.id}`);
+      billAttempts.get(`invoicewise:${postedInvoice.id}`);
 
     const retryInvoice = await createInvoice("FAIL-RETRY");
     if (!retryInvoice) throw new Error("Unable to persist retry invoice");
@@ -302,7 +349,11 @@ async function main() {
       failedStatus?.status !== "failed" ||
       retriedJob?.status !== "succeeded" ||
       retriedJob.attempts !== 2 ||
-      retriedStatus?.status !== "already_posted" ||
+      retriedStatus?.status !== "posted" ||
+      retriedStatus.providerId !==
+        providerIds.get(`invoicewise:${retryInvoice.id}`) ||
+      providerIds.size !== 2 ||
+      [...attachments.values()].some((files) => files.size !== 1) ||
       connected ||
       !disconnected
     ) {
@@ -323,6 +374,8 @@ async function main() {
           posting: {
             status: postedStatus.status,
             providerId: postedStatus.providerId,
+            attached:
+              attachments.get(postedStatus.providerId ?? "")?.size === 1,
             duplicateRefused,
           },
           retry: {
@@ -330,6 +383,7 @@ async function main() {
             attempts: retriedJob.attempts,
             finalStatus: retriedStatus.status,
             providerId: retriedStatus.providerId,
+            billsInXero: providerIds.size,
           },
         },
         null,
