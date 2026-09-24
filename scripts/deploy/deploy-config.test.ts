@@ -1,0 +1,156 @@
+/**
+ * Production deploy wiring (config/deploy.yml, .kamal/secrets and the role
+ * entrypoints' preflight) must stay in step: a secret named in the Kamal
+ * config but absent from .kamal/secrets fails the deploy, and a setting the
+ * preflight requires but Kamal never provides stops a release from booting.
+ */
+
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { YAML } from "bun";
+
+const ROOT = join(import.meta.dir, "../..");
+const PREFLIGHT = join(ROOT, "scripts/deploy/require-env.sh");
+
+type EnvBlock = { clear?: Record<string, unknown>; secret?: string[] };
+type DeployConfig = {
+  env: EnvBlock;
+  servers: Record<string, { env?: EnvBlock }>;
+  accessories: Record<string, { env?: EnvBlock }>;
+};
+
+const config = YAML.parse(
+  readFileSync(join(ROOT, "config/deploy.yml"), "utf8"),
+) as DeployConfig;
+
+const kamalSecrets = readFileSync(join(ROOT, ".kamal/secrets"), "utf8")
+  .split("\n")
+  .filter((line) => line.trim() && !line.startsWith("#"))
+  .map((line) => line.split("=")[0]);
+
+// Synthetic stand-ins; the test asserts none of them is ever printed.
+const SECRET_VALUE = "synthetic-secret-value-must-not-print";
+const ENCRYPTION_KEY = "ab".repeat(32);
+
+/** The environment Kamal gives a role's container, with synthetic secrets. */
+function roleEnv(role: string): Record<string, string> {
+  const blocks = [config.env, config.servers[role]?.env ?? {}];
+  const env: Record<string, string> = {};
+  for (const block of blocks) {
+    for (const [key, value] of Object.entries(block.clear ?? {})) {
+      env[key] = String(value);
+    }
+    for (const key of block.secret ?? []) {
+      env[key] =
+        key === "MIDDAY_ENCRYPTION_KEY" ? ENCRYPTION_KEY : SECRET_VALUE;
+    }
+  }
+  return env;
+}
+
+function preflight(role: string, env: Record<string, string>) {
+  const result = Bun.spawnSync(["sh", PREFLIGHT, role], {
+    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", ...env },
+  });
+  return {
+    exitCode: result.exitCode,
+    output: `${result.stdout.toString()}${result.stderr.toString()}`,
+  };
+}
+
+const ROLES = Object.keys(config.servers);
+
+describe("deploy config", () => {
+  test("serves the web and api roles", () => {
+    expect(ROLES.sort()).toEqual(["api", "web"]);
+  });
+
+  test(".kamal/secrets lists exactly the secrets the config names", () => {
+    const named = new Set<string>([
+      ...(config.env.secret ?? []),
+      ...Object.values(config.servers).flatMap((s) => s.env?.secret ?? []),
+      ...Object.values(config.accessories).flatMap((a) => a.env?.secret ?? []),
+    ]);
+    expect([...kamalSecrets].sort()).toEqual([...named].sort());
+  });
+
+  test("never sets a secret in clear", () => {
+    for (const block of [
+      config.env,
+      ...Object.values(config.servers).map((s) => s.env ?? {}),
+    ]) {
+      for (const key of Object.keys(block.clear ?? {})) {
+        expect(kamalSecrets).not.toContain(key);
+      }
+    }
+  });
+});
+
+describe("production preflight", () => {
+  for (const role of ["web", "api"]) {
+    test(`${role}: the Kamal config satisfies it`, () => {
+      const result = preflight(role, roleEnv(role));
+      expect(result.output).toBe("");
+      expect(result.exitCode).toBe(0);
+    });
+
+    test(`${role}: refuses each missing setting by name only`, () => {
+      const full = roleEnv(role);
+      for (const name of Object.keys(full)) {
+        const { [name]: _removed, ...env } = full;
+        const result = preflight(role, env);
+        if (result.exitCode === 0) continue; // optional for this role
+        expect(result.exitCode).toBe(1);
+        expect(result.output).toContain(name);
+        expect(result.output).not.toContain(SECRET_VALUE);
+        expect(result.output).not.toContain(ENCRYPTION_KEY);
+      }
+    });
+  }
+
+  test("api requires the TypeSafe key; web does not", () => {
+    const { TYPESAFE_API_KEY: _key, ...api } = roleEnv("api");
+    const refused = preflight("api", api);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.output).toContain("TYPESAFE_API_KEY");
+    expect(roleEnv("web").TYPESAFE_API_KEY).toBeUndefined();
+  });
+
+  test("empty values count as missing", () => {
+    const result = preflight("api", { ...roleEnv("api"), SMTP_PASS: "" });
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain("SMTP_PASS");
+  });
+
+  test("local storage requires a persistent path", () => {
+    const { LOCAL_STORAGE_PATH: _path, ...env } = roleEnv("web");
+    const result = preflight("web", env);
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain("LOCAL_STORAGE_PATH");
+  });
+
+  test("refuses a non-production NODE_ENV", () => {
+    const result = preflight("api", {
+      ...roleEnv("api"),
+      NODE_ENV: "development",
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain("NODE_ENV must be production");
+  });
+
+  test("refuses a malformed encryption key without printing it", () => {
+    const badKey = "not-a-hex-key-synthetic";
+    const result = preflight("web", {
+      ...roleEnv("web"),
+      MIDDAY_ENCRYPTION_KEY: badKey,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain("MIDDAY_ENCRYPTION_KEY");
+    expect(result.output).not.toContain(badKey);
+  });
+
+  test("rejects an unknown role", () => {
+    expect(preflight("worker", roleEnv("api")).exitCode).toBe(2);
+  });
+});

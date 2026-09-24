@@ -1,0 +1,6 @@
+{
+  "workspaceId": "2e49da15-f1b1-4d4c-9e45-a177a2258128",
+  "defaultEnvironment": "prod",
+  "domain": "https://infisical.zzapp.uk/api",
+  "gitBranchToEnvironmentMapping": null
+}

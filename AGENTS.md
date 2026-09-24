@@ -99,8 +99,26 @@ resolve the conflicting object or data, then re-run `bun db:migrate`. There is n
 destructive reset and no fictional rollback for irreversible enum/schema changes; see
 `docs/development.md` for the documented procedure and the verification proof.
 
+## Production
+
+The app runs at `app.invoicewise.uk` (dashboard) and `api.invoicewise.uk` (API) on hp-slice,
+deployed with Kamal (`config/deploy.yml`) using secrets from the self-hosted Infisical
+project `invoicewise` (`prod`). Migrations apply when the API container boots. Deploy with
+`infisical run --env prod -- kamal deploy`; the full procedure is in `docs/deployment.md`.
+A new required production setting goes in Infisical, `config/deploy.yml`, `.kamal/secrets` and
+`scripts/deploy/require-env.sh` together; `scripts/deploy/deploy-config.test.ts` checks they agree.
+Transactional mail is Purelymail SMTP as `auth@invoicewise.uk`, never Resend.
+
 ## Links
 
-- **Product:** [invoicewise.uk](https://invoicewise.uk)
+- **App:** [app.invoicewise.uk](https://app.invoicewise.uk)
+- **Product:** [invoicewise.uk](https://invoicewise.uk) (separate Vercel marketing site)
 - **Upstream:** [github.com/midday-ai/midday](https://github.com/midday-ai/midday)
 - **TypeSafe:** [typesafe.ai](https://typesafe.ai)
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

@@ -14,6 +14,6 @@
     "types": ["bun-types"],
     "baseUrl": "."
   },
-  "include": ["verify/**/*.ts"],
+  "include": ["verify/**/*.ts", "deploy/**/*.ts"],
   "exclude": ["node_modules"]
 }

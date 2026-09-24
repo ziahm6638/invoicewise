@@ -559,6 +559,14 @@ async function unitSuites() {
     env: env(),
     timeoutMs: 10 * 60 * 1000,
   });
+
+  await v.runStep("test:deploy-config", {
+    command: "bun",
+    args: ["--no-env-file", "test", "scripts/deploy/deploy-config.test.ts"],
+    cwd: ws(),
+    env: env(),
+    timeoutMs: 5 * 60 * 1000,
+  });
 }
 
 async function buildWorkspace() {

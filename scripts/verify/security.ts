@@ -91,6 +91,12 @@ export const SECRET_EXCEPTIONS: {
   reason: string;
 }[] = [
   {
+    path: "Dockerfile",
+    value: "build-only-secret-not-used-at-runtime-000000",
+    reason:
+      "build-time placeholder for `next build`; the real secret is injected by Kamal at run time",
+  },
+  {
     path: "apps/api/.env-template",
     value: "invoicewise-local-development-auth-secret-change-in-production",
     reason: "committed local template for the shared development auth secret",
