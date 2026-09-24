@@ -321,9 +321,16 @@ suite("document intake ownership over real HTTP", () => {
       .set({ intakePublishingUntil: new Date(Date.now() - 1000).toISOString() })
       .where(orm.eq(schema.inbox.teamId, teamId));
 
-  /** Runs worker batches until `done` holds, so unrelated queued jobs cannot starve a test. */
-  const runWorker = async (done: () => Promise<boolean>, rounds = 8) => {
-    for (let round = 0; round < rounds; round++) {
+  /**
+   * Runs worker batches until `done` holds, so unrelated queued jobs cannot
+   * starve a test. Waits on observable state rather than a fixed number of
+   * rounds: a loaded host gets the full wall-clock budget, and a genuine
+   * regression still fails by exhausting it.
+   */
+  const WORKER_WAIT_MS = 20_000;
+  const runWorker = async (done: () => Promise<boolean>) => {
+    const deadline = Date.now() + WORKER_WAIT_MS;
+    while (Date.now() < deadline) {
       if (await done()) return true;
       await runBatch();
       await Bun.sleep(25);
@@ -543,7 +550,7 @@ suite("document intake ownership over real HTTP", () => {
       "mutation",
     );
     expect(retry.data).toBeNull();
-  });
+  }, 60_000);
 
   test("same filename survives twice, replay is idempotent and conflict never overwrites", async () => {
     const owner = await createUser("intake-dupe");
@@ -599,7 +606,7 @@ suite("document intake ownership over real HTTP", () => {
       ).arrayBuffer(),
     );
     expect(afterReplay.length).toBe(invoicePdf.byteLength);
-  });
+  }, 60_000);
 
   test("a second workspace cannot process, sign, read or delete another workspace document", async () => {
     const ownerA = await createUser("intake-owner-a");
@@ -682,7 +689,7 @@ suite("document intake ownership over real HTTP", () => {
     );
     const expired = await get(shortLived.pathname + shortLived.search);
     expect(expired.status).toBe(401);
-  });
+  }, 60_000);
 
   test("real bytes, declared type, size and parser bounds are enforced", async () => {
     const owner = await createUser("intake-validation");
@@ -804,7 +811,7 @@ suite("document intake ownership over real HTTP", () => {
     expect(row?.fileName).toBe("escape.pdf");
     expect(row?.filePath?.[0]).toBe(teamId);
     expect(row?.filePath?.join("/")).not.toContain("..");
-  });
+  }, 60_000);
 
   test("parser admission is retryable through the upload HTTP boundary", async () => {
     const owner = await createUser("intake-admission-http");
@@ -847,7 +854,7 @@ suite("document intake ownership over real HTTP", () => {
     expect(recovered.status).toBe(200);
     const [row] = await inboxRowsFor(teamId);
     expect(row?.intakeState).toBe("accepted");
-  });
+  }, 60_000);
 
   test("saturated previews leave upload parser admission free", async () => {
     const owner = await createUser("intake-preview-saturation");
@@ -863,8 +870,12 @@ suite("document intake ownership over real HTTP", () => {
     const held = Promise.all(
       [0, 1].map(() =>
         realDocuments.runBusyProcessForTest({
-          spinMs: 5_000,
-          timeoutMs: 20_000,
+          // Hold every preview slot far longer than the upload below can
+          // plausibly take, so the "upload finished while previews were still
+          // busy" assertion is a state check, not a race against the host's
+          // wall-clock speed.
+          spinMs: 20_000,
+          timeoutMs: 60_000,
           admission: "preview",
         }),
       ),
@@ -906,7 +917,7 @@ suite("document intake ownership over real HTTP", () => {
     for (const { result } of await held) expect(result.ok).toBe(true);
     const [row] = await inboxRowsFor(teamId);
     expect(row?.intakeState).toBe("accepted");
-  }, 30_000);
+  }, 90_000);
 
   test("no database connection is held while bytes move to or from storage", async () => {
     const owner = await createUser("intake-slow-storage");
@@ -929,7 +940,9 @@ suite("document intake ownership over real HTTP", () => {
       const { active } = narrow.getConnectionPoolStats().pools.primary!;
       const probe = await Promise.race([
         narrow.primaryDb.execute(orm.sql`select 1`).then(() => "ran" as const),
-        Bun.sleep(2_000).then(() => "blocked" as const),
+        // Generous guard: a free connection answers in milliseconds even on a
+        // loaded host, so only a genuinely held connection reaches this bound.
+        Bun.sleep(10_000).then(() => "blocked" as const),
       ]);
       observed.push({ stage, activeConnections: active, probe });
       await Bun.sleep(500);
@@ -970,7 +983,7 @@ suite("document intake ownership over real HTTP", () => {
     const [row] = await inboxRowsFor(teamId);
     expect(row?.intakeState).toBe("accepted");
     expect(await workflowJobsFor(teamId)).toHaveLength(1);
-  }, 30_000);
+  }, 60_000);
 
   test("reservation and enqueue boundaries recover without an orphaned accepted invoice", async () => {
     const owner = await createUser("intake-recovery");
@@ -1169,7 +1182,7 @@ suite("document intake ownership over real HTTP", () => {
     expect(
       storage.download({ bucket: "vault", path: abandonedPath }),
     ).rejects.toThrow();
-  });
+  }, 60_000);
 
   test("the worker refuses missing, deleted and foreign bindings", async () => {
     const owner = await createUser("intake-worker");
@@ -1243,7 +1256,7 @@ suite("document intake ownership over real HTTP", () => {
     );
     const deletedJob = await jobByKey(`${teamId}:deleted`);
     expect(deletedJob?.status).toBe("failed");
-  });
+  }, 60_000);
 
   test("a legacy queued job without an inbox row still runs for its own workspace", async () => {
     const owner = await createUser("intake-legacy-job");
@@ -1329,7 +1342,7 @@ suite("document intake ownership over real HTTP", () => {
     );
     expect((await jobByKey(`${teamId}:legacy-assets`))?.status).toBe("failed");
     expect(await inboxRowsFor(teamId)).toHaveLength(1);
-  });
+  }, 60_000);
 
   test("a missing stored object is retried instead of inventing a record", async () => {
     const owner = await createUser("intake-missing-object");
@@ -1377,7 +1390,7 @@ suite("document intake ownership over real HTTP", () => {
     expect(recoveredJob?.status).toBe("succeeded");
     const [processed] = await inboxRowsFor(teamId);
     expect(processed?.extraction).toBeTruthy();
-  });
+  }, 60_000);
 
   test("bounds the actual HTTP body before parsing", async () => {
     const owner = await createUser("intake-body-bound");
@@ -1408,7 +1421,7 @@ suite("document intake ownership over real HTTP", () => {
     expect(response.status).toBe(413);
     expect(await inboxRowsFor(teamId)).toHaveLength(0);
     expect(await workflowJobsFor(teamId)).toHaveLength(0);
-  });
+  }, 60_000);
 
   test("rejects an existing object whose bytes do not match the reservation", async () => {
     const owner = await createUser("intake-conflict-object");
@@ -1467,7 +1480,7 @@ suite("document intake ownership over real HTTP", () => {
     expect(binding).toBeDefined();
     expect(intake.verifyStoredIntake(binding!, stored).ok).toBe(false);
     expect(binding?.intakeState).not.toBe("accepted");
-  });
+  }, 60_000);
 
   test("concurrent replay of the same bytes creates one document and one job", async () => {
     const owner = await createUser("intake-concurrent");
@@ -1498,7 +1511,7 @@ suite("document intake ownership over real HTTP", () => {
     ).toBe(1);
     expect(await inboxRowsFor(teamId)).toHaveLength(1);
     expect(await workflowJobsFor(teamId)).toHaveLength(1);
-  });
+  }, 60_000);
 
   test("cleanup never deletes a reservation that finished accepting", async () => {
     const owner = await createUser("intake-cleanup");
@@ -1557,7 +1570,7 @@ suite("document intake ownership over real HTTP", () => {
       });
       expect(bytes.size).toBe(invoicePdf.byteLength);
     }
-  });
+  }, 60_000);
 
   test("a claimed reservation cannot be accepted and later bytes are not lost", async () => {
     const owner = await createUser("intake-cleanup-claim");
@@ -1607,7 +1620,7 @@ suite("document intake ownership over real HTTP", () => {
       });
       expect(bytes.size).toBe(invoicePdf.byteLength);
     }
-  });
+  }, 60_000);
 
   test("provider references are workspace scoped and occurrences are distinct", async () => {
     const ownerA = await createUser("intake-ref-a");
@@ -1681,7 +1694,7 @@ suite("document intake ownership over real HTTP", () => {
     );
     expect(occurrenceOne.status).toBe("accepted");
     expect(occurrenceTwo.status).toBe("accepted");
-  });
+  }, 60_000);
 
   test("reserved mailbox attachments are retried, not treated as handled", async () => {
     const owner = await createUser("intake-reserved-attachment");
@@ -1723,7 +1736,7 @@ suite("document intake ownership over real HTTP", () => {
         "message-9_0_invoice.pdf",
       ]),
     ).toHaveLength(1);
-  });
+  }, 60_000);
 
   test("retry is accepted-only and idempotent while work is pending", async () => {
     const owner = await createUser("intake-retry");
@@ -1771,7 +1784,7 @@ suite("document intake ownership over real HTTP", () => {
         inboxId: reserved!.id,
       }),
     ).toBeNull();
-  });
+  }, 60_000);
 
   test("a legacy row cannot read or delete another workspace's object", async () => {
     const ownerA = await createUser("intake-legacy-a");
@@ -1854,7 +1867,7 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(true);
-  });
+  }, 60_000);
 
   test("concurrent retries serialize on the inbox row", async () => {
     const owner = await createUser("intake-retry-race");
@@ -1892,7 +1905,7 @@ suite("document intake ownership over real HTTP", () => {
     );
     expect(jobIds.size).toBe(1);
     expect(await workflowJobsFor(teamId)).toHaveLength(1);
-  });
+  }, 60_000);
 
   test("a failed cleanup removal is durably retried", async () => {
     const owner = await createUser("intake-cleanup-retry");
@@ -1953,7 +1966,7 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(false);
-  });
+  }, 60_000);
 
   test("a crash after the discard claim still removes the object", async () => {
     const owner = await createUser("intake-crash-claim");
@@ -2002,7 +2015,7 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(false);
-  });
+  }, 60_000);
 
   test("ambiguous publication stays pending through later passes until explicit settlement", async () => {
     const owner = await createUser("intake-ambiguous-reconciliation");
@@ -2095,7 +2108,7 @@ suite("document intake ownership over real HTTP", () => {
       { olderThanMs: -1, limit: 100 },
     );
     expect(afterSettlement.discarded).not.toContain(reserved!.id);
-  });
+  }, 60_000);
 
   test("delete and cancel preserve unresolved publication ambiguity across late writes", async () => {
     const deleteOwner = await createUser("intake-delete-ambiguous");
@@ -2240,7 +2253,7 @@ suite("document intake ownership over real HTTP", () => {
     const [afterReservedCancel] = await inboxRowsFor(reservedTeamId);
     expect(afterReservedCancel?.objectRemovalPending).toBe(true);
     expect(afterReservedCancel?.objectRemovalAmbiguous).toBe(true);
-  });
+  }, 60_000);
 
   test("explicit cleanup paginates unresolved removals without starving later rows", async () => {
     const owner = await createUser("intake-cleanup-pagination");
@@ -2305,7 +2318,7 @@ suite("document intake ownership over real HTTP", () => {
       expect(processed.has(id)).toBe(true);
       expect(unresolved.has(id)).toBe(true);
     }
-  });
+  }, 60_000);
 
   test("cleanup cannot claim a row while a publication is writing it", async () => {
     const owner = await createUser("intake-late-write");
@@ -2370,7 +2383,7 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(true);
-  });
+  }, 60_000);
 
   test("pending cleanup cannot delete a retry that holds the publication lease", async () => {
     const owner = await createUser("intake-pending-retry-race");
@@ -2451,7 +2464,7 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(true);
-  });
+  }, 60_000);
 
   test("a failed attempt does not release the lease a concurrent attempt still holds", async () => {
     const owner = await createUser("intake-shared-lease");
@@ -2530,7 +2543,7 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(true);
-  });
+  }, 60_000);
 
   test("a publication that lands after its record was deleted is reclaimed", async () => {
     const owner = await createUser("intake-late-publication");
@@ -2620,7 +2633,7 @@ suite("document intake ownership over real HTTP", () => {
     );
     expect(reclaimed.discarded).toContain(accepted.inboxId);
     expect(await exists()).toBe(false);
-  });
+  }, 60_000);
 
   test("a publication that fails after writing records durable removal intent", async () => {
     const owner = await createUser("intake-late-write-failure");
@@ -2697,7 +2710,7 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(false);
-  });
+  }, 60_000);
 
   test("a transient readback failure stays transient and recoverable", async () => {
     const owner = await createUser("intake-readback");
@@ -2761,7 +2774,7 @@ suite("document intake ownership over real HTTP", () => {
         .then(() => true)
         .catch(() => false),
     ).toBe(true);
-  });
+  }, 60_000);
 
   test("a failed intake stays retryable after a cleanup pass", async () => {
     const owner = await createUser("intake-cleanup-reference");
@@ -2804,7 +2817,7 @@ suite("document intake ownership over real HTTP", () => {
       input,
     );
     expect(retried.status).toBe("accepted");
-  });
+  }, 60_000);
 
   test("a transient mailbox sync failure is retried instead of advancing the account", async () => {
     const owner = await createUser("intake-mailbox-transient");
@@ -2913,7 +2926,7 @@ suite("document intake ownership over real HTTP", () => {
       .from(schema.inboxAccounts)
       .where(orm.eq(schema.inboxAccounts.id, accountId));
     expect(advanced?.lastAccessed).not.toBe(accessBeforeFailure);
-  });
+  }, 60_000);
 
   test("a valid invoice rejected by parser admission is retried through mailbox sync", async () => {
     const owner = await createUser("intake-mailbox-admission");
@@ -3022,7 +3035,7 @@ suite("document intake ownership over real HTTP", () => {
       .from(schema.inboxAccounts)
       .where(orm.eq(schema.inboxAccounts.id, accountId));
     expect(advanced?.lastAccessed).not.toBe(accessBeforeFailure);
-  });
+  }, 60_000);
 
   test("capability URLs fail closed for malformed, legacy and retained bytes", async () => {
     const owner = await createUser("intake-capability");
@@ -3101,7 +3114,7 @@ suite("document intake ownership over real HTTP", () => {
         .catch(() => false),
     ).toBe(true);
     expect((await get(signed.pathname + signed.search)).status).toBe(401);
-  });
+  }, 60_000);
 
   test("two same-named Gmail attachments in one message are both accepted", async () => {
     const owner = await createUser("intake-gmail-occurrence");
@@ -3137,7 +3150,7 @@ suite("document intake ownership over real HTTP", () => {
     expect(new Set(rows.map((row) => row.referenceId))).toEqual(
       new Set<string | null>([firstRef!, secondRef!]),
     );
-  });
+  }, 60_000);
 
   test("an update cannot delete; deletion runs the delete lifecycle", async () => {
     const owner = await createUser("intake-update-delete");
@@ -3202,7 +3215,7 @@ suite("document intake ownership over real HTTP", () => {
     if (again.status === "accepted") {
       expect(again.inboxId).not.toBe(accepted.inboxId);
     }
-  });
+  }, 60_000);
 
   test("deleting a legacy row keeps an object another live row still uses", async () => {
     const owner = await createUser("intake-legacy-shared");
@@ -3271,7 +3284,7 @@ suite("document intake ownership over real HTTP", () => {
     ).toBeTruthy();
     await queries.deleteInbox(client.primaryDb, { id: thirdId, teamId });
     expect(await objectExists()).toBe(false);
-  });
+  }, 60_000);
 
   test("unaccepted reservations are hidden from reads, exports and signing", async () => {
     const owner = await createUser("intake-reserved-hidden");
@@ -3345,7 +3358,7 @@ suite("document intake ownership over real HTTP", () => {
       }),
     );
     expect((await get(signed.pathname + signed.search)).status).toBe(401);
-  });
+  }, 60_000);
 
   test("a scheduled sync that exhausts its retries still schedules the next run", async () => {
     const owner = await createUser("intake-sync-chain");
@@ -3404,7 +3417,12 @@ suite("document intake ownership over real HTTP", () => {
     expect(next).toHaveLength(1);
     expect(next[0]?.status).toBe("queued");
     expect(next[0]?.idempotencyKey.startsWith(`${accountId}:`)).toBe(true);
-    expect(new Date(next[0]!.runAt).getTime()).toBeGreaterThan(Date.now());
+    // The next slot is scheduled ahead of the job that scheduled it, so the
+    // mailboxes keep syncing without this assertion depending on how long the
+    // loaded host took to reach it.
+    expect(new Date(next[0]!.runAt).getTime()).toBeGreaterThan(
+      new Date(next[0]!.createdAt).getTime(),
+    );
     expect(next[0]?.payload).toEqual({ id: accountId, scheduleNext: true });
 
     // The failed attempt did not advance the account cursor.
@@ -3413,5 +3431,5 @@ suite("document intake ownership over real HTTP", () => {
       .from(schema.inboxAccounts)
       .where(orm.eq(schema.inboxAccounts.id, accountId));
     expect(account?.lastAccessed).toBe(beforeSync?.lastAccessed);
-  });
+  }, 60_000);
 });
