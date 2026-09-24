@@ -40,7 +40,8 @@ mock.module("./pocketbase", () => ({
 
 const { createLead } = await import("./leads.server");
 
-const submit = () => createLead({ email: "person@example.com" });
+const submit = () =>
+  createLead({ email: "person@example.com", source: "test" });
 const originalSalt = process.env.IP_HASH_SALT;
 const originalConsoleError = console.error;
 
@@ -65,7 +66,7 @@ describe("createLead rate limit", () => {
   });
 
   test("rejects without emailing when IP_HASH_SALT is unset", async () => {
-    delete process.env.IP_HASH_SALT;
+    Reflect.deleteProperty(process.env, "IP_HASH_SALT");
 
     const result = await submit();
 

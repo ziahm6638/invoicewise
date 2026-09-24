@@ -3,7 +3,7 @@
 InvoiceWise runs on `hp-slice`, deployed with Kamal 2 from `config/deploy.yml`.
 This is the operator runbook: what runs where, where secrets live, and how to
 deploy, check migrations and roll back. The marketing site at `invoicewise.uk`
-is a separate Vercel project and is not deployed from this repository.
+is `apps/website`, deployed as a separate Vercel project rather than with Kamal.
 
 ## Shape
 
