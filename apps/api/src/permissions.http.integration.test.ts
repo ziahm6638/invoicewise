@@ -1167,6 +1167,55 @@ suite("workspace permissions over real HTTP", () => {
   );
 
   test(
+    "deleting the active workspace moves every session on it to a workspace the user still belongs to",
+    async () => {
+      const { owner, member, teamId } = await joinSharedWorkspace("deleted");
+
+      // Both the owner's and the member's sessions are on the workspace.
+      const ownerActive = await trpc(owner.cookie, "team.current", null);
+      expect((ownerActive.data as { id: string }).id).toBe(teamId);
+
+      const deleted = await trpc(
+        owner.cookie,
+        "team.delete",
+        { teamId },
+        "mutation",
+      );
+      expect(deleted.error).toBeNull();
+
+      // Each next request, including the dashboard's first workspace reads,
+      // lands in the user's own workspace instead of having none.
+      for (const user of [owner, member]) {
+        const current = await trpc(user.cookie, "team.current", null);
+        expect(current.error).toBeNull();
+        expect((current.data as { id: string }).id).toBe(user.personalTeamId);
+
+        const me = await trpc(user.cookie, "user.me", null);
+        expect((me.data as { teamId: string }).teamId).toBe(
+          user.personalTeamId,
+        );
+
+        const members = await trpc(user.cookie, "team.members", null);
+        expect(members.error).toBeNull();
+        expect(
+          (members.data as { user: { id: string } }[]).map(
+            (row) => row.user.id,
+          ),
+        ).toEqual([user.userId]);
+
+        const inbox = await get("/inbox", { cookie: user.cookie });
+        expect(inbox.status).toBe(200);
+
+        expect(await sessionPointers(user.userId)).toEqual({
+          sessions: [user.personalTeamId],
+          user: user.personalTeamId,
+        });
+      }
+    },
+    RECOVERY_TEST_TIMEOUT_MS,
+  );
+
+  test(
     "a stale active-workspace pointer is recovered server-side without exposing the stale workspace",
     async () => {
       const { member, teamId } = await joinSharedWorkspace("stale");

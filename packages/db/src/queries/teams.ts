@@ -652,16 +652,12 @@ export async function deleteTeam(db: Database, params: DeleteTeamParams) {
       .from(authSessions)
       .where(eq(authSessions.activeOrganizationId, params.teamId));
 
-    const [result] = await tx
-      .delete(teams)
-      .where(eq(teams.id, params.teamId))
-      .returning({
-        id: teams.id,
-      });
-
-    // Membership rows, API keys and OAuth tokens cascade with the team, but
-    // the active-team pointers on users and sessions do not. User rows are
-    // locked in id order so concurrent deletions cannot deadlock on them.
+    // Repoint before deleting: the session pointer's foreign key is
+    // `ON DELETE SET NULL`, so once the team row is gone the sessions no longer
+    // name it and would be left with no active workspace while `users.team_id`
+    // still names one. Repointing already excludes this workspace, so its
+    // membership rows (which cascade with the team) are never chosen. User rows
+    // are locked in id order so concurrent deletions cannot deadlock on them.
     const affectedUserIds = [
       ...new Set(
         [...members, ...pointedUsers, ...pointedSessions].map(
@@ -673,6 +669,13 @@ export async function deleteTeam(db: Database, params: DeleteTeamParams) {
     for (const userId of affectedUserIds) {
       await repointActiveWorkspace(tx, userId, params.teamId);
     }
+
+    const [result] = await tx
+      .delete(teams)
+      .where(eq(teams.id, params.teamId))
+      .returning({
+        id: teams.id,
+      });
 
     return result;
   });
