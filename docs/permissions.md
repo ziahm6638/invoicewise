@@ -37,8 +37,9 @@ role, the target's role, the owner count and the write all happen under that
 lock, so concurrent owner changes can never leave a workspace without an owner.
 Removing a member (or the member leaving, or the workspace being deleted) moves
 their active-team pointer and every session pointed at the workspace to another
-workspace they still belong to, or clears them when none is left; removal also
-deletes their API keys for it and revokes their OAuth tokens.
+workspace they still belong to, or clears them when none is left; removal, and
+demotion to `member`, also deletes their API keys for it and revokes their
+OAuth tokens.
 
 **tRPC.** `protectedProcedure` resolves the caller's role from the primary
 database on every request (`apps/api/src/trpc/middleware/team-permission.ts`).
