@@ -101,9 +101,6 @@ export class WorkflowMailer extends Context.Tag("invoicewise/WorkflowMailer")<
     readonly send: (
       message: WorkflowMail,
     ) => Effect.Effect<void, WorkflowExecutionError>;
-    readonly batch: (
-      messages: WorkflowMail[],
-    ) => Effect.Effect<void, WorkflowExecutionError>;
     readonly createContact: (
       contact: Omit<CreateContactOptions, "audienceId">,
     ) => Effect.Effect<void, WorkflowExecutionError>;
@@ -322,37 +319,26 @@ export const WorkflowMailerLive = Layer.effect(
       const applySender = (message: WorkflowMail): WorkflowMail =>
         sender ? { ...message, from: sender } : message;
 
-      const capture = async (messages: WorkflowMail[]): Promise<void> => {
-        if (!sinkPath) return;
-
-        for (const message of messages) {
+      const deliver = async (message: WorkflowMail): Promise<void> => {
+        const final = applySender(message);
+        if (sinkPath) {
           await writeMailSinkRecord(sinkPath, {
             at: new Date().toISOString(),
-            to: Array.isArray(message.to) ? message.to.join(",") : message.to,
-            from: message.from ?? null,
-            subject: message.subject,
-            html: message.html ?? null,
-            text: message.text ?? null,
+            to: Array.isArray(final.to) ? final.to.join(",") : final.to,
+            from: final.from ?? null,
+            subject: final.subject,
+            html: final.html ?? null,
+            text: final.text ?? null,
           });
-        }
-      };
-
-      const deliver = async (messages: WorkflowMail[]): Promise<void> => {
-        const final = messages.map(applySender);
-        if (sinkPath) {
-          await capture(final);
           return;
         }
-        for (const { from: _templateSender, ...message } of final) {
-          await sendTransactionalSmtp(message, mailEnv);
-        }
+        const { from: _templateSender, ...smtpMessage } = final;
+        await sendTransactionalSmtp(smtpMessage, mailEnv);
       };
 
       return {
         send: (message: WorkflowMail) =>
-          attempt(() => deliver([message]), "Unable to send email"),
-        batch: (messages: WorkflowMail[]) =>
-          attempt(() => deliver(messages), "Unable to send email batch"),
+          attempt(() => deliver(message), "Unable to send email"),
         createContact: (contact: Omit<CreateContactOptions, "audienceId">) =>
           attempt(async () => {
             // Local capture must not reach the provider's contact store.
@@ -669,29 +655,30 @@ const makeInviteTeamMembers = (mailer: WorkflowMailer["Type"]) =>
   ) {
     yield* ensureTeam(job, payload.teamId);
     const { t } = getI18n({ locale: payload.locale });
-    const messages = yield* Effect.forEach(payload.invites, (invite) =>
-      Effect.promise(async () => ({
-        from: "InvoiceWise <hello@invoicewise.uk>",
-        to: [invite.email],
-        subject: t("invite.subject", {
+    const { invite } = payload;
+    const html = yield* Effect.sync(() =>
+      render(
+        InviteEmail({
+          invitedByEmail: invite.invitedByEmail,
           invitedByName: invite.invitedByName,
+          email: invite.email,
           teamName: invite.teamName,
+          ip: payload.ip,
+          locale: payload.locale,
         }),
-        headers: { "X-Entity-Ref-ID": nanoid() },
-        html: await render(
-          InviteEmail({
-            invitedByEmail: invite.invitedByEmail,
-            invitedByName: invite.invitedByName,
-            email: invite.email,
-            teamName: invite.teamName,
-            ip: payload.ip,
-            locale: payload.locale,
-          }),
-        ),
-      })),
+      ),
     );
-    yield* mailer.batch(messages);
-    return { invitationsSent: messages.length };
+    yield* mailer.send({
+      from: "InvoiceWise <hello@invoicewise.uk>",
+      to: [invite.email],
+      subject: t("invite.subject", {
+        invitedByName: invite.invitedByName,
+        teamName: invite.teamName,
+      }),
+      headers: { "X-Entity-Ref-ID": nanoid() },
+      html,
+    });
+    return { invitationsSent: 1 };
   });
 
 type OnboardingStage = NonNullable<OnboardTeamPayload["stage"]>;

@@ -69,7 +69,6 @@ const runMailer = async (
     mailer: WorkflowMailer["Type"],
   ) => Effect.Effect<void, WorkflowExecutionError>,
 ) => {
-  // Loaded on first use, after the check has set its environment.
   const { WorkflowMailer, WorkflowMailerLive } = await import("./workflows.js");
 
   return await Effect.runPromise(
@@ -85,6 +84,7 @@ const sendOnce = (message: WorkflowMail) =>
 
 describe("workflow mailer transactional-mail policy", () => {
   beforeAll(async () => {
+    await import("./workflows.js");
     trap = await startSmtpTrap();
     sinkDir = await mkdtemp(join(tmpdir(), "jobs-mailer-policy-"));
   });
@@ -168,26 +168,6 @@ describe("workflow mailer transactional-mail policy", () => {
     expect(message?.subject).toBe("Invitation");
     expect(await stat(sink).catch(() => null)).toBeNull();
     expect(logged.join("\n")).not.toContain("invite-token");
-  });
-
-  test("sends a batch as one SMTP message per recipient", async () => {
-    trap.reset();
-    useMailEnv(configuredProduction());
-
-    await runMailer((mailer) =>
-      mailer.batch([
-        invitation,
-        { ...invitation, to: ["second@example.test"] },
-      ]),
-    );
-
-    expect(trap.messages.map((message) => message.recipients)).toEqual([
-      ["invitee@example.test"],
-      ["second@example.test"],
-    ]);
-    expect(trap.messages.every((message) => message.from === SENDER)).toBe(
-      true,
-    );
   });
 
   test("skips the marketing audience when Resend is not configured", async () => {

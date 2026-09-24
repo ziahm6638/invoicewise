@@ -66,11 +66,11 @@ mock.module("@invoicewise/db/client", () => ({
 
 const { POST } = await import("./route");
 
-const payloadFor = (name: string, count = 1) => ({
+const payloadFor = (name: string, count = 1, from = "vendor@example.com") => ({
   OriginalRecipient: "team-inbox@inbox.midday.ai",
   MessageID: "message-1",
   Subject: "Invoice",
-  FromFull: { Name: "Vendor", Email: "vendor@example.com" },
+  FromFull: { Name: "Vendor", Email: from },
   Attachments: Array.from({ length: count }, (_, index) => ({
     Name: name,
     Content: Buffer.from("%PDF-1.4 synthetic").toString("base64"),
@@ -80,12 +80,12 @@ const payloadFor = (name: string, count = 1) => ({
   })),
 });
 
-const post = (name: string, count = 1) =>
+const post = (name: string, count = 1, from?: string) =>
   POST(
     new Request("http://localhost/api/webhook/inbox", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(payloadFor(name, count)),
+      body: JSON.stringify(payloadFor(name, count, from)),
     }),
   );
 
@@ -152,5 +152,26 @@ describe("mailbox webhook acknowledgment", () => {
     expect(intakeCalls).toHaveLength(12);
     expect(maxInFlight).toBe(1);
     expect(new Set(intakeCalls.map((call) => call.referenceId)).size).toBe(12);
+  });
+
+  test("ignores mail sent from the app's own configured sender", async () => {
+    intakeResult = { status: "accepted", inboxId: "inbox-1" };
+    const previousSender = process.env.AUTH_EMAIL_FROM;
+    process.env.AUTH_EMAIL_FROM = "InvoiceWise <Auth@InvoiceWise.test>";
+
+    try {
+      const response = await post("invoice.pdf", 1, "auth@invoicewise.test");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ success: true });
+      expect(intakeCalls).toHaveLength(0);
+
+      const vendor = await post("invoice.pdf", 1, "vendor@example.com");
+      expect(vendor.status).toBe(200);
+      expect(intakeCalls).toHaveLength(1);
+    } finally {
+      if (previousSender === undefined)
+        Reflect.deleteProperty(process.env, "AUTH_EMAIL_FROM");
+      else process.env.AUTH_EMAIL_FROM = previousSender;
+    }
   });
 });

@@ -15,6 +15,7 @@ import {
 } from "@invoicewise/jobs/intake";
 import { isTransientIntakeFailure } from "@invoicewise/jobs/intake-failure";
 import { getExtensionFromMimeType } from "@invoicewise/utils";
+import { resolveMailSender } from "@invoicewise/utils/transactional-mail";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { headers } from "next/headers";
@@ -28,7 +29,15 @@ const ipRange = [
   "18.217.206.57",
 ];
 
-const FORWARD_FROM_EMAIL = "inbox@midday.ai";
+const ownSenderAddress = () => {
+  const sender = resolveMailSender();
+  return (
+    sender
+      ?.match(/<([^>]+)>/)?.[1]
+      ?.trim()
+      .toLowerCase() ?? sender?.toLowerCase()
+  );
+};
 
 // These are used by Google Workspace to forward emails to our inbox
 const ALLOWED_FORWARDING_EMAILS = ["forwarding-noreply@google.com"];
@@ -77,7 +86,7 @@ export async function POST(req: Request) {
   }
 
   // Ignore emails from our own domain to fix infinite loop
-  if (FromFull.Email === FORWARD_FROM_EMAIL) {
+  if (FromFull.Email.toLowerCase() === ownSenderAddress()) {
     return NextResponse.json({ success: true });
   }
 

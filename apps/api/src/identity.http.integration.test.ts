@@ -1070,27 +1070,32 @@ suite("identity lifecycle over real HTTP", () => {
           orm.eq(schema.workflowJobs.name, "invite-team-members"),
         ),
       );
-    expect(queued).toHaveLength(1);
-    expect(queued[0]!.status).toBe("queued");
+    expect(queued).toHaveLength(2);
+    expect(queued.every((job) => job.status === "queued")).toBe(true);
 
     // Earlier tests queue their own invitation mail, so run bounded batches
-    // until this job reaches a terminal state rather than assuming one batch
-    // claims it.
-    const jobStatus = async () => {
-      const [row] = await primaryDb
-        .select({ status: schema.workflowJobs.status })
-        .from(schema.workflowJobs)
-        .where(orm.eq(schema.workflowJobs.id, queued[0]!.id));
-      return row?.status;
-    };
+    // until these jobs reach a terminal state rather than assuming one batch
+    // claims them.
+    const jobStatuses = async () =>
+      (
+        await primaryDb
+          .select({ status: schema.workflowJobs.status })
+          .from(schema.workflowJobs)
+          .where(
+            orm.inArray(
+              schema.workflowJobs.id,
+              queued.map((job) => job.id),
+            ),
+          )
+      ).map((row) => row.status);
 
-    let status = await jobStatus();
-    for (let round = 0; round < 10 && status === "queued"; round += 1) {
+    let statuses = await jobStatuses();
+    for (let round = 0; round < 10 && statuses.includes("queued"); round += 1) {
       await runWorkflowBatchOnce();
-      status = await jobStatus();
-      if (status === "queued") await Bun.sleep(25);
+      statuses = await jobStatuses();
+      if (statuses.includes("queued")) await Bun.sleep(25);
     }
-    expect(status).toBe("succeeded");
+    expect(statuses).toEqual(["succeeded", "succeeded"]);
 
     // The captured message carries the configured sender and the app link.
     const captured = await readMail(inviteeEmail);
