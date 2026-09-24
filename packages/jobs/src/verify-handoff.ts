@@ -38,7 +38,7 @@ import { acceptIntakeUpload } from "./intake";
 import { required, startTypeSafeStub } from "./verify-support";
 
 type Receipt = {
-  endpoint: "a" | "b";
+  endpoint: "a" | "b" | "c";
   deliveryId: string;
   eventId: string;
   event: string;
@@ -124,20 +124,25 @@ async function main() {
   );
 
   // A consumer that records every delivery it is sent. `failing` makes one
-  // endpoint answer 503 for one invoice.
+  // endpoint answer 503 for one invoice, or for one event of that invoice.
   const receipts: Receipt[] = [];
   const failing = new Set<string>();
   const receiver = Bun.serve({
     port: 0,
     async fetch(request) {
-      const endpoint = new URL(request.url).pathname === "/a" ? "a" : "b";
+      const path = new URL(request.url).pathname;
+      const endpoint = path === "/a" ? "a" : path === "/c" ? "c" : "b";
       const body = (await request.json()) as {
         type: string;
         invoiceId?: string;
         revision?: number;
       };
       const invoiceId = body.invoiceId ?? null;
-      const status = failing.has(`${endpoint}:${invoiceId}`) ? 503 : 204;
+      const status =
+        failing.has(`${endpoint}:${invoiceId}`) ||
+        failing.has(`${endpoint}:${invoiceId}:${body.type}`)
+          ? 503
+          : 204;
       receipts.push({
         endpoint,
         deliveryId: request.headers.get("invoicewise-delivery") ?? "",
@@ -764,6 +769,85 @@ async function main() {
       })}`,
     );
 
+    // The terminal failure committed its `delivery.failed` notification with
+    // it: one event, to the other subscribed endpoint, identified by the
+    // failed delivery and its attempt count.
+    const failedB = deliveryFor(partialState, endpointB.id)!;
+    const noticesOf = (
+      state: Awaited<ReturnType<typeof invoiceState>>,
+      deliveryId: string,
+    ) =>
+      state.deliveries.filter(
+        (delivery) =>
+          delivery.event === "delivery.failed" &&
+          (delivery.payload as { data?: { deliveryId?: string } }).data
+            ?.deliveryId === deliveryId,
+      );
+    const firstNotices = noticesOf(partialState, failedB.id);
+    const firstNoticeId = logicalEventId(failedB.id, "delivery.failed", 4);
+    check(
+      firstNotices.length === 1 &&
+        firstNotices[0]!.endpointId === endpointA.id &&
+        firstNotices[0]!.eventId === firstNoticeId &&
+        firstNotices[0]!.status === "succeeded" &&
+        receiptsFor(partial, "a").some(
+          (receipt) => receipt.eventId === firstNoticeId,
+        ),
+      `a terminal failure must notify the other endpoint once: ${JSON.stringify(
+        firstNotices.map((d) => [d.endpointId, d.eventId, d.status]),
+      )}`,
+    );
+
+    // A retry that fails for good again is a new failure event. Its
+    // notification to endpoint A fails too, and a failed notification is
+    // never itself announced (endpoint C would receive it).
+    const endpointC = await createWebhookEndpoint(db, {
+      teamId,
+      userId: main.userId,
+      url: `http://127.0.0.1:${receiver.port}/c`,
+      events: ["delivery.failed"],
+    });
+    if (!endpointC) throw new Error("Unable to create endpoint c");
+    failing.add(`a:${partial}:delivery.failed`);
+    const failingRetry = await retryInvoiceDelivery(db, {
+      invoiceId: partial,
+      teamId,
+      teamRole: "owner",
+    });
+    await waitSettled("the failing retry", [partial]);
+    failing.delete(`a:${partial}:delivery.failed`);
+    await disableWebhookEndpoint(db, { id: endpointC.id, teamId });
+    const refailedState = await invoiceState(partial);
+    const secondNoticeId = logicalEventId(failedB.id, "delivery.failed", 8);
+    const secondNotices = noticesOf(refailedState, failedB.id).filter(
+      (delivery) => delivery.eventId === secondNoticeId,
+    );
+    const failedNotice = secondNotices.find(
+      (delivery) => delivery.endpointId === endpointA.id,
+    );
+    check(
+      failingRetry?.webhooks.requeued === 1 &&
+        deliveryFor(refailedState, endpointB.id)?.status === "failed" &&
+        deliveryFor(refailedState, endpointB.id)?.attempts === 8 &&
+        noticesOf(refailedState, failedB.id).length === 3 &&
+        secondNotices.length === 2 &&
+        failedNotice?.status === "failed" &&
+        secondNotices.some(
+          (delivery) =>
+            delivery.endpointId === endpointC.id &&
+            delivery.status === "succeeded",
+        ) &&
+        noticesOf(refailedState, failedNotice.id).length === 0,
+      `a repeated failure must notify again without recursing: ${JSON.stringify(
+        refailedState.deliveries.map((d) => [
+          d.endpointId,
+          d.event,
+          d.eventId,
+          d.status,
+        ]),
+      )}`,
+    );
+
     // The supported recovery action re-drives only the failed destinations.
     failing.delete(`b:${partial}`);
     const partialRetry = await retryInvoiceDelivery(db, {
@@ -806,6 +890,11 @@ async function main() {
         attempts: 4,
         retryable: true,
         dashboardState: partialSummary?.delivery.state,
+      },
+      failureNotifications: {
+        first: firstNoticeId,
+        afterFailingRetry: secondNoticeId,
+        failedNotificationAnnounced: false,
       },
       retry: partialRetry,
       afterRetry: partialAfterRetry?.delivery.state,
