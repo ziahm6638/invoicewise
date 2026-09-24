@@ -3,29 +3,24 @@
  *
  * The worker runs without the API's auth import, so it enforces the same
  * fail-closed production configuration and the same explicit non-production
- * capture. Every provider request in these checks is denied unless it targets
- * the loopback trap below.
+ * capture. Every provider request in these checks is captured in-process by
+ * the fetch stub below.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// The provider SDK fixes its base URL when its module first loads, and another
+// test file in this run may load it before this one, so provider requests are
+// captured at fetch itself instead of through a base-URL override. Nothing
+// leaves the process.
 const requests: string[] = [];
-const trap = Bun.serve({
-  hostname: "127.0.0.1",
-  port: 0,
-  fetch(request) {
-    requests.push(new URL(request.url).pathname);
-    return Response.json({ id: "mailer-policy-probe" });
-  },
-});
-
 const originalFetch = globalThis.fetch;
 const previousEnv = { ...process.env };
 let sinkDir: string;
 
-globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+globalThis.fetch = (async (input: RequestInfo | URL) => {
   const url = new URL(
     typeof input === "string"
       ? input
@@ -34,14 +29,9 @@ globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
         : input.url,
   );
 
-  if (url.hostname !== "127.0.0.1") {
-    throw new Error("Non-loopback provider request denied by the mailer test");
-  }
-
-  return originalFetch(input, init);
+  requests.push(url.pathname);
+  return Response.json({ id: "mailer-policy-probe" });
 }) as typeof fetch;
-
-process.env.RESEND_BASE_URL = `http://127.0.0.1:${trap.port}`;
 
 const loadMailer = async () => {
   const { WorkflowMailer, WorkflowMailerLive } = await import("./workflows.js");
@@ -72,7 +62,6 @@ describe("workflow mailer transactional-mail policy", () => {
   });
 
   afterAll(async () => {
-    trap.stop(true);
     globalThis.fetch = originalFetch;
     process.env = previousEnv;
     await rm(sinkDir, { recursive: true, force: true });
