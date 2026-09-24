@@ -90,3 +90,4 @@ dist-ssr
 
 # Local code-index cache (graft); never commit it.
 graft/
+.env*

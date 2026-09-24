@@ -1,64 +1,48 @@
-import { DevMessage } from "@/components/dev-message";
 import { Footer } from "@/components/footer";
 import { FooterCTA } from "@/components/footer-cta";
 import { Header } from "@/components/header";
-import "@/styles/globals.css";
-import { cn } from "@invoicewise/ui/cn";
-import "@invoicewise/ui/globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
-import { Provider as Analytics } from "@invoicewise/events/client";
+import "@/styles/globals.css";
+import "@invoicewise/ui/globals.css";
+import { cn } from "@invoicewise/ui/cn";
 import { GeistMono } from "geist/font/mono";
 import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { baseUrl } from "./sitemap";
 
+const title = "InvoiceWise | Invoice middleware";
+const description =
+  "Forward invoices to a dedicated mailbox. InvoiceWise extracts the fields with TypeSafe, answers your own questions automatically, and delivers clean data to Xero, QuickBooks, your API, MCP, webhooks or CSV.";
+
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
   title: {
-    default: "Midday | Run your business smarter",
-    template: "%s | Midday",
+    default: title,
+    template: "%s | InvoiceWise",
   },
-  description:
-    "Midday provides you with greater insight into your business and automates the boring tasks, allowing you to focus on what you love to do instead.",
+  description,
   openGraph: {
-    title: "Midday | Run your business smarter",
-    description:
-      "Midday provides you with greater insight into your business and automates the boring tasks, allowing you to focus on what you love to do instead.",
+    title,
+    description,
     url: baseUrl,
-    siteName:
-      "Midday provides you with greater insight into your business and automates the boring tasks, allowing you to focus on what you love to do instead.",
-    locale: "en_US",
+    siteName: "InvoiceWise",
+    locale: "en_GB",
     type: "website",
     images: [
       {
-        url: "https://cdn.midday.ai/opengraph-image.jpg",
-        width: 800,
-        height: 600,
-      },
-      {
-        url: "https://cdn.midday.ai/opengraph-image.jpg",
-        width: 1800,
-        height: 1600,
+        url: "/app/og.png",
+        width: 1200,
+        height: 630,
+        alt: "InvoiceWise",
       },
     ],
   },
   twitter: {
-    title: "Midday | Run your business smarter",
-    description:
-      "Midday provides you with greater insight into your business and automates the boring tasks, allowing you to focus on what you love to do instead.",
-    images: [
-      {
-        url: "https://cdn.midday.ai/opengraph-image.jpg",
-        width: 800,
-        height: 600,
-      },
-      {
-        url: "https://cdn.midday.ai/opengraph-image.jpg",
-        width: 1800,
-        height: 1600,
-      },
-    ],
+    card: "summary_large_image",
+    title,
+    description,
+    images: ["/app/og.png"],
   },
   robots: {
     index: true,
@@ -82,7 +66,7 @@ export const viewport = {
 
 export default function Layout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en-GB" suppressHydrationWarning>
       <body
         className={cn(
           `${GeistSans.variable} ${GeistMono.variable}`,
@@ -101,8 +85,6 @@ export default function Layout({ children }: { children: ReactNode }) {
           </main>
           <FooterCTA />
           <Footer />
-          <Analytics />
-          <DevMessage />
         </ThemeProvider>
       </body>
     </html>

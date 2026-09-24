@@ -8,6 +8,6 @@ export default function robots() {
       },
     ],
     sitemap: `${baseUrl}/sitemap.xml`,
-    host: `${baseUrl}`,
+    host: baseUrl,
   };
 }

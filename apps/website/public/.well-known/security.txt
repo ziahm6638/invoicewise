@@ -1,4 +1,4 @@
-Contact: security@midday.ai
+Contact: mailto:security@invoicewise.uk
 Preferred-Languages: en
-Canonical: https://midday.ai/.well-known/security.txt
-Policy: https://github.com/midday-ai/midday/blob/main/SECURITY.md
+Canonical: https://invoicewise.uk/.well-known/security.txt
+Expires: 2027-09-24T00:00:00.000Z

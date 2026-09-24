@@ -1,13 +1,8 @@
 "use client";
 
-import { CtaLink } from "@/components/cta-link";
-import { motion } from "framer-motion";
-import breakdownLight from "public/breakdown-light.png";
-import breakdownDark from "public/breakdown.png";
-import timeFormatLight from "public/time-format-light.png";
-import timeFormatDark from "public/time-format.png";
-import timetrackerLight from "public/time-tracker-light.png";
-import timetrackerDark from "public/time-tracker.png";
+import questionsImage from "public/app/questions.png";
+import { Check } from "./check";
+import { CtaLink } from "./cta-link";
 import { DynamicImage } from "./dynamic-image";
 
 export function SectionThree() {
@@ -17,150 +12,64 @@ export function SectionThree() {
         <div className="flex flex-col md:space-x-12 md:flex-row">
           <div className="xl:mt-6 md:max-w-[40%] md:mr-8 md:mb-8">
             <h3 className="font-medium text-xl md:text-2xl mb-4">
-              Time track your projects
+              Your questions, answered
             </h3>
 
             <p className="text-[#878787] md:mb-4 text-sm">
-              Track your time, monitor project durations, set rates and create{" "}
-              <br />
-              invoices from your recorded hours.
+              Ask the questions that matter to your business in plain language.
+              InvoiceWise runs them on every invoice automatically, with
+              confidence scores attached.
             </p>
 
             <div className="flex flex-col space-y-2 mt-8">
               <div className="flex space-x-2 text-sm">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 18 13"
-                  fill="none"
-                  className="flex-none w-[1.125rem] h-[1lh]"
-                >
-                  <path
-                    fill="currentColor"
-                    d="M6.55 13 .85 7.3l1.425-1.425L6.55 10.15 15.725.975 17.15 2.4 6.55 13Z"
-                  />
-                </svg>
+                <Check />
                 <span className="text-primary">
-                  Get a monthly overview of tracked hours
+                  Is this a duplicate of a previous invoice?
                 </span>
               </div>
               <div className="flex space-x-2 text-sm">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 18 13"
-                  fill="none"
-                  className="flex-none w-[1.125rem] h-[1lh]"
-                >
-                  <path
-                    fill="currentColor"
-                    d="M6.55 13 .85 7.3l1.425-1.425L6.55 10.15 15.725.975 17.15 2.4 6.55 13Z"
-                  />
-                </svg>
+                <Check />
                 <span className="text-primary">
-                  Set billable rate & time estimates
+                  Is the VAT calculation correct?
                 </span>
               </div>
-
               <div className="flex space-x-2 text-sm">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 18 13"
-                  fill="none"
-                  className="flex-none w-[1.125rem] h-[1lh]"
-                >
-                  <path
-                    fill="currentColor"
-                    d="M6.55 13 .85 7.3l1.425-1.425L6.55 10.15 15.725.975 17.15 2.4 6.55 13Z"
-                  />
-                </svg>
+                <Check />
                 <span className="text-primary">
-                  See billable amount & monthly breakdown
+                  Does this supplier match known suppliers?
                 </span>
               </div>
-
               <div className="flex space-x-2 text-sm">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 18 13"
-                  fill="none"
-                  className="flex-none w-[1.125rem] h-[1lh]"
-                >
-                  <path
-                    fill="currentColor"
-                    d="M6.55 13 .85 7.3l1.425-1.425L6.55 10.15 15.725.975 17.15 2.4 6.55 13Z"
-                  />
-                </svg>
+                <Check />
                 <span className="text-primary">
-                  Create invoice based on recorded time
+                  Are the bank details consistent with past invoices?
                 </span>
               </div>
-
               <div className="flex space-x-2 text-sm">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 18 13"
-                  fill="none"
-                  className="flex-none w-[1.125rem] h-[1lh]"
-                >
-                  <path
-                    fill="currentColor"
-                    d="M6.55 13 .85 7.3l1.425-1.425L6.55 10.15 15.725.975 17.15 2.4 6.55 13Z"
-                  />
-                </svg>
-                <span className="text-primary">Export as CSV</span>
+                <Check />
+                <span className="text-primary">
+                  Your own thresholds and categories
+                </span>
               </div>
             </div>
 
-            <div className="absolute bottom-6">
-              <CtaLink text="Start tracking time now" />
+            <div className="mt-10 md:absolute md:bottom-6">
+              <CtaLink text="Ask your own questions" />
             </div>
           </div>
 
-          <div className="relative mt-8 md:mt-0">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, delay: 0.7 }}
-              viewport={{ once: true }}
-              className="absolute -left-[80px] top-[200px]"
-            >
+          <div className="relative mt-8 md:mt-0 flex-1">
+            <div className="scale-90 md:scale-100 origin-bottom">
               <DynamicImage
-                lightSrc={timeFormatLight}
-                darkSrc={timeFormatDark}
-                height={142}
-                width={135}
-                className="object-contain"
+                lightSrc={questionsImage}
+                darkSrc={questionsImage}
+                height={500}
                 quality={90}
-                alt="Time format"
+                className="-mb-[1px] object-contain object-bottom"
+                alt="InvoiceWise judgments and questions on an invoice"
               />
-            </motion.div>
-
-            <div className="scale-75 md:scale-100">
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: 1.2 }}
-                viewport={{ once: true }}
-                className="absolute -right-[65px] md:-right-[15px] md:-top-[20px]"
-              >
-                <DynamicImage
-                  lightSrc={breakdownLight}
-                  darkSrc={breakdownDark}
-                  height={124}
-                  width={238}
-                  className="object-contain"
-                  quality={90}
-                  alt="Breakdown"
-                />
-              </motion.div>
             </div>
-            <DynamicImage
-              lightSrc={timetrackerLight}
-              darkSrc={timetrackerDark}
-              height={400}
-              className="-mb-[32px] md:-mb-[1px] object-contain mt-8 md:mt-0"
-              quality={90}
-              alt="Tracker"
-            />
           </div>
         </div>
       </div>

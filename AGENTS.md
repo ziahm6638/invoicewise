@@ -30,7 +30,7 @@ current, observed repository map is:
 |------|---------|
 | `apps/dashboard` | Next.js customer app: Better Auth sessions, inbox, intake upload, document viewer, settings |
 | `apps/api` | Hono/Effect HTTP API: REST, tRPC, MCP, OAuth, storage capability route, workflow runner |
-| `apps/website` | invoicewise.uk marketing site (inherited Midday content; rewrite tracked in #16) |
+| `apps/website` | invoicewise.uk marketing site: the adopted Midday Next.js landing page with InvoiceWise copy, live-app screenshots and a PocketBase + Purelymail SMTP waitlist (`apps/website/.env-template`) |
 | `packages/db` | Drizzle schema and queries for the primary Postgres database, migrations, storage adapters |
 | `packages/jobs` | Postgres-backed Effect workflow queue plus document, delivery and accounting work |
 | `packages/documents` | Bounded PDF/image validation, preview, layout-aware text and tesseract OCR in isolated child processes; TypeSafe invoice extraction and judgments |

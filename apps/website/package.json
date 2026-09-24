@@ -12,30 +12,20 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@invoicewise/supabase": "workspace:*",
     "@invoicewise/ui": "workspace:*",
-    "@openpanel/nextjs": "^1.0.8",
-    "@openstatus/react": "^0.0.3",
-    "@team-plain/typescript-sdk": "5.9.0",
-    "@uidotdev/usehooks": "^2.4.1",
-    "date-fns": "^4.1.0",
     "framer-motion": "^12.15.0",
     "geist": "^1.4.2",
-    "next": "15.5.2",
-    "next-mdx-remote": "^5.0.0",
-    "next-safe-action": "^7.10.8",
+    "next": "15.5.26",
+    "nodemailer": "^10.0.10",
     "react": "19.1.1",
     "react-dom": "19.1.1",
-    "react-hls-player": "^3.0.7",
-    "react-use-draggable-scroll": "^0.4.7",
-    "resend": "^4.6.0",
     "server-only": "^0.0.1",
-    "sharp": "0.34.1",
-    "sugar-high": "^0.9.3"
+    "sharp": "0.34.1"
   },
   "devDependencies": {
     "@invoicewise/tsconfig": "workspace:*",
     "@types/node": "^22.15.29",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "19.1.8"
   }
 }
