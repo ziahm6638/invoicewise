@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { createDatabaseClient } from "@invoicewise/db/client";
 import {
@@ -50,7 +51,43 @@ const extractionValues: Record<string, string | number> = {
   purchase_order_reference: "PO-7788",
 };
 
-const extractionAnswers = (questions: Record<string, any>) =>
+// The same selections for the UK invoice fixture, which the input-matrix
+// phase uploads as a text PDF, a scanned PDF, a PNG scan and a JPEG photo.
+const ukInvoiceValues: Record<string, string | number> = {
+  supplier_name: "Northwind Joinery Ltd",
+  supplier_address: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
+  supplier_vat_number: "GB293445512",
+  invoice_number: "NJ-10457",
+  invoice_date: "1 September 2026",
+  due_date: "01-Oct-2026",
+  currency: "GBP",
+  net_amount: 2161,
+  vat_amount: 432.2,
+  gross_amount: 2593.2,
+  bank_account_name: "Northwind Joinery Ltd",
+  bank_account_number: "71234598",
+  bank_sort_code: "40-11-62",
+  bank_iban: "GB29 NWBK 6016 1331 9268 19",
+  bank_bic: "NWBKGB2L",
+  purchase_order_reference: "PO-55120",
+};
+
+/**
+ * Which document the stub is reading. A non-invoice gets no selections, so
+ * every field is "absent", as a correct model would answer.
+ */
+const selectionsFor = (state: unknown): Record<string, string | number> => {
+  const invoice = JSON.stringify(state);
+  if (invoice.includes("Northwind")) {
+    return invoice.includes("change of address") ? {} : ukInvoiceValues;
+  }
+  return extractionValues;
+};
+
+const extractionAnswers = (
+  questions: Record<string, any>,
+  selections: Record<string, string | number>,
+) =>
   Object.fromEntries(
     Object.entries(questions).map(([id, question]) => {
       if (id.startsWith("line_item_")) {
@@ -58,8 +95,7 @@ const extractionAnswers = (questions: Record<string, any>) =>
       }
       const choice =
         Object.entries(question.criteria).find(
-          ([, criterion]: [string, any]) =>
-            criterion?.value === extractionValues[id],
+          ([, criterion]: [string, any]) => criterion?.value === selections[id],
         )?.[0] ?? "absent";
       return [
         id,
@@ -107,6 +143,7 @@ const startTypeSafeStub = () =>
     port: 0,
     async fetch(request) {
       const body = (await request.json()) as {
+        state: unknown;
         questions: Record<string, any>;
       };
       const isExtraction = Object.keys(body.questions).some(
@@ -114,7 +151,7 @@ const startTypeSafeStub = () =>
           Object.hasOwn(extractionValues, id) || id.startsWith("line_item_"),
       );
       const answers = isExtraction
-        ? extractionAnswers(body.questions)
+        ? extractionAnswers(body.questions, selectionsFor(body.state))
         : judgmentAnswers(body.questions);
       return Response.json({
         model: "verification-stub",
@@ -153,10 +190,62 @@ const priorExtraction: InvoiceExtraction = {
   description: "September consulting services",
   purchaseOrderReference: "PO-7788",
   textSource: "text-layer",
+  pageSources: ["text-layer"],
 };
 
 /** Every field the synthetic PDF prints, as the pipeline must persist it. */
 const expectedExtraction: InvoiceExtraction = { ...priorExtraction };
+
+/** The UK invoice fixture, as every input format must persist it. */
+const ukInvoiceExtraction: InvoiceExtraction = {
+  supplierName: "Northwind Joinery Ltd",
+  supplierAddress: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
+  supplierVatNumber: "GB293445512",
+  invoiceNumber: "NJ-10457",
+  invoiceDate: "2026-09-01",
+  dueDate: "2026-10-01",
+  currency: "GBP",
+  netAmount: 2161,
+  vatAmount: 432.2,
+  grossAmount: 2593.2,
+  lineItems: [
+    {
+      description: "Oak skirting board supply and fit",
+      quantity: 12,
+      unitPrice: 45,
+      total: 540,
+    },
+    {
+      description: "Kitchen worktop installation including sealing and edging",
+      quantity: 1,
+      unitPrice: 850,
+      total: 850,
+    },
+    {
+      description: "Bespoke shelving unit",
+      quantity: 2,
+      unitPrice: 325.5,
+      total: 651,
+    },
+    {
+      description: "Site waste disposal",
+      quantity: 3,
+      unitPrice: 40,
+      total: 120,
+    },
+  ],
+  bankDetails: {
+    accountName: "Northwind Joinery Ltd",
+    accountNumber: "71234598",
+    sortCode: "40-11-62",
+    iban: "GB29 NWBK 6016 1331 9268 19",
+    bic: "NWBKGB2L",
+  },
+  description: null,
+  purchaseOrderReference: "PO-55120",
+  textSource: "text-layer",
+  pageSources: ["text-layer"],
+};
 
 const runBatch = () =>
   Effect.runPromise(
@@ -166,6 +255,163 @@ const runBatch = () =>
       Effect.scoped,
     ),
   );
+
+/** Runs batches until no job is claimable. */
+const drain = async () => {
+  for (let batch = 0; batch < 20; batch++) {
+    if ((await runBatch()) === 0) return;
+  }
+  throw new Error("Workflow queue did not drain");
+};
+
+/** The type of every value, recursively: the shape downstream code sees. */
+const shapeOf = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(shapeOf)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(
+          Object.entries(value).map(([key, entry]) => [key, shapeOf(entry)]),
+        )
+      : value === null
+        ? "null"
+        : typeof value;
+
+const fixturesDir = () =>
+  resolve(process.cwd(), "../documents/src/test/fixtures");
+
+/**
+ * The input matrix end to end: the same supplier invoice uploaded as a text
+ * PDF, a scanned PDF, a PNG scan and a JPEG phone photo, plus a non-invoice
+ * attachment, each through intake, the queue, the worker and Postgres. Every
+ * invoice must persist the same extracted data and downstream shape with its
+ * own source identity; the non-invoice must persist a failure with a reason.
+ */
+async function verifyInputMatrix(
+  database: ReturnType<typeof createDatabaseClient>,
+  storage: ReturnType<typeof createStorageClientFromEnv>,
+  teamId: string,
+) {
+  const inputs = [
+    { file: "uk-invoice.pdf", type: "application/pdf", read: ["text-layer"] },
+    { file: "uk-invoice-scanned.pdf", type: "application/pdf", read: ["ocr"] },
+    { file: "uk-invoice-scan.png", type: "image/png", read: ["ocr"] },
+    { file: "uk-invoice-photo.jpg", type: "image/jpeg", read: ["ocr"] },
+  ];
+  const uploads = [];
+  for (const input of [
+    ...inputs,
+    { file: "non-invoice-letter.pdf", type: "application/pdf", read: [] },
+  ]) {
+    const bytes = new Uint8Array(
+      await Bun.file(resolve(fixturesDir(), input.file)).arrayBuffer(),
+    );
+    const accepted = await acceptIntakeUpload(database.db, storage, {
+      teamId,
+      bytes,
+      declaredMimeType: input.type,
+      fileName: input.file,
+    });
+    if (accepted.status !== "accepted") {
+      throw new Error(`${input.file} was not accepted: ${accepted.message}`);
+    }
+    uploads.push({
+      ...input,
+      inboxId: accepted.inboxId,
+      hash: createHash("sha256").update(bytes).digest("hex"),
+      size: bytes.byteLength,
+    });
+  }
+
+  await drain();
+
+  const rows = [];
+  for (const upload of uploads) {
+    const [row] = await database.db
+      .select()
+      .from(inbox)
+      .where(eq(inbox.id, upload.inboxId))
+      .limit(1);
+    if (!row) throw new Error(`${upload.file} has no inbox record`);
+    // Source identity is persisted for every input.
+    if (
+      row.contentHash !== upload.hash ||
+      row.size !== upload.size ||
+      row.contentType !== upload.type ||
+      row.fileName !== upload.file ||
+      row.intakeState !== "accepted"
+    ) {
+      throw new Error(`${upload.file} lost its source identity`);
+    }
+    rows.push({ upload, row });
+  }
+
+  const letter = rows.pop()!;
+  if (
+    letter.row.status !== "pending" ||
+    letter.row.extraction !== null ||
+    letter.row.judgments !== null ||
+    !letter.row.processingError?.includes("No invoice details")
+  ) {
+    throw new Error(
+      `The non-invoice attachment did not persist a clear failure: ${JSON.stringify(
+        {
+          status: letter.row.status,
+          processingError: letter.row.processingError,
+        },
+      )}`,
+    );
+  }
+
+  const {
+    textSource: _source,
+    pageSources: _pages,
+    ...expectedFields
+  } = ukInvoiceExtraction;
+  const shapes = rows.map(({ upload, row }) => {
+    const { textSource, pageSources, ...fields } = (row.extraction ??
+      {}) as InvoiceExtraction;
+    if (
+      row.processingError !== null ||
+      row.status !== "pending" ||
+      textSource !== upload.read[0] ||
+      !Bun.deepEquals(pageSources, upload.read) ||
+      !Bun.deepEquals(fields, expectedFields)
+    ) {
+      throw new Error(
+        `${upload.file} did not persist the invoice: ${JSON.stringify({
+          processingError: row.processingError,
+          extraction: row.extraction,
+        })}`,
+      );
+    }
+    // What downstream consumers read: the record columns, the extraction and
+    // one judgment per configured question.
+    return shapeOf({
+      displayName: row.displayName,
+      amount: row.amount,
+      currency: row.currency,
+      date: row.date,
+      taxAmount: row.taxAmount,
+      taxRate: row.taxRate,
+      taxType: row.taxType,
+      type: row.type,
+      extraction: row.extraction,
+      judgments: (row.judgments ?? []).map(
+        (judgment) => `${judgment.source}:${judgment.questionId}`,
+      ),
+    });
+  });
+  if (!shapes.every((shape) => Bun.deepEquals(shape, shapes[0]))) {
+    throw new Error("The input formats persisted different data shapes");
+  }
+
+  return {
+    formats: rows.map(({ upload }) => upload.file),
+    sameShape: true,
+    extractedGross: expectedFields.grossAmount,
+    nonInvoiceError: letter.row.processingError,
+  };
+}
 
 async function main() {
   process.env.WORKFLOW_RETRY_BASE_MS = "50";
@@ -408,9 +654,12 @@ async function main() {
       throw new Error("Workflow verification did not reach the expected state");
     }
 
+    const inputMatrix = await verifyInputMatrix(database, storage, teamId);
+
     console.log(
       JSON.stringify({
         event: "workflow_verification_succeeded",
+        inputMatrix,
         workflowId: completed.id,
         attempts: completed.attempts,
         persistedInvoiceId: persisted.id,

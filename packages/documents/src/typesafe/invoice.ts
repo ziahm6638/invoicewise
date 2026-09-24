@@ -77,6 +77,11 @@ export type InvoiceExtraction = {
   description: string | null;
   purchaseOrderReference: string | null;
   textSource: InvoiceTextSource;
+  /**
+   * How each page's text was read, in page order. Every page of the document
+   * is listed; none is skipped. Empty when the input was already plain text.
+   */
+  pageSources: DocumentPageSource[];
 };
 
 export type InvoiceJudgmentQuestion =
@@ -162,13 +167,26 @@ export type ProcessedInvoice = {
 };
 
 const ABSENT = "absent";
-/** Rows sent to TypeSafe; a long document keeps its first rows. */
-const MAX_LINES = 400;
-/** Document text in `state`, well inside the model's 32k-token state budget. */
-const MAX_STATE_CHARS = 40_000;
-/** Document text given to judgments alongside the structured extraction. */
+
+/**
+ * Extraction bounds. A document beyond any of them fails with a clear reason
+ * instead of being read in part, so an invoice whose later pages, rows or
+ * line items were never seen is not saved as if it were complete.
+ * `docs/document-intake.md#supported-inputs` publishes them.
+ */
+export const INVOICE_EXTRACTION_LIMITS = {
+  /** Printed rows TypeSafe reads (roughly eight dense A4 pages). */
+  maxLines: 400,
+  /** Document text in `state`, well inside the model's 32k-token state budget. */
+  maxStateChars: 40_000,
+  /** Candidate table rows checked as line items. */
+  maxLineItemRows: 120,
+  /** Pages without a usable text layer that are OCR'd per document. */
+  maxOcrPages: 10,
+} as const;
+
+/** Document text given to judgments alongside the complete extraction. */
 const MAX_JUDGMENT_TEXT_CHARS = 16_000;
-const MAX_LINE_ITEM_QUESTIONS = 120;
 
 /** Bounds for the isolated PDF text extraction used by the invoice pipeline. */
 const PDF_TEXT_LIMITS = {
@@ -181,8 +199,6 @@ const PDF_TEXT_LIMITS = {
 
 /** A page with fewer letters and digits than this has no usable text layer. */
 const MIN_PAGE_TEXT = 40;
-/** Scanned pages OCR'd per document; later pages keep whatever text they had. */
-const MAX_OCR_PAGES = 10;
 /** Rendering resolution for OCR; tesseract is most accurate around 300 DPI. */
 const OCR_DPI = 300;
 const OCR_LIMITS: IsolatedPdfLimits = {
@@ -252,7 +268,14 @@ const RETRYABLE_READ_FAILURES: readonly IsolatedPdfFailureCode[] = [
   "task_failed",
 ];
 
-const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg"]);
+/** How each supported input type is read; anything else is refused. */
+const INPUT_KIND: Record<string, "pdf" | "image"> = {
+  "application/pdf": "pdf",
+  "application/x-pdf": "pdf",
+  "image/png": "image",
+  "image/jpeg": "image",
+  "image/jpg": "image",
+};
 
 const fetchDocument = (documentUrl: string) =>
   Effect.tryPromise({
@@ -330,18 +353,30 @@ const readPdf = (bytes: Uint8Array) =>
         ),
       );
     }
+    const { pages } = extracted.result;
+    const needsOcr = pages.map(
+      (page) =>
+        readableCharacters(documentPlainText(page.lines)) < MIN_PAGE_TEXT,
+    );
+    const ocrPages = needsOcr.filter(Boolean).length;
+    // Decided before any OCR work: reading only some scanned pages would
+    // silently drop the rest of the invoice.
+    if (ocrPages > INVOICE_EXTRACTION_LIMITS.maxOcrPages) {
+      return yield* Effect.fail(
+        readError(
+          `This PDF has ${ocrPages} scanned pages without a text layer; at most ${INVOICE_EXTRACTION_LIMITS.maxOcrPages} scanned pages are read per invoice. Upload the invoice pages on their own, or a PDF with a text layer.`,
+          false,
+        ),
+      );
+    }
     const lines: DocumentLine[] = [];
     const pageSources: DocumentPageSource[] = [];
-    let ocrPages = 0;
-    for (const [index, page] of extracted.result.pages.entries()) {
-      const hasText =
-        readableCharacters(documentPlainText(page.lines)) >= MIN_PAGE_TEXT;
-      if (hasText || ocrPages >= MAX_OCR_PAGES) {
+    for (const [index, page] of pages.entries()) {
+      if (!needsOcr[index]) {
         lines.push(...page.lines);
         pageSources.push("text-layer");
         continue;
       }
-      ocrPages += 1;
       const rendered = yield* Effect.promise(() =>
         renderPdfPageIsolated(bytes, OCR_LIMITS, {
           page: index + 1,
@@ -376,13 +411,23 @@ const readDocument = (request: GetDocumentRequest) =>
         readError("Document URL or content is required", false),
       );
     }
+    const kind = INPUT_KIND[request.mimetype.split(";")[0]!.trim()];
+    if (!kind) {
+      return yield* Effect.fail(
+        readError(
+          `Unsupported document type ${request.mimetype}. Only PDF, JPEG and PNG invoices are processed.`,
+          false,
+        ),
+      );
+    }
     const bytes = yield* fetchDocument(request.documentUrl);
-    const document: DocumentText = IMAGE_MIME_TYPES.has(request.mimetype)
-      ? {
-          lines: yield* ocrImage(yield* uprightImage(bytes), 1),
-          pageSources: ["ocr"],
-        }
-      : yield* readPdf(bytes);
+    const document: DocumentText =
+      kind === "image"
+        ? {
+            lines: yield* ocrImage(yield* uprightImage(bytes), 1),
+            pageSources: ["ocr"],
+          }
+        : yield* readPdf(bytes);
     const sources = new Set(document.pageSources);
     const textSource: InvoiceTextSource =
       sources.size > 1 ? "mixed" : sources.has("ocr") ? "ocr" : "text-layer";
@@ -393,17 +438,19 @@ const readDocument = (request: GetDocumentRequest) =>
 
 const lineId = (index: number) => `L${String(index).padStart(3, "0")}`;
 
+/** The document as one tagged row per printed line; null when it does not fit. */
 const taggedDocument = (lines: readonly DocumentLine[], maxChars: number) => {
-  const out: string[] = [];
-  let size = 0;
-  for (const { line, text } of readingRows(lines)) {
-    const row = `${lineId(line)}| ${text}`;
-    if (size + row.length + 1 > maxChars) break;
-    out.push(row);
-    size += row.length + 1;
-  }
-  return out.join("\n");
+  const tagged = readingRows(lines)
+    .map(({ line, text }) => `${lineId(line)}| ${text}`)
+    .join("\n");
+  return tagged.length > maxChars ? null : tagged;
 };
+
+const tooLong = (reason: string) =>
+  readError(
+    `${reason} Upload the invoice pages on their own, without appended statements or terms.`,
+    false,
+  );
 
 const choiceQuestion = <T>(
   lines: readonly DocumentLine[],
@@ -497,13 +544,13 @@ const hasInvoiceContent = (extraction: InvoiceExtraction) =>
  * confirms which table rows are purchased items; code copies the choices.
  */
 export const extractInvoiceLines = (
-  allLines: readonly DocumentLine[],
+  lines: readonly DocumentLine[],
   companyName?: string | null,
   textSource: InvoiceTextSource = "text",
+  pageSources: readonly DocumentPageSource[] = [],
 ): Effect.Effect<InvoiceExtraction, TypeSafeError, TypeSafe> =>
   Effect.gen(function* () {
     const typeSafe = yield* TypeSafe;
-    const lines = allLines.slice(0, MAX_LINES);
     const plain = documentPlainText(lines);
     if (readableCharacters(plain) < 20) {
       return yield* Effect.fail(
@@ -513,8 +560,33 @@ export const extractInvoiceLines = (
         ),
       );
     }
+    if (lines.length > INVOICE_EXTRACTION_LIMITS.maxLines) {
+      return yield* Effect.fail(
+        tooLong(
+          `The document has ${lines.length} printed rows; at most ${INVOICE_EXTRACTION_LIMITS.maxLines} are read per invoice.`,
+        ),
+      );
+    }
+    const invoice = taggedDocument(
+      lines,
+      INVOICE_EXTRACTION_LIMITS.maxStateChars,
+    );
+    if (invoice === null) {
+      return yield* Effect.fail(
+        tooLong(
+          `The document has more than ${INVOICE_EXTRACTION_LIMITS.maxStateChars} characters of text, more than is read per invoice.`,
+        ),
+      );
+    }
 
-    const rows = lineItemRows(lines).slice(0, MAX_LINE_ITEM_QUESTIONS);
+    const rows = lineItemRows(lines);
+    if (rows.length > INVOICE_EXTRACTION_LIMITS.maxLineItemRows) {
+      return yield* Effect.fail(
+        tooLong(
+          `The document has ${rows.length} table rows; at most ${INVOICE_EXTRACTION_LIMITS.maxLineItemRows} line items are read per invoice.`,
+        ),
+      );
+    }
     const dates = dateCandidates(lines);
     const candidates = {
       supplier: supplierNameCandidates(lines),
@@ -698,10 +770,7 @@ export const extractInvoiceLines = (
       rows.map((row) => [row.id, lineItemQuestion(row)]),
     );
 
-    const state = {
-      invoice: taggedDocument(lines, MAX_STATE_CHARS),
-      recipientCompany,
-    };
+    const state = { invoice, recipientCompany };
     const evaluate = (batch: Record<string, TypeSafeQuestion>) =>
       Object.keys(batch).length === 0
         ? Effect.succeed({} as Record<string, TypeSafeAnswer>)
@@ -789,6 +858,7 @@ export const extractInvoiceLines = (
         pick(fieldAnswers, "purchase_order_reference", candidates.purchaseOrder)
           ?.value ?? null,
       textSource,
+      pageSources: [...pageSources],
     };
 
     if (!hasInvoiceContent(extraction)) {
@@ -1075,6 +1145,7 @@ export const processInvoice = (
       document.lines,
       request.companyName,
       textSource,
+      document.pageSources,
     );
     const defaultQuestions =
       request.defaultJudgmentQuestions ?? DEFAULT_INVOICE_JUDGMENTS;
@@ -1087,7 +1158,7 @@ export const processInvoice = (
       request.previousInvoices ?? [],
       request.judgmentQuestions ?? [],
       defaultQuestions,
-      documentPlainText(document.lines.slice(0, MAX_LINES)),
+      documentPlainText(document.lines),
     ).pipe(
       Effect.catchAll((error) =>
         Effect.succeed(

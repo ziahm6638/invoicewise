@@ -47,7 +47,6 @@
         "PLAIN_API_KEY",
         "BASELIME_SERVICE",
         "BASELIME_API_KEY",
-        "MISTRAL_API_KEY",
         "OPENPANEL_SECRET_KEY",
         "GMAIL_CLIENT_ID",
         "GMAIL_CLIENT_SECRET",

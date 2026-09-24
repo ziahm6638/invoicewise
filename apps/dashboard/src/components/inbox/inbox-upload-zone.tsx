@@ -151,10 +151,14 @@ export function UploadZone({ children, onUploadComplete }: Props) {
       }
 
       if (reject?.errors.find(({ code }) => code === "file-invalid-type")) {
+        const heic = /\.hei[cf]$/i.test(reject.file.name);
         toast({
-          duration: 2500,
+          duration: heic ? 8000 : 4000,
           variant: "error",
           title: "File type not supported.",
+          description: heic
+            ? "HEIC photos (the iPhone camera default) are not supported. Send the photo as a JPEG or upload a PDF."
+            : "Upload a PDF, JPEG or PNG invoice.",
         });
       }
     },

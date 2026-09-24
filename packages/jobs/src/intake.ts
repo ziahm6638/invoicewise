@@ -517,6 +517,7 @@ export async function retryIntakeProcessing(
       id: binding.id,
       teamId: params.teamId,
       status: "processing",
+      processingError: null,
     });
 
     const enqueued = await enqueueWorkflowJob(executor, {

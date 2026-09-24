@@ -2050,6 +2050,10 @@ export const inbox = pgTable(
     // sha256 of the accepted bytes. Replay identity is (team_id, content_hash).
     contentHash: text("content_hash"),
     intakeError: text("intake_error"),
+    // Why extraction failed for an accepted document (unreadable, not an
+    // invoice, over a limit, provider failure). Null while processing and
+    // after a successful run; the same for every input format.
+    processingError: text("processing_error"),
     // Set when an object removal failed; the next cleanup pass retries it so
     // bytes are never orphaned behind a record that no longer matches the
     // cleanup selection.

@@ -82,7 +82,7 @@ const extraction = {
 };
 
 class FakeDocumentClient {
-  async getInvoiceOrReceipt() {
+  async getInvoice() {
     return {
       name: "Acme Supplies Ltd",
       date: "2026-09-01",

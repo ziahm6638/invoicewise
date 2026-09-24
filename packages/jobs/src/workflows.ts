@@ -8,7 +8,7 @@ import {
   getInboxAccountInfo,
   getTeamById,
   getUserById,
-  updateInbox,
+  recordInboxProcessingFailure,
   updateInboxAccount,
 } from "@invoicewise/db/queries";
 import { createStorageClient } from "@invoicewise/db/storage";
@@ -451,14 +451,17 @@ const makeProcessAttachment = (
     });
 
     return yield* processing.pipe(
+      // A final failure is recorded on the invoice with its reason, in the
+      // same shape for every input format; a retryable one waits for the
+      // next attempt.
       Effect.tapError((error) =>
         !error.retryable || job.attempts >= job.maxAttempts
           ? attempt(
               () =>
-                updateInbox(db, {
+                recordInboxProcessingFailure(db, {
                   id: inboxItem.id,
                   teamId: payload.teamId,
-                  status: "pending",
+                  error: error.reason,
                 }).then(() => undefined),
               "Unable to update failed invoice",
             ).pipe(Effect.ignore)

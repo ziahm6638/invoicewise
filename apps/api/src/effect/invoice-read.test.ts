@@ -38,6 +38,7 @@ const invoice = {
   judgments: [
     { questionId: "known_supplier", label: "Known supplier", answer: true },
   ],
+  processingError: null,
   inboxAccountId: null,
   inboxAccount: null,
   transaction: null,
@@ -149,6 +150,7 @@ describe("Effect invoice read HTTP slice", () => {
           description: invoice.description,
           extraction: invoice.extraction,
           judgments: invoice.judgments,
+          processingError: null,
           transaction: null,
         },
       ],

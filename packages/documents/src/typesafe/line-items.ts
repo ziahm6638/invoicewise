@@ -285,6 +285,10 @@ export function lineItemRows(lines: readonly DocumentLine[]): LineItemRow[] {
       if (gap > line.height * 4) table = null;
       return;
     }
+    // A priced row keeps its cells in separate columns. A row printed as one
+    // run of text ("Continued on page 2", "Page 1 of 2") is a note whose
+    // number is not a price; proposing it would invent a line item.
+    if (line.segments.length === 1) return;
     const assigned = byHeader(numbers, active.roles);
     if (assigned)
       push({ description: description || null, ...assigned }, index, line);

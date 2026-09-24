@@ -4,8 +4,10 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
 import {
+  HEIC_UNSUPPORTED_MESSAGE,
   INTAKE_LIMITS,
   checkStoredIntakeBytes,
+  isHeifContent,
   sniffIntakeKind,
   validateIntakeDocument,
 } from "./intake";
@@ -191,6 +193,33 @@ describe("intake document validation", () => {
     });
     expect(opaqueImage.ok).toBe(false);
     if (!opaqueImage.ok) expect(opaqueImage.code).toBe("content_mismatch");
+  });
+
+  test("refuses HEIC photos with a message that says how to send them", async () => {
+    // An ISO-BMFF `ftyp` box with the `heic` brand, as an iPhone writes it.
+    const heic = new Uint8Array([
+      0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63,
+      0x00, 0x00, 0x00, 0x00, 0x6d, 0x69, 0x66, 0x31, 0x68, 0x65, 0x69, 0x63,
+    ]);
+    expect(isHeifContent(heic)).toBe(true);
+
+    for (const declaredMimeType of [
+      "image/heic",
+      "image/heif",
+      "application/octet-stream",
+      null,
+    ]) {
+      const result = await validateIntakeDocument({
+        bytes: heic,
+        declaredMimeType,
+      });
+      expect(result).toEqual({
+        ok: false,
+        code: "unsupported_type",
+        message: HEIC_UNSUPPORTED_MESSAGE,
+      });
+    }
+    expect(HEIC_UNSUPPORTED_MESSAGE).toContain("JPEG");
   });
 
   test("rejects malformed and password-protected PDFs", async () => {

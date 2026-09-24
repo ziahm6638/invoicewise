@@ -42,6 +42,8 @@ export const InvoiceItem = Schema.Struct({
   description: Schema.NullOr(Schema.String),
   extraction: Schema.optional(Schema.NullOr(Schema.Unknown)),
   judgments: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+  /** Why extraction failed, when it did; null while processing or once processed. */
+  processingError: Schema.optional(Schema.NullOr(Schema.String)),
   transaction: Schema.NullOr(Transaction),
 });
 

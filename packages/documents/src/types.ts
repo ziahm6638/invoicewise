@@ -15,20 +15,21 @@ export type GetDocumentRequest = {
   judgmentQuestions?: readonly InvoiceJudgmentQuestion[];
 };
 
-export type GetInvoiceOrReceiptResponse = {
-  name?: string | null;
-  date?: string | null;
-  amount?: number | null;
-  currency?: string | null;
-  website?: string | null;
-  type?: string | null;
-  description?: string | null;
-  tax_amount?: number | null;
-  tax_rate?: number | null;
-  tax_type?: string | null;
-  metadata?: Record<string, string | number | boolean | null>;
-  extraction?: InvoiceExtraction;
-  judgments?: InvoiceJudgment[];
+/** One processed invoice, in the same shape for every supported input format. */
+export type GetInvoiceResponse = {
+  type: "invoice";
+  name: string | null;
+  date: string | null;
+  amount: number | null;
+  currency: string | null;
+  website: string | null;
+  description: string | null;
+  tax_amount: number | null;
+  tax_rate: number | null;
+  tax_type: string | null;
+  metadata: Record<string, string | number | boolean | null>;
+  extraction: InvoiceExtraction;
+  judgments: InvoiceJudgment[];
 };
 
 export interface Attachment {
@@ -40,11 +41,3 @@ export interface Attachment {
 }
 
 export type Attachments = Attachment[];
-
-export type DocumentClassifierRequest = {
-  content: string;
-};
-
-export type DocumentClassifierImageRequest = {
-  content: ArrayBuffer;
-};
