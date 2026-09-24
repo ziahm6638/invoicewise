@@ -33,7 +33,7 @@ current, observed repository map is:
 | `apps/website` | invoicewise.uk marketing site (inherited Midday content; rewrite tracked in #16) |
 | `packages/db` | Drizzle schema and queries for the primary Postgres database, migrations, storage adapters |
 | `packages/jobs` | Postgres-backed Effect workflow queue plus document, delivery and accounting work |
-| `packages/documents` | Bounded PDF/image validation and preview in an isolated child process, TypeSafe extraction types |
+| `packages/documents` | Bounded PDF/image validation, preview, layout-aware text and tesseract OCR in isolated child processes; TypeSafe invoice extraction and judgments |
 | `packages/inbox` | Gmail/Outlook mailbox connection |
 | `packages/email` | Transactional email templates (sent over Purelymail SMTP) |
 | `packages/cache` | Redis-backed cache for auth, team-permission and read-after-write paths |
@@ -56,7 +56,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Background jobs:** Postgres-backed Effect workflow queue (`packages/jobs`)
 - **Storage:** private local filesystem or S3-compatible (MinIO locally, R2 in production)
 - **Email:** transactional mail via Purelymail SMTP (nodemailer); **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)
-- **Extraction:** TypeSafe for semantic extraction and judgments; the inherited Mistral image path remains until #36 removes it
+- **Extraction:** TypeSafe (text-only, selects among options, never generates): code mines candidates from laid-out text (PDF text layer, else tesseract OCR), TypeSafe picks; see `docs/document-intake.md#extraction`. PNG/JPEG invoices take the same OCR path
 - **Integrations:** Nango (Xero/QuickBooks), Polar (billing), API/MCP/webhooks
 
 ## Commands
@@ -70,6 +70,7 @@ bun dev:website             # marketing site
 bun db:migrate             # apply packages/db/migrations forward
 bun jobs:worker            # standalone Effect workflow runner
 bun jobs:status            # inspect queued/running/stuck jobs
+# tesseract must be installed locally for the scanned-invoice OCR test (CI and the image install it)
 bun typecheck
 bun lint
 bun format
