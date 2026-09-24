@@ -159,6 +159,66 @@ the persisted invoice (including workspace questions), repeats the same
 idempotency key, prints the structured runner logs and a verification summary,
 and removes its temporary rows and file.
 
+## Identity lifecycle
+
+Better Auth owns verified addresses, credentials and sessions. The product adds
+the workspace rules around them instead of keeping a second copy.
+
+| Action | Supported entry point | Session effect |
+| --- | --- | --- |
+| Signup | `/api/auth/sign-up/email`, then the emailed verification link | Verification signs the account in and provisions one personal workspace; a failed provisioning attempt is retried on the link and on sign-in |
+| Email change | `/api/auth/change-email`, then the link sent to the new address | Requires a session signed in within the recent-auth window; completing the change ends every session, including the one the completion response would issue |
+| Password reset | `/api/auth/request-password-reset`, then `/api/auth/reset-password` | Every session ends and the account signs in again |
+| Password change | `/api/auth/change-password` with `revokeOtherSessions` | The caller receives one fresh session; every other session ends |
+| Invitations | dashboard `team.invite` / `team.acceptInvite` (tRPC), delivered by the `invite-team-members` queue job | Unaffected by identity changes |
+
+The rules that keep those flows safe:
+
+- A verified address changes only through Better Auth's verification or
+  email-change flow. The generic profile endpoints accept no `email` field and
+  reject unknown keys, the DB update helper has no email parameter, and
+  `/api/auth/update-user` accepts name and image only.
+- An email change needs a session created inside `session.freshAge` (24 hours).
+  A stale session is refused with `403` before any message is sent.
+- An address that already belongs to an account is never taken over. The
+  request is answered without disclosing which address is taken, and neither
+  account changes.
+- Invitations bind recipient email, workspace, role, status and expiry in one
+  locked transaction that re-reads the invite, consumes it and grants the
+  membership. Replay, revocation, expiry, wrong-recipient and concurrent
+  acceptance are covered by `apps/api/src/identity.http.integration.test.ts`.
+- Signup provisioning is idempotent and takes the user row lock before reading
+  memberships, the accepted order that account deletion also uses. A signup or
+  verification whose workspace insert failed is repaired by the next
+  verification request and by the next sign-in, and repeated or concurrent
+  attempts settle on exactly one workspace and one membership. The customer
+  never needs a manual database repair.
+- Session revocation is ordered *before* the identity or credential mutation it
+  protects: `/verify-email` for a change-email token, `/reset-password`, and
+  `/change-password` with `revokeOtherSessions`. If the revocation cannot
+  complete, the request fails with the verified address, reset token and
+  password unchanged, so the customer can retry the same link instead of being
+  left with a moved address or a new password beside live old sessions.
+
+### Transactional mail
+
+Verification, invitation and reset links carry bearer tokens, so delivery is
+fail-closed:
+
+- Production refuses to start when `RESEND_API_KEY` is absent, is the committed
+  development placeholder, or `AUTH_EMAIL_FROM` is missing.
+- Token-bearing links are never written to a log or a file in production.
+- Development and tests capture mail in the explicit sink file named by
+  `AUTH_MAIL_SINK_PATH` instead of sending anything, and that sink covers the
+  queued workflow mail as well as Better Auth identity mail. The captured
+  record holds the real link, so the whole journey completes locally.
+- `AUTH_EMAIL_FROM` is the sender for every transactional message, including
+  the invitation and onboarding templates that previously hardcoded their own
+  `from` address, and the configured application origin (`NEXT_PUBLIC_URL`) is
+  used for links in that mail.
+- Verification runs against the loopback provider seam with explicit synthetic
+  values; live Resend delivery stays owner-gated evidence.
+
 ## Document storage
 
 All callers use `@invoicewise/db/storage`. `STORAGE_BACKEND` selects one of two

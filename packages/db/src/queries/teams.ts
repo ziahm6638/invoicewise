@@ -91,9 +91,88 @@ type CreateTeamParams = {
   switchTeam?: boolean;
 };
 
+type ProvisioningTransaction = Parameters<
+  Parameters<Database["transaction"]>[0]
+>[0];
+
+/**
+ * Inserts the workspace, its owning membership and its system categories, and
+ * optionally points the user at it.
+ *
+ * Callers must already hold the user row lock: that is the accepted #32 lock
+ * order (user row, then any membership snapshot), which lets account deletion,
+ * signup provisioning and invitation acceptance serialize instead of creating
+ * a workspace around a user who is being deleted — or a second workspace for a
+ * user who already has one.
+ */
+async function provisionWorkspace(
+  tx: ProvisioningTransaction,
+  params: CreateTeamParams,
+  teamCreationId: string,
+) {
+  console.log(`[${teamCreationId}] Creating team record`);
+  const [newTeam] = await tx
+    .insert(teams)
+    .values({
+      name: params.name,
+      baseCurrency: params.baseCurrency,
+      countryCode: params.countryCode,
+      logoUrl: params.logoUrl,
+      email: params.email,
+    })
+    .returning({ id: teams.id });
+
+  if (!newTeam?.id) {
+    throw new Error("Failed to create team.");
+  }
+
+  console.log(
+    `[${teamCreationId}] Team created successfully with ID: ${newTeam.id}`,
+  );
+
+  console.log(`[${teamCreationId}] Adding user to team membership`);
+  await tx.insert(usersOnTeam).values({
+    userId: params.userId,
+    teamId: newTeam.id,
+    role: "owner",
+  });
+
+  // Create system categories for the new team (atomic)
+  console.log(`[${teamCreationId}] Creating system categories`);
+  await createSystemCategoriesForTeam(tx, newTeam.id, params.countryCode);
+
+  if (params.switchTeam) {
+    console.log(`[${teamCreationId}] Switching user to new team`);
+    await tx
+      .update(users)
+      .set({ teamId: newTeam.id })
+      .where(eq(users.id, params.userId));
+  }
+
+  return newTeam.id;
+}
+
+/**
+ * Serializes workspace provisioning on the user row. Deletion takes the same
+ * lock first, so a provisioning retry either commits before the deletion or
+ * fails against the missing user instead of leaving an orphaned workspace.
+ */
+async function lockUserRow(tx: ProvisioningTransaction, userId: string) {
+  const [user] = await tx
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.id, userId))
+    .for("update")
+    .limit(1);
+
+  if (!user) {
+    throw new TeamPermissionError("NOT_FOUND", "User not found");
+  }
+}
+
 // Helper function to create system categories for a new team
 async function createSystemCategoriesForTeam(
-  db: Database,
+  db: ProvisioningTransaction,
   teamId: string,
   countryCode: string | null | undefined,
 ) {
@@ -189,6 +268,11 @@ export const createTeam = async (db: Database, params: CreateTeamParams) => {
   // Use transaction to ensure atomicity and prevent race conditions
   return await db.transaction(async (tx) => {
     try {
+      // Hold the user row before any membership read or write. Account
+      // deletion takes the same lock first, so a deletion that wins the race
+      // rolls this transaction back instead of orphaning a workspace.
+      await lockUserRow(tx, params.userId);
+
       // Check if user already has teams to prevent duplicate creation
       const existingTeams = await tx
         .select({ id: teams.id, name: teams.name })
@@ -203,59 +287,20 @@ export const createTeam = async (db: Database, params: CreateTeamParams) => {
         },
       );
 
-      // Create the team
-      console.log(`[${teamCreationId}] Creating team record`);
-      const [newTeam] = await tx
-        .insert(teams)
-        .values({
-          name: params.name,
-          baseCurrency: params.baseCurrency,
-          countryCode: params.countryCode,
-          logoUrl: params.logoUrl,
-          email: params.email,
-        })
-        .returning({ id: teams.id });
-
-      if (!newTeam?.id) {
-        throw new Error("Failed to create team.");
-      }
-
-      console.log(
-        `[${teamCreationId}] Team created successfully with ID: ${newTeam.id}`,
-      );
-
-      // Add user to team membership (atomic with team creation)
-      console.log(`[${teamCreationId}] Adding user to team membership`);
-      await tx.insert(usersOnTeam).values({
-        userId: params.userId,
-        teamId: newTeam.id,
-        role: "owner",
-      });
-
-      // Create system categories for the new team (atomic)
-      console.log(`[${teamCreationId}] Creating system categories`);
-      // @ts-expect-error - tx is a PgTransaction
-      await createSystemCategoriesForTeam(tx, newTeam.id, params.countryCode);
-
-      // Optionally switch user to the new team (atomic)
-      if (params.switchTeam) {
-        console.log(`[${teamCreationId}] Switching user to new team`);
-        await tx
-          .update(users)
-          .set({ teamId: newTeam.id })
-          .where(eq(users.id, params.userId));
-      }
+      // A workspace may be created deliberately even when the user already
+      // belongs to others; signup provisioning uses ensurePersonalWorkspace.
+      const teamId = await provisionWorkspace(tx, params, teamCreationId);
 
       const duration = Date.now() - startTime;
       console.log(
         `[${teamCreationId}] Team creation completed successfully in ${duration}ms`,
         {
-          teamId: newTeam.id,
+          teamId,
           duration,
         },
       );
 
-      return newTeam.id;
+      return teamId;
     } catch (error) {
       const duration = Date.now() - startTime;
       console.error(
@@ -282,6 +327,70 @@ export const createTeam = async (db: Database, params: CreateTeamParams) => {
     }
   });
 };
+
+type EnsurePersonalWorkspaceParams = {
+  userId: string;
+  email: string;
+  name: string;
+};
+
+/**
+ * Idempotent signup provisioning.
+ *
+ * Better Auth commits the user row before the `user.create.after` hook runs, so
+ * a failed workspace insert leaves a verified account with no workspace. This
+ * is the repair path: retrying is safe, concurrent retries settle on one
+ * workspace, and the user row lock is held before the membership snapshot in
+ * the accepted #32 order so account deletion cannot race it into an orphan.
+ */
+export async function ensurePersonalWorkspace(
+  db: Database,
+  params: EnsurePersonalWorkspaceParams,
+) {
+  return await db.transaction(async (tx) => {
+    await lockUserRow(tx, params.userId);
+
+    const memberships = await tx
+      .select({ teamId: usersOnTeam.teamId })
+      .from(usersOnTeam)
+      .where(eq(usersOnTeam.userId, params.userId))
+      .orderBy(usersOnTeam.createdAt);
+
+    const [existing] = memberships;
+
+    if (existing) {
+      const [user] = await tx
+        .select({ teamId: users.teamId })
+        .from(users)
+        .where(eq(users.id, params.userId))
+        .limit(1);
+
+      // Repair a membership that exists while the active workspace pointer was
+      // lost to a partially applied earlier attempt.
+      if (!user?.teamId) {
+        await tx
+          .update(users)
+          .set({ teamId: existing.teamId })
+          .where(eq(users.id, params.userId));
+      }
+
+      return { teamId: existing.teamId, created: false as const };
+    }
+
+    const teamId = await provisionWorkspace(
+      tx,
+      {
+        name: params.name,
+        userId: params.userId,
+        email: params.email,
+        switchTeam: true,
+      },
+      `personal_workspace_${params.userId}`,
+    );
+
+    return { teamId, created: true as const };
+  });
+}
 
 export async function getTeamMembers(db: Database, teamId: string) {
   const result = await db

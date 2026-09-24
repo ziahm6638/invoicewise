@@ -1,7 +1,8 @@
 "use client";
 
-import { useUserMutation, useUserQuery } from "@/hooks/use-user";
-import { useZodForm } from "@/hooks/use-zod-form";
+import { useUserQuery } from "@/hooks/use-user";
+import { authClient } from "@/lib/auth-client";
+import { Button } from "@invoicewise/ui/button";
 import {
   Card,
   CardContent,
@@ -10,82 +11,93 @@ import {
   CardHeader,
   CardTitle,
 } from "@invoicewise/ui/card";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormMessage,
-} from "@invoicewise/ui/form";
 import { Input } from "@invoicewise/ui/input";
-import { SubmitButton } from "@invoicewise/ui/submit-button";
-import { z } from "zod";
+import { Label } from "@invoicewise/ui/label";
+import { type FormEvent, useState } from "react";
 
-const formSchema = z.object({
-  email: z.string().email(),
-});
-
+/**
+ * The verified address only changes through Better Auth's own email-change
+ * flow: the request needs a recent session and the new address must be
+ * confirmed from the link sent to it. Completing the change ends every session,
+ * so the account signs in again with the new address.
+ */
 export function ChangeEmail() {
   const { data: user } = useUserQuery();
-  const updateUserMutation = useUserMutation();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string>();
+  const [sentTo, setSentTo] = useState<string>();
 
-  const form = useZodForm(formSchema, {
-    defaultValues: {
-      email: user?.email ?? undefined,
-    },
-  });
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(undefined);
+    setSentTo(undefined);
+    setPending(true);
 
-  const onSubmit = form.handleSubmit((data) => {
-    updateUserMutation.mutate({
-      email: data.email,
+    const form = new FormData(event.currentTarget);
+    const newEmail = String(form.get("email")).trim();
+    const result = await authClient.changeEmail({
+      newEmail,
+      callbackURL: "/",
     });
-  });
+
+    setPending(false);
+
+    if (result.error) {
+      setError(
+        result.error.message ??
+          "Could not start the email change. Sign in again and retry.",
+      );
+      return;
+    }
+
+    setSentTo(newEmail);
+  }
 
   return (
-    <Form {...form}>
-      <form onSubmit={onSubmit}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Email</CardTitle>
-            <CardDescription>Change your email address.</CardDescription>
-          </CardHeader>
+    <Card>
+      <CardHeader>
+        <CardTitle>Email</CardTitle>
+        <CardDescription>
+          Change the address that signs you in and receives account
+          notifications. Connected invoice mailboxes are managed separately
+          under Email settings.
+        </CardDescription>
+      </CardHeader>
 
-          <CardContent>
-            <FormField
-              control={form.control}
+      <CardContent>
+        <form className="max-w-sm space-y-4" onSubmit={submit}>
+          <div className="space-y-2">
+            <Label htmlFor="email">New email address</Label>
+            <Input
+              id="email"
               name="email"
-              render={({ field }) => (
-                <FormItem>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      className="max-w-[300px]"
-                      autoComplete="off"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck="false"
-                      type="email"
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
+              type="email"
+              defaultValue={user?.email ?? ""}
+              autoComplete="email"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              required
             />
-          </CardContent>
+          </div>
 
-          <CardFooter className="flex justify-between">
-            <div>
-              This is your primary email address for notifications and more.
-            </div>
-            <SubmitButton
-              type="submit"
-              isSubmitting={updateUserMutation.isPending}
-            >
-              Save
-            </SubmitButton>
-          </CardFooter>
-        </Card>
-      </form>
-    </Form>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          {sentTo && (
+            <p className="text-sm text-emerald-600">
+              Verification sent to {sentTo}. Open the link to finish the change;
+              every session then signs out and you sign in with the new address.
+            </p>
+          )}
+
+          <Button type="submit" disabled={pending}>
+            {pending ? "Sending…" : "Send verification link"}
+          </Button>
+        </form>
+      </CardContent>
+
+      <CardFooter className="text-sm text-muted-foreground">
+        Current address: {user?.email}
+      </CardFooter>
+    </Card>
   );
 }

@@ -66,6 +66,7 @@ const preflightOnly = flags.has("--preflight-only");
 const SMOKE_DATABASE = "invoicewise_verify_smoke_test";
 const PERMISSIONS_DATABASE = "invoicewise_perms_test";
 const INTAKE_DATABASE = "invoicewise_intake_test";
+const IDENTITY_DATABASE = "invoicewise_identity_test";
 const JOBS_DATABASE = "invoicewise_jobs_verify_test";
 const API_SMOKE_PORT = 31992;
 const DASHBOARD_PORT = 31990;
@@ -170,6 +171,7 @@ async function preflight() {
       SMOKE_DATABASE,
       PERMISSIONS_DATABASE,
       INTAKE_DATABASE,
+      IDENTITY_DATABASE,
       JOBS_DATABASE,
       FRESH_DATABASE,
       UPGRADE_DATABASE,
@@ -785,6 +787,14 @@ async function securityRegressionSuites() {
     env: env({ INTAKE_TEST_DATABASE_URL: databaseUrl(INTAKE_DATABASE) }),
     timeoutMs: 20 * 60 * 1000,
   });
+
+  await v.runStep("verify:identity-http-regressions", {
+    command: "bun",
+    args: ["--no-env-file", "test", "src/identity.http.integration.test.ts"],
+    cwd: ws(API_DIR),
+    env: env({ IDENTITY_TEST_DATABASE_URL: databaseUrl(IDENTITY_DATABASE) }),
+    timeoutMs: 20 * 60 * 1000,
+  });
 }
 
 /**
@@ -889,6 +899,7 @@ async function main() {
         SMOKE_DATABASE,
         PERMISSIONS_DATABASE,
         INTAKE_DATABASE,
+        IDENTITY_DATABASE,
         JOBS_DATABASE,
       ]) {
         v.onCleanup(`drop ${database}`, () => dropDisposableDatabase(database));

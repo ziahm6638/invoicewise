@@ -17,6 +17,7 @@
     ".": "./src/index.ts",
     "./envs": "./src/envs.ts",
     "./format": "./src/format.ts",
-    "./tax": "./src/tax.ts"
+    "./tax": "./src/tax.ts",
+    "./transactional-mail": "./src/transactional-mail.ts"
   }
 }

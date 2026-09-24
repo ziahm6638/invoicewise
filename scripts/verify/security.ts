@@ -91,6 +91,12 @@ export const SECRET_EXCEPTIONS: {
   reason: string;
 }[] = [
   {
+    path: "apps/api/src/services/auth-mail.test.ts",
+    value: "re_local_development",
+    reason:
+      "the committed development placeholder key, asserted to be refused in production",
+  },
+  {
     path: "apps/api/.env-template",
     value: "invoicewise-local-development-auth-secret-change-in-production",
     reason: "committed local template for the shared development auth secret",
