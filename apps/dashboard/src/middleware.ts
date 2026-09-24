@@ -1,3 +1,4 @@
+import { getPublicUrl } from "@/utils/environment";
 import { getSessionCookie } from "better-auth/cookies";
 import { createI18nMiddleware } from "next-international/middleware";
 import { type NextRequest, NextResponse } from "next/server";
@@ -34,7 +35,7 @@ export async function middleware(request: NextRequest) {
   ].includes(newUrl.pathname);
 
   if (!hasSessionCookie && !isPublicAuthPage) {
-    const url = new URL("/login", request.url);
+    const url = getPublicUrl("/login");
 
     url.searchParams.set("return_to", returnTo);
 

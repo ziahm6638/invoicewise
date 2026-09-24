@@ -3,18 +3,28 @@
  * membership, because the dashboard and tRPC gates can be bypassed by calling
  * these routes directly. The Polar client is stubbed: no provider call happens.
  */
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import { NextRequest } from "next/server";
 
 process.env.POLAR_ENVIRONMENT = "sandbox";
 
 const polarCalls = { checkouts: 0, portals: 0 };
+let checkoutSuccessUrl: string | undefined;
 
 mock.module("@/utils/polar", () => ({
   api: {
     checkouts: {
-      create: async () => {
+      create: async ({ successUrl }: { successUrl: string }) => {
         polarCalls.checkouts += 1;
+        checkoutSuccessUrl = successUrl;
         return { url: "https://polar.test/checkout" };
       },
     },
@@ -70,7 +80,24 @@ const portalRequest = (teamId: string = TEAM) =>
     method: "GET",
   });
 
+// Requests reach the container on an internal origin behind the proxy.
+const PUBLIC_ORIGIN = "https://app.invoicewise.uk";
+const configuredUrl = process.env.NEXT_PUBLIC_URL;
+
+beforeAll(() => {
+  process.env.NEXT_PUBLIC_URL = PUBLIC_ORIGIN;
+});
+
+afterAll(() => {
+  if (configuredUrl === undefined) {
+    Reflect.deleteProperty(process.env, "NEXT_PUBLIC_URL");
+  } else {
+    process.env.NEXT_PUBLIC_URL = configuredUrl;
+  }
+});
+
 afterEach(() => {
+  checkoutSuccessUrl = undefined;
   currentSession = null;
   polarCalls.checkouts = 0;
   polarCalls.portals = 0;
@@ -127,5 +154,9 @@ describe("billing routes require a live owner", () => {
     expect(portal.status).toBe(307);
     expect(portal.headers.get("location")).toBe("https://polar.test/portal");
     expect(polarCalls).toEqual({ checkouts: 1, portals: 1 });
+    // Polar returns the browser here, so it must be the public origin.
+    expect(checkoutSuccessUrl).toBe(
+      `${PUBLIC_ORIGIN}/api/checkout/success?redirectPath=%2F`,
+    );
   });
 });
