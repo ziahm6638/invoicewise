@@ -768,7 +768,7 @@ export async function discardStaleReservations(
 
   // Pending rows are processed first. Each one is re-checked with a
   // state-conditional claim, so an accepted row can never be removed and a
-  // retry that wins the row lock makes the cleanup claim a no-op.
+  // retry holding a live publication lease makes the cleanup claim a no-op.
   const reservedCutoff = Date.now() - params.olderThanMs;
   for (const pending of pendingPage.rows) {
     if (!pending.teamId || handled.has(pending.id)) continue;
