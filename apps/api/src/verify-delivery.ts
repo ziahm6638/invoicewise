@@ -12,7 +12,6 @@ import {
 import { inArray } from "drizzle-orm";
 
 const apiUrl = process.env.INVOICEWISE_API_URL ?? "http://localhost:3003";
-const listenerPort = 3014;
 const teamIds: string[] = [];
 const userIds: string[] = [];
 let listener: ReturnType<typeof Bun.serve> | undefined;
@@ -246,7 +245,9 @@ try {
 
   const deliveries: Array<{ body: string; signature: string }> = [];
   listener = Bun.serve({
-    port: listenerPort,
+    // Port 0 lets the OS choose a free loopback port, so parallel verification
+    // runs cannot collide on the webhook listener.
+    port: Number(process.env.VERIFY_DELIVERY_LISTENER_PORT ?? 0),
     fetch: async (request) => {
       deliveries.push({
         body: await request.text(),
@@ -255,6 +256,7 @@ try {
       return new Response(null, { status: 204 });
     },
   });
+  const listenerPort = listener.port;
 
   const successfulEndpoint = await api<{
     id: string;

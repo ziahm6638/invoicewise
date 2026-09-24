@@ -770,6 +770,28 @@ export type ProviderTrap = {
 };
 
 /**
+ * Reserves one free loopback TCP port for a product server.
+ *
+ * Verification runs must not collide when two worktrees run at once, so app
+ * servers no longer bind fixed ports: a run asks for a free port here and
+ * passes it to the child through its environment. A `VERIFY_*_PORT` override
+ * pins a port when a caller needs one.
+ */
+export async function freePort(): Promise<number> {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response(null, { status: 204 }),
+  });
+  const port = server.port;
+  await server.stop(true);
+  if (port === undefined) {
+    throw new Error("could not reserve a free verification port");
+  }
+  return port;
+}
+
+/**
  * Loopback stub for every provider SDK base URL. Providers that support a base
  * URL override are redirected here, so a verification run cannot reach a paid
  * endpoint even by accident; the recorded requests are part of the evidence.

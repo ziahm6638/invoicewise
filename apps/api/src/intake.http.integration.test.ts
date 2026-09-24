@@ -31,7 +31,7 @@ import { join } from "node:path";
 import sharp from "sharp";
 
 const testDatabaseUrl = process.env.INTAKE_TEST_DATABASE_URL;
-const PORT = 31781;
+const PORT = Number(process.env.INTAKE_TEST_PORT ?? 31781);
 const BASE = `http://localhost:${PORT}`;
 const storageRoot = join(
   tmpdir(),

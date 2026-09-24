@@ -43,6 +43,7 @@ import {
   assertSyntheticEnvironment,
   createIsolatedWorkspace,
   executablePath,
+  freePort,
   redact,
   setProviderStubBaseUrl,
   setSmtpTrapPort,
@@ -72,8 +73,34 @@ const PERMISSIONS_DATABASE = "invoicewise_perms_test";
 const INTAKE_DATABASE = "invoicewise_intake_test";
 const IDENTITY_DATABASE = "invoicewise_identity_test";
 const JOBS_DATABASE = "invoicewise_jobs_verify_test";
-const API_SMOKE_PORT = 31992;
-const DASHBOARD_PORT = 31990;
+
+/**
+ * App-server ports. They are resolved once per run so the dashboard build, the
+ * runtime smoke and the production e2e journey all agree, and two concurrent
+ * verification runs pick different ports instead of colliding. A run can pin
+ * them with `VERIFY_API_PORT` / `VERIFY_DASHBOARD_PORT`.
+ */
+let apiPort = 0;
+let dashboardPort = 0;
+const apiOrigin = () => `http://localhost:${apiPort}`;
+const appOrigin = () => `http://localhost:${dashboardPort}`;
+
+function parsePortOverride(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const port = Number(raw);
+  if (!/^\d+$/.test(raw) || port < 1 || port > 65_535) {
+    throw new Error(`${name} must be a valid TCP port, received "${raw}"`);
+  }
+  return port;
+}
+
+/** Chooses the app-server ports for this run (override, else free at start). */
+async function resolvePorts() {
+  apiPort = parsePortOverride("VERIFY_API_PORT") ?? (await freePort());
+  dashboardPort =
+    parsePortOverride("VERIFY_DASHBOARD_PORT") ?? (await freePort());
+}
 
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const v = new Verification(runId);
@@ -84,7 +111,13 @@ let smtpTrap: SmtpTrap;
 
 /** Builds and validates the environment for one command. */
 function env(overrides: Record<string, string | undefined> = {}) {
-  const built = syntheticEnv(overrides);
+  const built = syntheticEnv({
+    BETTER_AUTH_URL: appOrigin(),
+    NEXT_PUBLIC_URL: appOrigin(),
+    NEXT_PUBLIC_API_URL: apiOrigin(),
+    STORAGE_PUBLIC_URL: apiOrigin(),
+    ...overrides,
+  });
   assertSyntheticEnvironment(built);
   return built;
 }
@@ -576,9 +609,9 @@ async function buildWorkspace() {
     cwd: ws(DASHBOARD_DIR),
     env: env({
       DATABASE_PRIMARY_URL: databaseUrl(SMOKE_DATABASE),
-      BETTER_AUTH_URL: `http://localhost:${DASHBOARD_PORT}`,
-      NEXT_PUBLIC_URL: `http://localhost:${DASHBOARD_PORT}`,
-      NEXT_PUBLIC_API_URL: `http://localhost:${API_SMOKE_PORT}`,
+      BETTER_AUTH_URL: appOrigin(),
+      NEXT_PUBLIC_URL: appOrigin(),
+      NEXT_PUBLIC_API_URL: apiOrigin(),
       NODE_ENV: "production",
     }),
     timeoutMs: 20 * 60 * 1000,
@@ -677,10 +710,10 @@ async function awaitClaimedJob(database: string, jobId: string) {
 async function runtimeSmoke() {
   const smokeEnv = env({
     DATABASE_PRIMARY_URL: databaseUrl(SMOKE_DATABASE),
-    BETTER_AUTH_URL: `http://localhost:${API_SMOKE_PORT}`,
-    NEXT_PUBLIC_URL: `http://localhost:${API_SMOKE_PORT}`,
-    PORT: String(API_SMOKE_PORT),
-    ALLOWED_API_ORIGINS: `http://localhost:${DASHBOARD_PORT}`,
+    BETTER_AUTH_URL: apiOrigin(),
+    NEXT_PUBLIC_URL: apiOrigin(),
+    PORT: String(apiPort),
+    ALLOWED_API_ORIGINS: appOrigin(),
     // Test mode: loopback webhook endpoints are only accepted outside
     // production. The production-mode entrypoints are exercised by the e2e.
     NODE_ENV: "test",
@@ -694,7 +727,7 @@ async function runtimeSmoke() {
   });
 
   await v.runCheck("start:api-executable-health", async () => {
-    const origin = `http://localhost:${API_SMOKE_PORT}`;
+    const origin = `http://localhost:${apiPort}`;
     const health = await waitForHttp(
       `${origin}/health`,
       (response) => response.status === 200,
@@ -722,7 +755,7 @@ async function runtimeSmoke() {
     cwd: ws(API_DIR),
     env: env({
       ...smokeEnv,
-      INVOICEWISE_API_URL: `http://localhost:${API_SMOKE_PORT}`,
+      INVOICEWISE_API_URL: `http://localhost:${apiPort}`,
     }),
     timeoutMs: 10 * 60 * 1000,
   });
@@ -835,7 +868,7 @@ async function securityRegressionSuites() {
     timeoutMs: 10 * 60 * 1000,
   });
 
-  // The HTTP suites boot their own server on a fixed port and must run
+  // The HTTP suites boot their own server on a per-run free port and must run
   // sequentially; the intake helpers scan the shared disposable database.
   await v.runStep("verify:security-http-regressions", {
     command: "bun",
@@ -843,6 +876,7 @@ async function securityRegressionSuites() {
     cwd: ws(API_DIR),
     env: env({
       PERMISSIONS_TEST_DATABASE_URL: databaseUrl(PERMISSIONS_DATABASE),
+      PERMISSIONS_TEST_PORT: String(await freePort()),
     }),
     timeoutMs: 20 * 60 * 1000,
   });
@@ -851,7 +885,10 @@ async function securityRegressionSuites() {
     command: "bun",
     args: ["--no-env-file", "test", "src/intake.http.integration.test.ts"],
     cwd: ws(API_DIR),
-    env: env({ INTAKE_TEST_DATABASE_URL: databaseUrl(INTAKE_DATABASE) }),
+    env: env({
+      INTAKE_TEST_DATABASE_URL: databaseUrl(INTAKE_DATABASE),
+      INTAKE_TEST_PORT: String(await freePort()),
+    }),
     timeoutMs: 20 * 60 * 1000,
   });
 
@@ -859,7 +896,10 @@ async function securityRegressionSuites() {
     command: "bun",
     args: ["--no-env-file", "test", "src/identity.http.integration.test.ts"],
     cwd: ws(API_DIR),
-    env: env({ IDENTITY_TEST_DATABASE_URL: databaseUrl(IDENTITY_DATABASE) }),
+    env: env({
+      IDENTITY_TEST_DATABASE_URL: databaseUrl(IDENTITY_DATABASE),
+      IDENTITY_TEST_PORT: String(await freePort()),
+    }),
     timeoutMs: 20 * 60 * 1000,
   });
 }
@@ -891,6 +931,7 @@ async function retiredMatchingScope() {
 async function main() {
   await mkdir(ARTIFACTS_ROOT, { recursive: true });
   await v.init();
+  await resolvePorts();
 
   const mode = securityOnly
     ? "security-only"
@@ -956,7 +997,7 @@ async function main() {
         );
       }
       await buildWorkspace();
-      await runProductionE2E(v, { env, ws });
+      await runProductionE2E(v, { env, ws, apiPort, dashboardPort });
     } else if (preflightOnly) {
       await preflight();
     } else {
@@ -984,7 +1025,7 @@ async function main() {
       await runtimeSmoke();
       await workflowAndStorageVerifiers();
       await securityRegressionSuites();
-      await runProductionE2E(v, { env, ws });
+      await runProductionE2E(v, { env, ws, apiPort, dashboardPort });
       await runDependencyCheck(v, env());
       await runSecretScan(v);
       await retiredMatchingScope();

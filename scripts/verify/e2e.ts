@@ -42,11 +42,6 @@ const FIXTURE_PDF = join(
   "synthetic-invoice.pdf",
 );
 
-const API_EXECUTABLE_PORT = 31992;
-const DASHBOARD_PORT = 31990;
-const API_ORIGIN = `http://localhost:${API_EXECUTABLE_PORT}`;
-const APP_ORIGIN = `http://localhost:${DASHBOARD_PORT}`;
-
 type Tenant = {
   email: string;
   password: string;
@@ -61,6 +56,9 @@ export type E2EContext = {
     overrides?: Record<string, string | undefined>,
   ) => Record<string, string>;
   ws: (relativePath: string) => string;
+  /** Per-run app ports chosen by the orchestrator (free at start). */
+  apiPort: number;
+  dashboardPort: number;
 };
 
 async function migrate(v: Verification, environment: E2EContext) {
@@ -107,11 +105,12 @@ async function createTenant(
   label: string,
   database: string,
   password: string,
+  appOrigin: string,
 ): Promise<Tenant> {
   const email = `${label}-${crypto.randomUUID()}@example.test`;
-  const signUp = await fetch(`${APP_ORIGIN}/api/auth/sign-up/email`, {
+  const signUp = await fetch(`${appOrigin}/api/auth/sign-up/email`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: APP_ORIGIN },
+    headers: { "content-type": "application/json", origin: appOrigin },
     body: JSON.stringify({ email, password, name: label }),
   });
   if (signUp.status !== 200) {
@@ -140,9 +139,9 @@ async function createTenant(
     await client.end();
   }
 
-  const signIn = await fetch(`${APP_ORIGIN}/api/auth/sign-in/email`, {
+  const signIn = await fetch(`${appOrigin}/api/auth/sign-in/email`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: APP_ORIGIN },
+    headers: { "content-type": "application/json", origin: appOrigin },
     body: JSON.stringify({ email, password }),
   });
   if (signIn.status !== 200) {
@@ -154,7 +153,12 @@ async function createTenant(
   return { email, password, cookie: cookieFrom(signIn), userId, teamId };
 }
 
-async function uploadInvoice(tenant: Tenant, bytes: Buffer, fileName: string) {
+async function uploadInvoice(
+  tenant: Tenant,
+  bytes: Buffer,
+  fileName: string,
+  appOrigin: string,
+) {
   const form = new FormData();
   form.set(
     "file",
@@ -164,9 +168,9 @@ async function uploadInvoice(tenant: Tenant, bytes: Buffer, fileName: string) {
   form.set("path", JSON.stringify(["other-team", "inbox", "forged.pdf"]));
   form.set("bucket", "vault");
 
-  const response = await fetch(`${APP_ORIGIN}/api/storage/upload`, {
+  const response = await fetch(`${appOrigin}/api/storage/upload`, {
     method: "POST",
-    headers: { origin: APP_ORIGIN, cookie: tenant.cookie },
+    headers: { origin: appOrigin, cookie: tenant.cookie },
     body: form,
   });
   const body = (await response.json().catch(() => null)) as {
@@ -179,17 +183,25 @@ async function uploadInvoice(tenant: Tenant, bytes: Buffer, fileName: string) {
   return { status: response.status, body };
 }
 
-async function trpcQuery(tenant: Tenant, path: string, input: unknown) {
+async function trpcQuery(
+  tenant: Tenant,
+  path: string,
+  input: unknown,
+  apiOrigin: string,
+  appOrigin: string,
+) {
   const response = await fetch(
-    `${API_ORIGIN}/trpc/${path}?input=${encodeURIComponent(
+    `${apiOrigin}/trpc/${path}?input=${encodeURIComponent(
       JSON.stringify({ json: input }),
     )}`,
-    { headers: { origin: APP_ORIGIN, cookie: tenant.cookie } },
+    { headers: { origin: appOrigin, cookie: tenant.cookie } },
   );
   return { status: response.status, text: await response.text() };
 }
 
 export async function runProductionE2E(v: Verification, context: E2EContext) {
+  const APP_ORIGIN = `http://localhost:${context.dashboardPort}`;
+  const API_ORIGIN = `http://localhost:${context.apiPort}`;
   const database = databaseUrl(E2E_DATABASE);
   const databaseEnv = context.env({
     DATABASE_PRIMARY_URL: database,
@@ -198,7 +210,7 @@ export async function runProductionE2E(v: Verification, context: E2EContext) {
     NEXT_PUBLIC_API_URL: API_ORIGIN,
     STORAGE_PUBLIC_URL: API_ORIGIN,
     ALLOWED_API_ORIGINS: APP_ORIGIN,
-    PORT: String(API_EXECUTABLE_PORT),
+    PORT: String(context.apiPort),
     NODE_ENV: "production",
   });
 
@@ -240,7 +252,14 @@ export async function runProductionE2E(v: Verification, context: E2EContext) {
 
   const dashboard = await ManagedProcess.start(v, "e2e:dashboard-production", {
     command: "bun",
-    args: ["--no-env-file", "x", "next", "start", "-p", String(DASHBOARD_PORT)],
+    args: [
+      "--no-env-file",
+      "x",
+      "next",
+      "start",
+      "-p",
+      String(context.dashboardPort),
+    ],
     cwd: context.ws("apps/dashboard"),
     env: databaseEnv,
   });
@@ -263,14 +282,29 @@ export async function runProductionE2E(v: Verification, context: E2EContext) {
 
   await v.runCheck("e2e:two-tenant-intake-preview-and-isolation", async () => {
     const password = "VerifyPassword123!";
-    tenantA = await createTenant("verify-a", E2E_DATABASE, password);
-    tenantB = await createTenant("verify-b", E2E_DATABASE, password);
+    tenantA = await createTenant(
+      "verify-a",
+      E2E_DATABASE,
+      password,
+      APP_ORIGIN,
+    );
+    tenantB = await createTenant(
+      "verify-b",
+      E2E_DATABASE,
+      password,
+      APP_ORIGIN,
+    );
 
     if (tenantA.teamId === tenantB.teamId) {
       throw new Error("the two verification tenants share one workspace");
     }
 
-    const uploaded = await uploadInvoice(tenantA, fixture, "invoice.pdf");
+    const uploaded = await uploadInvoice(
+      tenantA,
+      fixture,
+      "invoice.pdf",
+      APP_ORIGIN,
+    );
     if (uploaded.status !== 200 || !uploaded.body?.id) {
       throw new Error(
         `intake upload failed: ${uploaded.status} ${JSON.stringify(uploaded.body)}`,
@@ -359,13 +393,25 @@ export async function runProductionE2E(v: Verification, context: E2EContext) {
 
     // The API origin is a separate surface; the second tenant must not see the
     // first tenant's invoice through it either.
-    const foreignTrpc = await trpcQuery(tenantB, "inbox.getById", {
-      id: intakeId,
-    });
+    const foreignTrpc = await trpcQuery(
+      tenantB,
+      "inbox.getById",
+      {
+        id: intakeId,
+      },
+      API_ORIGIN,
+      APP_ORIGIN,
+    );
     if (foreignTrpc.status === 200 && foreignTrpc.text.includes(intakeId)) {
       throw new Error("second tenant read another workspace inbox over tRPC");
     }
-    const ownTrpc = await trpcQuery(tenantA, "inbox.getById", { id: intakeId });
+    const ownTrpc = await trpcQuery(
+      tenantA,
+      "inbox.getById",
+      { id: intakeId },
+      API_ORIGIN,
+      APP_ORIGIN,
+    );
     if (ownTrpc.status !== 200 || !ownTrpc.text.includes(intakeId)) {
       throw new Error(
         `owner could not read their own invoice over tRPC: ${ownTrpc.status} ${ownTrpc.text.slice(0, 200)}`,
