@@ -2104,6 +2104,10 @@ export const inbox = pgTable(
     meta: json(),
     extraction: jsonb("extraction").$type<Record<string, unknown>>(),
     judgments: jsonb("judgments").$type<Record<string, unknown>[]>(),
+    // Deterministic checks of the extraction (arithmetic, currency, identity,
+    // required fields) and whether it may be posted to accounting; see
+    // docs/document-intake.md#validation. Null until processed.
+    validation: jsonb("validation").$type<Record<string, unknown>>(),
     accountingProvider: accountingProviderEnum("accounting_provider"),
     accountingPostStatus: accountingPostStatusEnum("accounting_post_status"),
     accountingProviderId: text("accounting_provider_id"),

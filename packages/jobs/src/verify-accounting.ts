@@ -230,7 +230,14 @@ async function main() {
     });
     if (!connection) throw new Error("Unable to store accounting connection");
 
-    const createInvoice = async (invoiceNumber: string) => {
+    const createInvoice = async (
+      invoiceNumber: string,
+      amounts: { netAmount: number; vatAmount: number; grossAmount: number } = {
+        netAmount: 100,
+        vatAmount: 20,
+        grossAmount: 120,
+      },
+    ) => {
       const path = [teamId!, "inbox", `${invoiceNumber}.pdf`];
       paths.push(path);
       await storage.upload({
@@ -258,15 +265,14 @@ async function main() {
         type: "invoice",
         status: "pending",
         extraction: {
+          documentType: "invoice",
           supplierName: "Acme Supplies Ltd",
           supplierVatNumber: "GB123456789",
           invoiceNumber,
           invoiceDate: "2026-09-22",
           dueDate: "2026-10-22",
           currency: "GBP",
-          netAmount: 100,
-          vatAmount: 20,
-          grossAmount: 120,
+          ...amounts,
           lineItems: [
             {
               description: "Materials",
@@ -336,6 +342,31 @@ async function main() {
       invoiceId: retryInvoice.id,
       teamId,
     });
+    // An invoice whose total does not reconcile is refused before the
+    // provider is called, with the reason recorded on the invoice.
+    const blockedInvoice = await createInvoice("BLOCKED-TOTAL", {
+      netAmount: 100,
+      vatAmount: 20,
+      grossAmount: 150,
+    });
+    if (!blockedInvoice) throw new Error("Unable to persist blocked invoice");
+    const blockedJob = await enqueueAccountingPost(database.db, {
+      invoiceId: blockedInvoice.id,
+      teamId,
+    });
+    if (!blockedJob) throw new Error("Blocked accounting post was not queued");
+    await runBatch();
+    const blockedStatus = await getInvoiceAccountingStatus(database.db, {
+      invoiceId: blockedInvoice.id,
+      teamId,
+    });
+    const blockedRun = await getWorkflowJob(database.db, {
+      id: blockedJob.job.id,
+      teamId,
+    });
+    const blockedCalls =
+      billAttempts.get(`invoicewise:${blockedInvoice.id}`) ?? 0;
+
     const disconnected = await disconnectAccountingConnection(database.db, {
       teamId,
       provider: "xero",
@@ -350,6 +381,10 @@ async function main() {
       retriedJob?.status !== "succeeded" ||
       retriedJob.attempts !== 2 ||
       retriedStatus?.status !== "posted" ||
+      blockedStatus?.status !== "failed" ||
+      !blockedStatus.lastError?.startsWith("Not sent to Xero:") ||
+      blockedRun?.status !== "succeeded" ||
+      blockedCalls !== 0 ||
       retriedStatus.providerId !==
         providerIds.get(`invoicewise:${retryInvoice.id}`) ||
       providerIds.size !== 2 ||
@@ -377,6 +412,11 @@ async function main() {
             attached:
               attachments.get(postedStatus.providerId ?? "")?.size === 1,
             duplicateRefused,
+          },
+          blocked: {
+            providerCalls: blockedCalls,
+            status: blockedStatus.status,
+            reason: blockedStatus.lastError,
           },
           retry: {
             failedWith: failedStatus.lastError,

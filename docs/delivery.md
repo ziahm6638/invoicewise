@@ -23,12 +23,18 @@ Available read routes are:
 | Route | Result |
 | --- | --- |
 | `GET /invoices` | Cursor-paginated invoices; supports `cursor`, `pageSize`, `status`, `q`, `sort`, and `order` |
-| `GET /invoices/:id` | Extraction, line items, judgments, and a five-minute signed document URL |
+| `GET /invoices/:id` | Extraction (with per-value evidence), validation, line items, judgments, and a five-minute signed document URL |
 | `GET /invoices/:id/delivery-status` | Webhook delivery attempts plus the Nango accounting post status, provider ID, and failure reason |
-| `GET /invoices/export.csv` | Workspace invoices with a `judgment:<questionId>` column for every judgment |
+| `GET /invoices/export.csv` | Workspace invoices with document type, validation status, accounting readiness and issues, and a `judgment:<questionId>` column for every judgment |
 
 An invoice outside the API key's workspace is returned as `404`, so the route
 does not reveal whether another workspace owns that identifier.
+
+Every invoice read, the `invoice.processed` webhook payload and MCP
+`get_invoice` carry `validation`: the deterministic checks, issues, canonical
+totals with their currencies, duplicate and credit-note identity, and
+`accounting.ready` with its blockers. See
+[Validation](document-intake.md#validation).
 
 ## MCP
 

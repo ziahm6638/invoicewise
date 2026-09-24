@@ -34,6 +34,7 @@ const required = (name: string) => {
 // the persisted extraction proves the real reading, layout and candidate
 // mining end to end.
 const extractionValues: Record<string, string | number> = {
+  document_type: "invoice",
   supplier_name: "ACME SUPPLIES LTD",
   supplier_address: "10 Market Street, London, EC1A 1AA",
   supplier_vat_number: "GB123456789",
@@ -56,6 +57,7 @@ const extractionValues: Record<string, string | number> = {
 // The same selections for the UK invoice fixture, which the input-matrix
 // phase uploads as a text PDF, a scanned PDF, a PNG scan and a JPEG photo.
 const ukInvoiceValues: Record<string, string | number> = {
+  document_type: "invoice",
   supplier_name: "Northwind Joinery Ltd",
   supplier_address: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
   supplier_vat_number: "GB293445512",
@@ -164,6 +166,13 @@ const startTypeSafeStub = () =>
   });
 
 const priorExtraction: InvoiceExtraction = {
+  documentType: "invoice",
+  supplierCompanyNumber: null,
+  originalInvoiceNumber: null,
+  discountAmount: null,
+  taxRate: null,
+  amountsIncludeTax: null,
+  paymentReference: null,
   supplierName: "ACME SUPPLIES LTD",
   supplierAddress: "10 Market Street, London, EC1A 1AA",
   supplierVatNumber: "GB123456789",
@@ -179,6 +188,10 @@ const priorExtraction: InvoiceExtraction = {
       description: "Consulting services",
       quantity: 2,
       unitPrice: 500,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: null,
+      taxAmount: null,
       total: 1000,
     },
   ],
@@ -193,13 +206,31 @@ const priorExtraction: InvoiceExtraction = {
   purchaseOrderReference: "PO-7788",
   textSource: "text-layer",
   pageSources: ["text-layer"],
+  evidence: { fields: {}, lineItems: [] },
 };
 
 /** Every field the synthetic PDF prints, as the pipeline must persist it. */
 const expectedExtraction: InvoiceExtraction = { ...priorExtraction };
 
+/**
+ * An extraction's values without its evidence, which records the printed
+ * rows (and so differs between a text layer and OCR); the evidence itself
+ * is checked for presence per value.
+ */
+const valuesOf = (extraction: unknown) => {
+  const { evidence, ...values } = (extraction ?? {}) as InvoiceExtraction;
+  return { values, evidence };
+};
+
 /** The UK invoice fixture, as every input format must persist it. */
 const ukInvoiceExtraction: InvoiceExtraction = {
+  documentType: "invoice",
+  supplierCompanyNumber: null,
+  originalInvoiceNumber: null,
+  discountAmount: null,
+  taxRate: null,
+  amountsIncludeTax: null,
+  paymentReference: null,
   supplierName: "Northwind Joinery Ltd",
   supplierAddress: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
   supplierVatNumber: "GB293445512",
@@ -215,24 +246,40 @@ const ukInvoiceExtraction: InvoiceExtraction = {
       description: "Oak skirting board supply and fit",
       quantity: 12,
       unitPrice: 45,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: 20,
+      taxAmount: null,
       total: 540,
     },
     {
       description: "Kitchen worktop installation including sealing and edging",
       quantity: 1,
       unitPrice: 850,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: 20,
+      taxAmount: null,
       total: 850,
     },
     {
       description: "Bespoke shelving unit",
       quantity: 2,
       unitPrice: 325.5,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: 20,
+      taxAmount: null,
       total: 651,
     },
     {
       description: "Site waste disposal",
       quantity: 3,
       unitPrice: 40,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: 20,
+      taxAmount: null,
       total: 120,
     },
   ],
@@ -247,6 +294,7 @@ const ukInvoiceExtraction: InvoiceExtraction = {
   purchaseOrderReference: "PO-55120",
   textSource: "text-layer",
   pageSources: ["text-layer"],
+  evidence: { fields: {}, lineItems: [] },
 };
 
 const runBatch = () =>
@@ -367,11 +415,16 @@ async function verifyInputMatrix(
   const {
     textSource: _source,
     pageSources: _pages,
+    evidence: _evidence,
     ...expectedFields
   } = ukInvoiceExtraction;
   const shapes = rows.map(({ upload, row }) => {
-    const { textSource, pageSources, ...fields } = (row.extraction ??
-      {}) as InvoiceExtraction;
+    const {
+      textSource,
+      pageSources,
+      evidence: _read,
+      ...fields
+    } = (row.extraction ?? {}) as InvoiceExtraction;
     if (
       row.processingError !== null ||
       row.status !== "pending" ||
@@ -398,6 +451,7 @@ async function verifyInputMatrix(
       taxType: row.taxType,
       type: row.type,
       extraction: row.extraction,
+      validation: row.validation,
       judgments: (row.judgments ?? []).map(
         (judgment) => `${judgment.source}:${judgment.questionId}`,
       ),
@@ -711,7 +765,16 @@ async function main() {
       (judgment) => judgment.status === "failed",
     );
 
-    if (!Bun.deepEquals(persisted?.extraction, expectedExtraction)) {
+    const persistedValues = valuesOf(persisted?.extraction);
+    if (
+      !Bun.deepEquals(
+        persistedValues.values,
+        valuesOf(expectedExtraction).values,
+      ) ||
+      persistedValues.evidence?.lineItems.length !==
+        expectedExtraction.lineItems.length ||
+      !persistedValues.evidence.fields.grossAmount
+    ) {
       throw new Error(
         `Persisted extraction does not match the invoice: ${JSON.stringify(
           persisted?.extraction ?? null,
@@ -723,6 +786,8 @@ async function main() {
       completed?.status !== "succeeded" ||
       completed.attempts !== 2 ||
       !persisted?.extraction ||
+      // The deterministic checks are persisted beside the extraction.
+      persisted.validation?.version !== 1 ||
       persisted.status !== "pending" ||
       defaultJudgments.length !== 4 ||
       !approvalJudgment ||

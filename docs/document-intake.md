@@ -209,8 +209,13 @@ newsletter), is recorded as a failed invoice with its reason.
   provider reference, content hash and processing job.
 - Line items come only from printed table rows: a row found under a header
   (a table continues onto a later page under a repeated header), or a row
-  whose quantity × unit price = total proves it. A row printed as one run of
-  text ("Continued on page 2", "Page 1 of 2") is never proposed, and TypeSafe
+  whose quantity × unit price = total proves it. Columns are mapped from the
+  header's words, not from separators: quantity (Qty, Hours, Days), unit
+  price, a discount (money or %), VAT (a rate such as `20%` or an amount) and
+  the row amount (Net, Amount, Total; "Total inc VAT" or a lone Gross column
+  marks tax-inclusive rows). Wrapped descriptions join their row. A column the
+  table does not print stays null. A row printed as one run of text
+  ("Continued on page 2", "Page 1 of 2") is never proposed, and TypeSafe
   confirms each candidate row is a purchased item. Nothing is generated.
 
 ### Persisted result
@@ -221,12 +226,13 @@ Every input persists the same fields on its `inbox` record:
   `content_hash`, `reference_id` for mail and `inbox_account_id` for synced
   mailboxes;
 - on success: `extraction` (the typed `InvoiceExtraction`, including
-  `textSource` and `pageSources`), `judgments` (one per configured question,
-  answered, `not_applicable` with a reason, or `failed`), the derived amount,
-  currency, date and tax columns, status `pending`, and a null
-  `processing_error`;
+  `textSource`, `pageSources` and per-value `evidence`), `validation` (the
+  deterministic checks; see [Validation](#validation)), `judgments` (one per
+  configured question, answered, `not_applicable` with a reason, or
+  `failed`), the derived amount, currency, date and tax columns, status
+  `pending`, and a null `processing_error`;
 - on failure: status `pending`, the reason in `processing_error`, and no
-  extraction or judgments. Permanent reasons (unreadable, not an invoice, over
+  extraction, validation or judgments. Permanent reasons (unreadable, not an invoice, over
   a limit, unsupported) fail at once; transient ones (provider or parser
   capacity) are retried and recorded only after the last attempt. An explicit
   retry clears the reason while it runs. REST/MCP reads return
@@ -350,7 +356,31 @@ therefore runs in three steps (`packages/documents/src/typesafe/`):
    picks which candidate each field is, or that the invoice does not state it,
    and confirms which table rows are purchased items.
 3. Code copies the chosen values and normalises them (ISO dates, `12-34-56`
-   sort codes, grouped IBANs).
+   sort codes, grouped IBANs), and records each value's evidence.
+
+The canonical record (`InvoiceExtraction` in
+`packages/documents/src/typesafe/invoice.ts`) covers invoices and credit
+notes: `documentType` (`invoice`, `credit_note`, or null when the document
+says neither), supplier name, address, VAT number and Companies House
+number, the document's own number and, for a credit note, the
+`originalInvoiceNumber` it credits, invoice and due dates, `currency`, net,
+discount, VAT, a single document-level `taxRate`, gross, `amountsIncludeTax`,
+line items, bank details, PO and `paymentReference`. Amounts are stored as
+printed (a credit note may print them negative or positive).
+
+Nothing is filled in without evidence. A bare `$` offers no currency (it may
+be US, Canadian, Australian or New Zealand dollars), so the currency stays
+null unless an ISO code, `£`, `€` or a prefixed dollar (`US$`) is printed. A
+missing VAT amount stays null, not zero, and a missing VAT number is not read
+as "not registered". Dates are only printed dates; a due date is derived only
+from printed terms ("Payment terms: 30 days", "Payable on receipt"), and its
+evidence says so.
+
+`extraction.evidence.fields` holds, for every value found, the page, the
+printed row (`line`, `text`), the label beside it, TypeSafe's `confidence` in
+the selection and, for an amount, the currency marker printed with it
+(`currencyMarker`, `currency`); derived values carry `derivedFrom` and no
+confidence. `evidence.lineItems` does the same for each line item.
 
 An extraction with no readable text, or in which none of supplier, invoice
 number, date, amounts or line items was found, fails the job instead of being
@@ -359,6 +389,100 @@ shows as failed with that reason. Judgments receive the document
 text alongside the extraction; default checks that compare against history,
 or need values the invoice does not have, are recorded as `not_applicable`
 with a reason rather than answered "No".
+
+## Validation
+
+After extraction, plain code checks the record
+(`packages/documents/src/validation.ts`, no model involved) and stores the
+result in `inbox.validation`. The same values always validate the same way;
+`VALIDATION_VERSION` changes whenever a rule does.
+
+**Precision and rounding.** Money is compared in integer minor units (two
+decimal places for every recognised currency: GBP, EUR, USD, CAD, AUD, NZD,
+SEK, NOK, DKK, CHF), rounded half away from zero. Tolerances
+(`MONEY_RULES`):
+
+| Check | Compared | Tolerance |
+| --- | --- | --- |
+| `line_arithmetic` | quantity × unit price, less a row discount (% or amount), against the row amount (or row amount + its VAT) | 1p, or ½p per unit of quantity when larger (the printed unit price may be rounded) |
+| `line_totals` | sum of row amounts less the document discount, against net (tax-exclusive) or gross (tax-inclusive or no tax) | 1p |
+| `tax` | VAT against: the rows' VAT amounts; or each rate group's net × rate (inclusive: gross × rate ÷ (100 + rate)) summed across rates; or net × the document rate | 1p for printed row amounts, else 1p per line item (VAT may be rounded per line or once) |
+| `gross` | net + VAT against gross | 1p |
+| `currency` | every total's printed currency against the invoice currency | exact |
+
+The tax basis is `inclusive` or `exclusive` when the table header or the
+document says so, otherwise whichever the arithmetic proves; `no_tax` when no
+VAT is printed anywhere and the totals charge none. Zero-rated lines and
+`VAT 0.00` pass as zero tax. A check that cannot be done is `unknown` (for
+example VAT with no printed rate), never passed; one that would mix
+currencies is `unsupported`.
+
+**Currencies.** An amount always stays paired with its own currency:
+`validation.totals` holds `{ amount, currency }` for net, discount, tax and
+gross. Amounts printed in different currencies are never added together, and
+no exchange rate is inferred; a total printed in another currency fails the
+`currency` check.
+
+**Credit notes and identity.** A credit note is compared as magnitudes, so
+it validates whether it prints its amounts negative or positive, and its
+canonical totals are stored negative. An invoice with a negative total is an
+error. A document's identity is `type:supplier:number`, where the supplier is
+its VAT number (else its normalised name) and the number ignores spacing,
+punctuation and case. An earlier document in the workspace with the same
+identity makes this one a duplicate (`identity.duplicateOf`); a credit note
+and an invoice with the same number are different documents. A credit note
+naming an original invoice is linked to it (`identity.creditsInvoiceId`)
+when that invoice is in the workspace, otherwise flagged; the processing job
+looks up same-numbered documents across the whole workspace, not only
+recent history.
+
+**Outcome.** `issues` lists every finding with a `severity`: errors (a
+failed check, a missing required field, a due date before the invoice date,
+a duplicate, mismatched currencies, a negative invoice) make the status
+`invalid`; warnings (no VAT shown, VAT charged in GBP without a VAT number,
+failed VAT-number or IBAN check digits, a low-confidence selection below
+60%, an unlinked credit note, an unverifiable check) make it `needs_review`.
+Uncertain values stay visible as uncertain in the dashboard.
+
+**Delivery policy.** `validation.accounting` says whether the invoice may be
+posted as a draft bill. The draft-bill contract (Xero and QuickBooks alike)
+requires `documentType` (invoice), supplier name, invoice number, invoice
+date, currency and gross total (`ACCOUNTING_REQUIRED_FIELDS`); every error is
+a blocker, and a credit note is `credit_note_unsupported` because a draft
+bill cannot represent a credit. The accounting job checks this before calling
+the provider; a blocked invoice is not posted and its accounting status is
+`failed` with `Not sent to <provider>: <reasons>`. Webhooks, REST, MCP and
+CSV deliver the validation alongside the extraction, and judgments receive it
+as `currentInvoiceValidation`. A record stored before validation existed is
+validated at posting time from its extraction.
+
+### Validation corpus
+
+`packages/documents/src/test/corpus/` holds reviewed synthetic documents
+(`corpus.ts`, rendered to PDF by `generate-corpus.ts`), each with the values
+a correct reading gives and the validation outcome they must produce.
+`corpus.test.ts` reads every PDF through the real pipeline with TypeSafe
+played by the oracle that selects the reviewed values, then scores each field,
+every line item (all columns) and each validation outcome against
+`thresholds.json`. The recorded thresholds are 100% for every field, line-item
+recall and precision, and validation outcomes; a regression fails the check,
+which `corpus.test.ts` itself proves by scoring a deliberately regressed run.
+`TYPESAFE_LIVE_SMOKE=1` with a key also reports the live model's per-field
+accuracy on the same corpus.
+
+| Document | Validation | Accounting |
+| --- | --- | --- |
+| `normal-invoice` — 20% VAT, wrapped description, company number, payment reference | valid | ready |
+| `tax-inclusive-invoice` — prices and totals include VAT | valid, inclusive | ready |
+| `multi-rate-invoice` — 20%, 5% and 0% lines, VAT recomputed per rate | valid | ready |
+| `credit-note` — negative amounts, names `HLP-3101` | valid, linked to `normal-invoice` | not sent: credit note |
+| `inconsistent-total` — gross £50 above net + VAT | invalid (`gross`) | not sent |
+| `no-vat-sole-trader` — no VAT number or VAT line | needs review (`tax_not_stated`) | ready |
+| `usd-invoice` — USD with sales tax, bare `$` amounts | valid | ready |
+| `missing-currency` — only bare `$` | invalid (no currency) | not sent |
+| `eur-invoice-with-sterling-equivalent` — EUR totals, GBP shown for information | valid, nothing converted | ready |
+| `discount-invoice` — row discount % and document discount | valid | ready |
+| `line-rounded-vat` — VAT rounded per line, 2p above invoice-level | valid (within 5p) | ready |
 
 ## Reads, signatures and deletion
 
@@ -438,6 +562,12 @@ separate host, that origin must be reachable with CORS or the preview should use
   pixel, malformed and password-protected bounds, busy-process termination
   (with a ready handshake), memory-budget termination and the real-document
   timeout.
+- `packages/documents/src/validation.test.ts` — rounding and tolerances,
+  tax basis, zero and missing tax, currency pairs and mismatches, credit
+  notes printed either way, duplicate identity, credit links, required
+  fields, low confidence and legacy records.
+- `packages/documents/src/test/corpus/corpus.test.ts` — the validation corpus
+  gate against its recorded thresholds.
 - `packages/documents/src/typesafe/invoice.test.ts` — the supported input
   matrix: the same invoice as text PDF, scanned PDF, PNG and JPEG photo
   yields identical data and shape; multi-page (text and mixed) invoices keep

@@ -106,6 +106,7 @@ export async function getAccountingPostInvoice(
       filePath: inbox.filePath,
       contentType: inbox.contentType,
       extraction: inbox.extraction,
+      validation: inbox.validation,
       accountingProvider: inbox.accountingProvider,
       accountingPostStatus: inbox.accountingPostStatus,
       accountingProviderId: inbox.accountingProviderId,

@@ -1,5 +1,6 @@
 import type { Database } from "@invoicewise/db/client";
 import {
+  getInvoicesByDocumentNumber,
   getProcessedInvoiceHistory,
   getUserQuestions,
   updateInboxWithProcessedData,
@@ -7,6 +8,7 @@ import {
 import {
   DocumentClient,
   type InvoiceJudgmentQuestion,
+  validateInvoice,
 } from "@invoicewise/documents";
 import { emitInvoiceProcessedWebhooks } from "./webhooks";
 
@@ -82,6 +84,23 @@ export async function processDocumentAttachment(
         .map(({ question }) => question),
   });
 
+  // Duplicate identity and credit-note links look across the whole
+  // workspace, not only the recent history the judgments read: every earlier
+  // document carrying this document's number or the number it credits.
+  const { invoiceNumber, originalInvoiceNumber } = result.extraction;
+  const sameNumber = await getInvoicesByDocumentNumber(db, {
+    teamId: input.teamId,
+    excludeId: input.inboxId,
+    numbers: [invoiceNumber, originalInvoiceNumber].filter(
+      (number): number is string => Boolean(number),
+    ),
+  });
+  const known = new Set(previousInvoices.map((invoice) => invoice.id));
+  const validation = validateInvoice(result.extraction, [
+    ...sameNumber.filter((invoice) => !known.has(invoice.id)),
+    ...previousInvoices,
+  ]);
+
   const record = await updateInboxWithProcessedData(db, {
     id: input.inboxId,
     amount: result.amount,
@@ -96,11 +115,12 @@ export async function processDocumentAttachment(
     type: result.type,
     extraction: result.extraction,
     judgments: result.judgments,
+    validation,
     processingError: null,
     status: "pending",
   });
 
   if (record) await emitInvoiceProcessedWebhooks(db, record);
 
-  return { record, result };
+  return { record, result: { ...result, validation } };
 }

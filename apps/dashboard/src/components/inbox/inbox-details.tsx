@@ -22,11 +22,28 @@ import {
 import type { ReactNode } from "react";
 import { InboxStatus } from "./inbox-status";
 import { JudgmentResults } from "./judgment-results";
+import { ValidationResults, uncertainFields } from "./validation-results";
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({
+  label,
+  uncertain = false,
+  children,
+}: {
+  label: string;
+  /** TypeSafe selected the value with low confidence. */
+  uncertain?: boolean;
+  children: ReactNode;
+}) {
   return (
     <div className="min-w-0 py-3">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dt className="text-xs text-muted-foreground">
+        {label}
+        {uncertain && children != null && (
+          <span className="ml-1.5 text-amber-700 dark:text-amber-300">
+            · Uncertain
+          </span>
+        )}
+      </dt>
       <dd className="mt-1 break-words text-sm font-medium">
         {children ?? (
           <span className="font-normal text-amber-700 dark:text-amber-300">
@@ -113,6 +130,13 @@ export function InboxDetails() {
   const currency = extraction?.currency ?? data.currency ?? null;
   const amount = extraction?.grossAmount ?? data.amount ?? null;
   const bank = extraction?.bankDetails;
+  const uncertain = uncertainFields(data.validation);
+  const documentType =
+    extraction?.documentType === "credit_note"
+      ? "Credit note"
+      : extraction?.documentType === "invoice"
+        ? "Invoice"
+        : null;
 
   return (
     <article className="hidden h-full min-h-0 overflow-hidden border bg-background lg:flex lg:flex-col">
@@ -194,6 +218,11 @@ export function InboxDetails() {
 
             {extraction ? (
               <>
+                <section className="mb-7">
+                  <h3 className="text-sm font-semibold">Validation</h3>
+                  <ValidationResults validation={data.validation} />
+                </section>
+
                 <section>
                   <h3 className="text-sm font-semibold">Extracted fields</h3>
                   {(extraction.textSource === "ocr" ||
@@ -204,42 +233,94 @@ export function InboxDetails() {
                     </p>
                   )}
                   <dl className="mt-2 grid grid-cols-2 gap-x-5 divide-y sm:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
-                    <Field label="Supplier">{extraction.supplierName}</Field>
+                    <Field
+                      label="Document type"
+                      uncertain={uncertain.has("documentType")}
+                    >
+                      {documentType}
+                    </Field>
+                    <Field
+                      label="Supplier"
+                      uncertain={uncertain.has("supplierName")}
+                    >
+                      {extraction.supplierName}
+                    </Field>
                     <Field label="Supplier address">
                       {extraction.supplierAddress}
                     </Field>
-                    <Field label="Invoice number">
+                    <Field
+                      label={
+                        documentType === "Credit note"
+                          ? "Credit note number"
+                          : "Invoice number"
+                      }
+                      uncertain={uncertain.has("invoiceNumber")}
+                    >
                       {extraction.invoiceNumber}
                     </Field>
-                    <Field label="Invoice date">
+                    {documentType === "Credit note" && (
+                      <Field
+                        label="Credits invoice"
+                        uncertain={uncertain.has("originalInvoiceNumber")}
+                      >
+                        {extraction.originalInvoiceNumber}
+                      </Field>
+                    )}
+                    <Field
+                      label="Invoice date"
+                      uncertain={uncertain.has("invoiceDate")}
+                    >
                       {extraction.invoiceDate
                         ? formatDate(extraction.invoiceDate, user?.dateFormat)
                         : null}
                     </Field>
-                    <Field label="Due date">
+                    <Field
+                      label="Due date"
+                      uncertain={uncertain.has("dueDate")}
+                    >
                       {extraction.dueDate
                         ? formatDate(extraction.dueDate, user?.dateFormat)
                         : null}
                     </Field>
-                    <Field label="VAT number">
+                    <Field
+                      label="VAT number"
+                      uncertain={uncertain.has("supplierVatNumber")}
+                    >
                       {extraction.supplierVatNumber}
+                    </Field>
+                    <Field label="Company number">
+                      {extraction.supplierCompanyNumber ?? null}
                     </Field>
                     <Field label="PO reference">
                       {extraction.purchaseOrderReference}
                     </Field>
-                    <Field label="Net">
+                    <Field label="Payment reference">
+                      {extraction.paymentReference ?? null}
+                    </Field>
+                    <Field label="Net" uncertain={uncertain.has("netAmount")}>
                       <Money
                         amount={extraction.netAmount}
                         currency={currency}
                       />
                     </Field>
-                    <Field label="VAT">
+                    {extraction.discountAmount != null && (
+                      <Field label="Discount">
+                        <Money
+                          amount={extraction.discountAmount}
+                          currency={currency}
+                        />
+                      </Field>
+                    )}
+                    <Field label="VAT" uncertain={uncertain.has("vatAmount")}>
                       <Money
                         amount={extraction.vatAmount}
                         currency={currency}
                       />
                     </Field>
-                    <Field label="Gross">
+                    <Field
+                      label="Gross"
+                      uncertain={uncertain.has("grossAmount")}
+                    >
                       <Money
                         amount={extraction.grossAmount}
                         currency={currency}
@@ -287,6 +368,9 @@ export function InboxDetails() {
                               Unit price
                             </th>
                             <th className="px-3 py-2 text-right font-medium">
+                              VAT
+                            </th>
+                            <th className="px-3 py-2 text-right font-medium">
                               Total
                             </th>
                           </tr>
@@ -305,6 +389,18 @@ export function InboxDetails() {
                                   amount={item.unitPrice}
                                   currency={currency}
                                 />
+                              </td>
+                              <td className="px-3 py-2.5 text-right tabular-nums">
+                                {item.taxRate != null ? (
+                                  `${item.taxRate}%`
+                                ) : item.taxAmount != null ? (
+                                  <Money
+                                    amount={item.taxAmount}
+                                    currency={currency}
+                                  />
+                                ) : (
+                                  "—"
+                                )}
                               </td>
                               <td className="px-3 py-2.5 text-right font-medium tabular-nums">
                                 <Money

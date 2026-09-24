@@ -49,6 +49,13 @@ callback). The bill adapters read them from the connection.
 
 ## What each provider receives
 
+Only an invoice whose validation allows it (`validation.accounting.ready`) is
+posted: an invoice document (not a credit note) with supplier name, invoice
+number, invoice date, currency and gross total, whose totals reconcile and
+which is not a duplicate. Otherwise nothing is sent and the invoice's
+accounting status is `failed` with `Not sent to Xero: <reasons>` (or
+QuickBooks); see [Validation](document-intake.md#validation).
+
 - **Xero**: an `ACCPAY` invoice in `DRAFT` (a bill awaiting approval, never
   approved or paid), contact by supplier name, line items, amounts exclusive
   of tax. The request carries
@@ -112,7 +119,8 @@ Xero and QuickBooks request shapes, idempotency and error handling) and
 `src/verify-accounting.ts`, which `bun run verify` runs against a loopback
 stub. It stores a workspace-bound connection, posts a Xero draft bill through
 the proxy with its attachment, refuses a duplicate, retries an ambiguous
-timeout with the same idempotency key and gets the original bill, then
+timeout with the same idempotency key and gets the original bill, refuses an
+invoice whose total does not reconcile without calling the provider, then
 disconnects. Verification pins `NANGO_BASE_URL` to loopback, so it can never
 reach a real Nango.
 

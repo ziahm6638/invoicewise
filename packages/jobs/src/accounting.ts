@@ -14,6 +14,7 @@ import {
   restartFailedWorkflowJob,
   upsertAccountingConnection,
 } from "@invoicewise/db/queries";
+import { accountingReadiness } from "@invoicewise/documents";
 import { Effect, Schema } from "effect";
 import { BillRejectedError, postProviderBill } from "./accounting-providers";
 import { workflowKey } from "./client";
@@ -25,6 +26,11 @@ import {
 } from "./nango";
 
 export { getNangoConfig } from "./nango";
+
+const PROVIDER_NAME: Record<AccountingProvider, string> = {
+  xero: "Xero",
+  quickbooks: "QuickBooks",
+};
 
 type AttachmentStorage = {
   download: (input: { bucket: string; path: string[] }) => Promise<Blob>;
@@ -254,6 +260,38 @@ export const postAccountingDraft = (
             retryable: true,
           }),
       }).pipe(Effect.zipRight(Effect.fail(error)));
+
+    // Provider-required fields that are missing or invalid, an inconsistent
+    // total, a duplicate or a credit note: the bill is not attempted, and the
+    // reasons are recorded as a failure a retry cannot fix until the invoice
+    // is corrected (see docs/document-intake.md#validation).
+    const readiness = accountingReadiness(
+      invoice.extraction,
+      invoice.validation,
+    );
+    if (!readiness.ready) {
+      yield* Effect.tryPromise({
+        try: () =>
+          recordAccountingPostFailure(db, {
+            ...input,
+            provider: connection.provider,
+            idempotencyKey,
+            error: `Not sent to ${PROVIDER_NAME[connection.provider]}: ${readiness.blockers
+              .map((blocker) => blocker.message)
+              .join(" ")}`,
+          }),
+        catch: () =>
+          new AccountingPostError({
+            reason: "Unable to record blocked accounting post",
+            retryable: true,
+          }),
+      });
+      return {
+        invoiceId: invoice.id,
+        status: "blocked",
+        blockers: readiness.blockers.map((blocker) => blocker.code),
+      };
+    }
 
     const config = yield* Effect.try({
       try: () => getNangoConfig(connection.provider, env),

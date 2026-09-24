@@ -179,6 +179,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       description: inbox.description,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      validation: inbox.validation,
       processingError: inbox.processingError,
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
@@ -260,6 +261,7 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       description: inbox.description,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      validation: inbox.validation,
       processingError: inbox.processingError,
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
@@ -340,6 +342,7 @@ export function getInvoiceExportRows(db: Database, teamId: string) {
       description: inbox.description,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      validation: inbox.validation,
     })
     .from(inbox)
     .where(
@@ -1909,6 +1912,43 @@ export async function getInboxByFilePath(
   return result;
 }
 
+/**
+ * Earlier documents in the workspace with the given document numbers,
+ * compared without spacing, punctuation or case: the candidates for a
+ * duplicate or for the invoice a credit note credits, however far back.
+ */
+export async function getInvoicesByDocumentNumber(
+  db: Database,
+  params: { teamId: string; excludeId: string; numbers: string[] },
+) {
+  const keys = [
+    ...new Set(
+      params.numbers
+        .map((number) => number.toUpperCase().replace(/[^A-Z0-9]/g, ""))
+        .filter(Boolean),
+    ),
+  ];
+  if (keys.length === 0) return [];
+  return db
+    .select({ id: inbox.id, extraction: inbox.extraction })
+    .from(inbox)
+    .where(
+      and(
+        eq(inbox.teamId, params.teamId),
+        ne(inbox.id, params.excludeId),
+        ne(inbox.status, "deleted"),
+        isNotNull(inbox.extraction),
+        visibleIntakeState(),
+        inArray(
+          sql<string>`upper(regexp_replace(${inbox.extraction} ->> 'invoiceNumber', '[^A-Za-z0-9]', '', 'g'))`,
+          keys,
+        ),
+      ),
+    )
+    .orderBy(inbox.createdAt)
+    .limit(20);
+}
+
 export async function getProcessedInvoiceHistory(
   db: Database,
   params: { teamId: string; excludeId: string; limit?: number },
@@ -2034,6 +2074,7 @@ export type UpdateInboxWithProcessedDataParams = {
   description?: string | null;
   extraction?: Record<string, unknown> | null;
   judgments?: Record<string, unknown>[] | null;
+  validation?: Record<string, unknown> | null;
   processingError?: string | null;
   type?: "invoice" | "expense" | null;
   status?:
@@ -2087,6 +2128,7 @@ export async function updateInboxWithProcessedData(
       type: inbox.type,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      validation: inbox.validation,
       processingError: inbox.processingError,
     });
 
@@ -2111,6 +2153,7 @@ export async function recordInboxProcessingFailure(
       processingError: params.error,
       extraction: null,
       judgments: null,
+      validation: null,
     })
     .where(
       and(

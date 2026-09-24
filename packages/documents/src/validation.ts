@@ -140,7 +140,11 @@ export const toMinor = (value: number) =>
 
 const toMajor = (minor: number) => minor / SCALE;
 
-const format = (minor: number) => toMajor(minor).toFixed(2);
+const format = (minor: number) =>
+  toMajor(minor).toLocaleString("en-GB", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 
 // --- Identity ----------------------------------------------------------------
 
@@ -215,13 +219,32 @@ export const gbVatNumberValid = (value: string) => {
 
 // --- Validation --------------------------------------------------------------
 
-const FIELD_LABEL: Partial<Record<keyof InvoiceExtraction, string>> = {
+/** How each field is named in messages shown to customers. */
+export const FIELD_LABEL: Record<InvoiceEvidenceField, string> = {
   documentType: "document type (invoice or credit note)",
   supplierName: "supplier name",
+  supplierAddress: "supplier address",
+  supplierVatNumber: "supplier VAT number",
+  supplierCompanyNumber: "company number",
   invoiceNumber: "invoice number",
+  originalInvoiceNumber: "original invoice number",
   invoiceDate: "invoice date",
+  dueDate: "due date",
   currency: "currency",
+  netAmount: "net total",
+  discountAmount: "discount",
+  vatAmount: "VAT amount",
+  taxRate: "VAT rate",
   grossAmount: "gross total",
+  amountsIncludeTax: "tax basis",
+  accountName: "bank account name",
+  accountNumber: "bank account number",
+  sortCode: "sort code",
+  iban: "IBAN",
+  bic: "BIC",
+  description: "description",
+  purchaseOrderReference: "purchase order reference",
+  paymentReference: "payment reference",
 };
 
 const EMPTY: Omit<InvoiceExtraction, "textSource" | "pageSources"> = {
@@ -821,7 +844,7 @@ export function validateInvoice(
     ) {
       warn(
         "low_confidence",
-        `The ${field} value was selected with low confidence (${Math.round(evidence.confidence * 100)}%); check it against the document.`,
+        `The ${FIELD_LABEL[field as InvoiceEvidenceField] ?? field} was selected with low confidence (${Math.round(evidence.confidence * 100)}%); check it against the document.`,
         field as InvoiceEvidenceField,
       );
     }
