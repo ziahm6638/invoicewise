@@ -36,8 +36,8 @@ export class InboxConnector extends Connector {
     }
   }
 
-  async connect(): Promise<string> {
-    return this.#provider.getAuthUrl();
+  async connect(state: string): Promise<string> {
+    return this.#provider.getAuthUrl(state);
   }
 
   async exchangeCodeForAccount(

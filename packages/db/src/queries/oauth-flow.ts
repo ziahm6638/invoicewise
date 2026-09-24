@@ -9,7 +9,11 @@ import {
 import { hash } from "@invoicewise/encryption";
 import { and, desc, eq, gt, gte, lte } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { clampScopesForRole, getTeamRole } from "./team-permissions";
+import {
+  canManageIntegrations,
+  clampScopesForRole,
+  getTeamRole,
+} from "./team-permissions";
 
 export type CreateAuthorizationCodeParams = {
   applicationId: string;
@@ -363,6 +367,11 @@ export async function refreshAccessToken(
 
   if (!role) {
     throw new Error("User no longer has access to this workspace");
+  }
+
+  // A refresh re-grants API access, so it needs the same role as consent.
+  if (!canManageIntegrations(role)) {
+    throw new Error("User can no longer grant API access in this workspace");
   }
 
   validatedScopes = clampScopesForRole(role, validatedScopes);

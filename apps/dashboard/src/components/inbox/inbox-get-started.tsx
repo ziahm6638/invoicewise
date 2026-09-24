@@ -1,7 +1,7 @@
 "use client";
 
 import { ConnectGmail } from "@/components/inbox/connect-gmail";
-import { useUserQuery } from "@/hooks/use-user";
+import { useTeamQuery } from "@/hooks/use-team";
 import { getInboxEmail } from "@invoicewise/inbox";
 import {
   Accordion,
@@ -14,7 +14,7 @@ import { CopyInput } from "../copy-input";
 import { UploadZone } from "./inbox-upload-zone";
 
 export function InboxGetStarted() {
-  const { data: user } = useUserQuery();
+  const { data: team } = useTeamQuery();
   const router = useRouter();
 
   const handleUpload = () => {
@@ -40,7 +40,7 @@ export function InboxGetStarted() {
             <div className="pointer-events-auto flex flex-col space-y-4">
               <ConnectGmail />
 
-              {user?.team?.inboxId && (
+              {team?.inboxId && (
                 <Accordion
                   type="single"
                   collapsible
@@ -52,7 +52,7 @@ export function InboxGetStarted() {
                     </AccordionTrigger>
                     <AccordionContent className="mt-4">
                       <div className="flex flex-col space-y-4">
-                        <CopyInput value={getInboxEmail(user.team.inboxId)} />
+                        <CopyInput value={getInboxEmail(team.inboxId)} />
                       </div>
                     </AccordionContent>
                   </AccordionItem>

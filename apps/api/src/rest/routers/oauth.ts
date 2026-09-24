@@ -17,6 +17,7 @@ import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
 import { type Database, primaryDb } from "@invoicewise/db/client";
 import {
+  canManageIntegrations,
   clampScopesForRole,
   createAuthorizationCode,
   exchangeAuthorizationCode,
@@ -251,6 +252,15 @@ app.openapi(
     if (!role) {
       throw new HTTPException(403, {
         message: "User is not a member of the selected team",
+      });
+    }
+
+    // Granting an app API access manages the workspace's integrations, which
+    // the permission matrix reserves for owners and admins.
+    if (!canManageIntegrations(role)) {
+      throw new HTTPException(403, {
+        message:
+          "Only a workspace owner or admin can grant an application API access",
       });
     }
 

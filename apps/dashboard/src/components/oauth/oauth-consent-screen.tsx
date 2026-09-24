@@ -45,13 +45,6 @@ export function OAuthConsentScreen() {
   const { data: currentTeam } = useTeamQuery();
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
 
-  // Preselect the current team when data is available
-  useEffect(() => {
-    if (currentTeam?.id && !selectedTeamId) {
-      setSelectedTeamId(currentTeam.id);
-    }
-  }, [currentTeam?.id, selectedTeamId]);
-
   const { data: applicationInfo } = useSuspenseQuery(
     trpc.oauthApplications.getApplicationInfo.queryOptions({
       clientId: clientId!,
@@ -61,7 +54,21 @@ export function OAuthConsentScreen() {
     }),
   );
 
-  const { data: teams } = useSuspenseQuery(trpc.team.list.queryOptions());
+  const { data: allTeams } = useSuspenseQuery(trpc.team.list.queryOptions());
+
+  // Granting API access is an owner/admin capability; the server re-checks it.
+  const teams = allTeams?.filter((team) => team.permissions.manageIntegrations);
+
+  const canGrantInCurrentTeam = Boolean(
+    currentTeam?.id && teams?.some((team) => team.id === currentTeam.id),
+  );
+
+  // Preselect the current team when the user may grant access in it.
+  useEffect(() => {
+    if (currentTeam?.id && canGrantInCurrentTeam && !selectedTeamId) {
+      setSelectedTeamId(currentTeam.id);
+    }
+  }, [currentTeam?.id, canGrantInCurrentTeam, selectedTeamId]);
 
   const authorizeMutation = useMutation(
     trpc.oauthApplications.authorize.mutationOptions({

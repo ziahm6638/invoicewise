@@ -43,6 +43,29 @@ mock.module("@api/services/resend", () => ({
   },
 }));
 
+// The mailbox connector talks to Google. Stub it so the connect/callback flow
+// runs through the real tRPC routes while counting provider code exchanges.
+const connectorCalls = { exchanges: 0 };
+
+mock.module("@invoicewise/inbox/connector", () => ({
+  InboxConnector: class {
+    async connect(state: string) {
+      const url = new URL("https://accounts.google.test/o/oauth2/auth");
+      url.searchParams.set("state", state);
+      return url.toString();
+    }
+
+    async exchangeCodeForAccount() {
+      connectorCalls.exchanges += 1;
+      return {
+        id: crypto.randomUUID(),
+        provider: "gmail",
+        external_id: "stub",
+      };
+    }
+  },
+}));
+
 const suite = testDatabaseUrl ? describe : describe.skip;
 
 suite("workspace permissions over real HTTP", () => {
@@ -117,6 +140,28 @@ suite("workspace permissions over real HTTP", () => {
 
   const switchTeam = (cookie: string, teamId: string) =>
     trpc(cookie, "user.update", { teamId }, "mutation");
+
+  /** Invites `user` into the owner's active workspace and accepts it. */
+  const joinTeam = async (
+    owner: { cookie: string },
+    user: { cookie: string; email: string },
+    role: "admin" | "member",
+  ) => {
+    await trpc(
+      owner.cookie,
+      "team.invite",
+      [{ email: user.email, role }],
+      "mutation",
+    );
+    const pending = await trpc(user.cookie, "team.invitesByEmail", null);
+    const accepted = await trpc(
+      user.cookie,
+      "team.acceptInvite",
+      { id: (pending.data as { id: string }[])[0]!.id },
+      "mutation",
+    );
+    expect(accepted.error).toBeNull();
+  };
 
   const sessionCookie = (response: Response) => {
     const cookie = response.headers.getSetCookie()[0];
@@ -758,7 +803,7 @@ suite("workspace permissions over real HTTP", () => {
     ).toHaveLength(1);
   });
 
-  test("consent accepts aliases and overlaps for owner and admin, denies member writes", async () => {
+  test("consent accepts aliases and overlaps for owner and admin, denies members", async () => {
     const owner = await createUser("alias-owner");
     const admin = await createUser("alias-admin");
     const member = await createUser("alias-member");
@@ -918,7 +963,8 @@ suite("workspace permissions over real HTTP", () => {
     );
     expect(memberWrite.status).toBeGreaterThanOrEqual(400);
 
-    // A member may still consent to scopes they hold.
+    // Granting API access is an owner/admin capability, so even read scopes
+    // a member holds cannot be handed to an app.
     const memberRead = await trpc(
       member.cookie,
       "oauthApplications.authorize",
@@ -931,7 +977,8 @@ suite("workspace permissions over real HTTP", () => {
       },
       "mutation",
     );
-    expect(memberRead.error).toBeNull();
+    expect(memberRead.status).toBe(403);
+    expect(memberRead.data).toBeNull();
   });
 
   test("consent never redirects to an unregistered URI, even on deny", async () => {
@@ -1183,4 +1230,334 @@ suite("workspace permissions over real HTTP", () => {
     },
     RECOVERY_TEST_TIMEOUT_MS,
   );
+
+  test("OAuth consent follows the consenting user's role in each of two workspaces", async () => {
+    const owner = await createUser("grant-owner");
+    const admin = await createUser("grant-admin");
+    // Owns their personal workspace, but is only a member of the shared one.
+    const member = await createUser("grant-member");
+
+    const teamResult = await trpc(
+      owner.cookie,
+      "team.create",
+      { name: "Grant Team", baseCurrency: "GBP", switchTeam: true },
+      "mutation",
+    );
+    const sharedTeamId = teamResult.data as string;
+    created.teamIds.push(sharedTeamId);
+
+    await joinTeam(owner, admin, "admin");
+    await joinTeam(owner, member, "member");
+
+    const redirectUri = `${BASE}/oauth/callback`;
+    const appResult = await trpc(
+      owner.cookie,
+      "oauthApplications.create",
+      {
+        name: `Grant App ${crypto.randomUUID()}`,
+        redirectUris: [redirectUri],
+        scopes: ["inbox.read", "teams.read"],
+        isPublic: false,
+      },
+      "mutation",
+    );
+    expect(appResult.error).toBeNull();
+    const application = appResult.data as { clientId: string };
+
+    const restConsent = (cookie: string, teamId: string) =>
+      post(
+        "/oauth/authorize",
+        {
+          client_id: application.clientId,
+          decision: "allow",
+          scopes: ["inbox.read"],
+          redirect_uri: redirectUri,
+          state: "g".repeat(32),
+          teamId,
+        },
+        cookie,
+      );
+
+    const trpcConsent = (cookie: string, teamId: string) =>
+      trpc(
+        cookie,
+        "oauthApplications.authorize",
+        {
+          clientId: application.clientId,
+          decision: "allow",
+          scopes: ["inbox.read"],
+          redirectUri,
+          teamId,
+        },
+        "mutation",
+      );
+
+    const codesFor = async (userId: string) =>
+      (
+        await primaryDb
+          .select({ id: schema.oauthAuthorizationCodes.id })
+          .from(schema.oauthAuthorizationCodes)
+          .where(orm.eq(schema.oauthAuthorizationCodes.userId, userId))
+      ).length;
+
+    // Workspace 1 (shared): the member is refused on both consent surfaces,
+    // even for a scope a member holds, and no code is minted.
+    await switchTeam(member.cookie, sharedTeamId);
+    const memberRest = await restConsent(member.cookie, sharedTeamId);
+    expect(memberRest.status).toBe(403);
+    expect(await memberRest.text()).not.toContain("code=");
+
+    const memberTrpc = await trpcConsent(member.cookie, sharedTeamId);
+    expect(memberTrpc.status).toBe(403);
+    expect(memberTrpc.data).toBeNull();
+    expect(await codesFor(member.userId)).toBe(0);
+
+    // Owner and admin of the same workspace may grant.
+    expect((await restConsent(owner.cookie, sharedTeamId)).status).toBe(200);
+    await switchTeam(admin.cookie, sharedTeamId);
+    expect((await restConsent(admin.cookie, sharedTeamId)).status).toBe(200);
+    expect((await trpcConsent(admin.cookie, sharedTeamId)).error).toBeNull();
+
+    // Workspace 2 (the member's own): the same person, as owner, may grant.
+    expect(
+      (await restConsent(member.cookie, member.personalTeamId)).status,
+    ).toBe(200);
+    expect(
+      (await trpcConsent(member.cookie, member.personalTeamId)).error,
+    ).toBeNull();
+    expect(await codesFor(member.userId)).toBe(2);
+
+    // The consent screen's workspace list carries the same decision.
+    const teams = (await trpc(member.cookie, "team.list", null)).data as {
+      id: string;
+      permissions: { manageIntegrations: boolean };
+    }[];
+    expect(
+      teams.find((team) => team.id === sharedTeamId)?.permissions
+        .manageIntegrations,
+    ).toBe(false);
+    expect(
+      teams.find((team) => team.id === member.personalTeamId)?.permissions
+        .manageIntegrations,
+    ).toBe(true);
+  }, 30_000);
+
+  test("a demoted admin can no longer refresh an OAuth grant", async () => {
+    const owner = await createUser("refresh-owner");
+    const admin = await createUser("refresh-admin");
+
+    const teamResult = await trpc(
+      owner.cookie,
+      "team.create",
+      { name: "Refresh Team", baseCurrency: "GBP", switchTeam: true },
+      "mutation",
+    );
+    const teamId = teamResult.data as string;
+    created.teamIds.push(teamId);
+    await joinTeam(owner, admin, "admin");
+    await switchTeam(admin.cookie, teamId);
+
+    const redirectUri = `${BASE}/oauth/callback`;
+    const appResult = await trpc(
+      owner.cookie,
+      "oauthApplications.create",
+      {
+        name: `Refresh App ${crypto.randomUUID()}`,
+        redirectUris: [redirectUri],
+        scopes: ["inbox.read"],
+        isPublic: false,
+      },
+      "mutation",
+    );
+    const application = appResult.data as {
+      clientId: string;
+      clientSecret: string;
+    };
+
+    const consent = await post(
+      "/oauth/authorize",
+      {
+        client_id: application.clientId,
+        decision: "allow",
+        scopes: ["inbox.read"],
+        redirect_uri: redirectUri,
+        state: "r".repeat(32),
+        teamId,
+      },
+      admin.cookie,
+    );
+    expect(consent.status).toBe(200);
+    const code = new URL(
+      ((await consent.json()) as { redirect_url: string }).redirect_url,
+    ).searchParams.get("code")!;
+
+    const tokenResponse = await post("/oauth/token", {
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: application.clientId,
+      client_secret: application.clientSecret,
+    });
+    expect(tokenResponse.status).toBe(200);
+    const tokens = (await tokenResponse.json()) as { refresh_token: string };
+
+    // Demote directly so the grant survives and only the role changes; the
+    // refresh must then refuse on role alone.
+    await primaryDb
+      .update(schema.usersOnTeam)
+      .set({ role: "member" })
+      .where(
+        orm.and(
+          orm.eq(schema.usersOnTeam.teamId, teamId),
+          orm.eq(schema.usersOnTeam.userId, admin.userId),
+        ),
+      );
+
+    const refreshed = await post("/oauth/token", {
+      grant_type: "refresh_token",
+      refresh_token: tokens.refresh_token,
+      client_id: application.clientId,
+      client_secret: application.clientSecret,
+    });
+    expect(refreshed.status).toBeGreaterThanOrEqual(400);
+  }, 30_000);
+
+  test("the profile read exposes no workspace credential", async () => {
+    const user = await createUser("profile-read");
+
+    const [team] = await primaryDb
+      .select({ inboxId: schema.teams.inboxId })
+      .from(schema.teams)
+      .where(orm.eq(schema.teams.id, user.personalTeamId));
+    const inboxId = team?.inboxId;
+    expect(inboxId).toBeTruthy();
+
+    const rest = await get("/users/me", { cookie: user.cookie });
+    expect(rest.status).toBe(200);
+    const restBody = await rest.text();
+    expect(restBody).toContain(user.email);
+    expect(restBody).not.toContain(inboxId!);
+    expect(restBody).not.toContain("inboxId");
+
+    const me = await trpc(user.cookie, "user.me", null);
+    expect(me.error).toBeNull();
+    const meBody = JSON.stringify(me.data);
+    expect(meBody).toContain(user.email);
+    expect(meBody).not.toContain(inboxId!);
+    expect(meBody).not.toContain("inboxId");
+
+    // The workspace-scoped read still provides the inbox address.
+    const current = await trpc(user.cookie, "team.current", null);
+    expect((current.data as { inboxId: string }).inboxId).toBe(inboxId!);
+  }, 30_000);
+
+  test("mailbox connect state is unguessable, single-use, session-bound and expiring", async () => {
+    const admin = await createUser("connector-admin");
+    const other = await createUser("connector-other");
+
+    const connect = async (cookie: string) => {
+      const result = await trpc(
+        cookie,
+        "inboxAccounts.connect",
+        { provider: "gmail" },
+        "mutation",
+      );
+      expect(result.error).toBeNull();
+      return new URL(result.data as string).searchParams.get("state")!;
+    };
+
+    const exchange = (cookie: string, state: string) =>
+      trpc(cookie, "inboxAccounts.exchangeCodeForAccount", {
+        code: "provider-code",
+        state,
+      });
+
+    // Unguessable: a fresh 256-bit value each time, never the provider name.
+    const first = await connect(admin.cookie);
+    const second = await connect(admin.cookie);
+    expect(first).not.toBe("gmail");
+    expect(first.length).toBeGreaterThanOrEqual(43);
+    expect(first).not.toBe(second);
+
+    // Only a hash is stored.
+    const stored = await primaryDb
+      .select({ identifier: schema.authVerifications.identifier })
+      .from(schema.authVerifications)
+      .where(
+        orm.like(
+          schema.authVerifications.identifier,
+          "inbox-connector-state:%",
+        ),
+      );
+    expect(stored.some((row) => row.identifier.includes(first))).toBe(false);
+
+    const exchangesBefore = connectorCalls.exchanges;
+
+    // A forged state and a missing binding are refused before the provider.
+    expect((await exchange(admin.cookie, "gmail")).status).toBe(403);
+    expect((await exchange(admin.cookie, crypto.randomUUID())).status).toBe(
+      403,
+    );
+
+    // Foreign: another user's session cannot redeem it, and that attempt does
+    // not burn it for its owner.
+    expect((await exchange(other.cookie, first)).status).toBe(403);
+
+    // Foreign session of the same user: a second sign-in is a different session.
+    const secondSignIn = await post("/api/auth/sign-in/email", {
+      email: admin.email,
+      password: "Password123!",
+    });
+    expect(secondSignIn.status).toBe(200);
+    const otherSession = (() => {
+      const cookie = secondSignIn.headers.getSetCookie()[0]!;
+      return cookie.split(";")[0]!;
+    })();
+    expect((await exchange(otherSession, first)).status).toBe(403);
+    expect(connectorCalls.exchanges).toBe(exchangesBefore);
+
+    // The initiating session redeems it once.
+    const redeemed = await exchange(admin.cookie, first);
+    expect(redeemed.error).toBeNull();
+    expect((redeemed.data as { provider: string }).provider).toBe("gmail");
+    expect(connectorCalls.exchanges).toBe(exchangesBefore + 1);
+
+    // Replay is refused.
+    expect((await exchange(admin.cookie, first)).status).toBe(403);
+
+    // Concurrent redemption of one state succeeds at most once.
+    const racing = await Promise.all([
+      exchange(admin.cookie, second),
+      exchange(admin.cookie, second),
+    ]);
+    expect(racing.filter((result) => result.error === null)).toHaveLength(1);
+    expect(connectorCalls.exchanges).toBe(exchangesBefore + 2);
+
+    // An expired state is refused.
+    const expiring = await connect(admin.cookie);
+    await primaryDb
+      .update(schema.authVerifications)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(
+        orm.like(
+          schema.authVerifications.identifier,
+          "inbox-connector-state:%",
+        ),
+      );
+    expect((await exchange(admin.cookie, expiring)).status).toBe(403);
+    expect(connectorCalls.exchanges).toBe(exchangesBefore + 2);
+
+    // A state issued for one workspace cannot be redeemed after switching to
+    // another.
+    const teamResult = await trpc(
+      admin.cookie,
+      "team.create",
+      { name: "Connector Team", baseCurrency: "GBP", switchTeam: false },
+      "mutation",
+    );
+    created.teamIds.push(teamResult.data as string);
+    const forPersonal = await connect(admin.cookie);
+    await switchTeam(admin.cookie, teamResult.data as string);
+    expect((await exchange(admin.cookie, forPersonal)).status).toBe(403);
+  }, 30_000);
 });

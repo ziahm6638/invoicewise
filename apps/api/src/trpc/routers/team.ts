@@ -34,6 +34,7 @@ import {
   getTeamMembersByTeamId,
   getTeamsByUserId,
   leaveTeam,
+  normalizeTeamRole,
   updateTeamById,
   updateTeamMember,
 } from "@invoicewise/db/queries";
@@ -80,7 +81,14 @@ export const teamRouter = createTRPCRouter({
   }),
 
   list: protectedProcedure.query(async ({ ctx: { db, session } }) => {
-    return getTeamsByUserId(db, session.user.id);
+    const teams = await getTeamsByUserId(db, session.user.id);
+
+    // Per-workspace capabilities for pickers such as OAuth consent. A display
+    // hint only: each mutation re-checks the live role on the server.
+    return teams.map((team) => ({
+      ...team,
+      permissions: getTeamCapabilities(normalizeTeamRole(team.role)),
+    }));
   }),
 
   create: protectedProcedure
