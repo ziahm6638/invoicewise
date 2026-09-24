@@ -63,7 +63,9 @@ callback). The bill adapters read them from the connection.
 
 Both post the extracted line items only when every line has an amount and they
 add up to the net total (within 0.01); otherwise the bill carries a single line
-for the net total, so a bill never understates the invoice.
+for the net total, so a bill never understates the invoice. A line whose
+quantity times unit price (to 2dp) is not its total is sent as quantity 1 at
+its total, so the amount the provider computes matches the amount checked.
 
 Provider validation errors (Xero `ValidationErrors`, QuickBooks `Fault`) are
 kept verbatim on the invoice. Missing organisation or supplier is permanent;
