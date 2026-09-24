@@ -1,8 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import heroImageLight from "public/hero-light.png";
-import heroImageDark from "public/hero.png";
+import appImage from "public/app/invoices.png";
 import { useState } from "react";
 import { DynamicImage } from "./dynamic-image";
 
@@ -18,9 +17,9 @@ export function HeroImage() {
       >
         <div className="[transform:perspective(4101px)_rotateX(51deg)_rotateY(-13deg)_rotateZ(40deg)]">
           <DynamicImage
-            lightSrc={heroImageLight}
-            darkSrc={heroImageDark}
-            alt="Dashboard interface showing financial data and charts"
+            lightSrc={appImage}
+            darkSrc={appImage}
+            alt="InvoiceWise dashboard showing extracted invoices"
             width={1141}
             height={641}
             quality={80}

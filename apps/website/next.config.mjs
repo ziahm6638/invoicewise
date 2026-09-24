@@ -3,11 +3,7 @@ const config = {
   poweredByHeader: false,
   reactStrictMode: true,
   trailingSlash: true,
-  transpilePackages: [
-    "@invoicewise/ui",
-    "@invoicewise/tailwind",
-    "next-mdx-remote",
-  ],
+  transpilePackages: ["@invoicewise/ui", "@invoicewise/tailwind"],
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -16,16 +12,6 @@ const config = {
   },
   experimental: {
     inlineCss: true,
-  },
-  images: {
-    loader: "custom",
-    loaderFile: "./image-loader.ts",
-    remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "**",
-      },
-    ],
   },
   async redirects() {
     return [
