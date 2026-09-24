@@ -87,3 +87,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local code-index cache (graft); never commit it.
+graft/
