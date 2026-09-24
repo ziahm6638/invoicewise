@@ -406,6 +406,68 @@ describe("TypeSafe invoice extraction", () => {
     ).toBe("L005: VAT No. GB 612 7788 03");
   });
 
+  test("splits side-by-side blocks that share their first and last rows", async () => {
+    // The title shares the supplier name's row and the customer block ends on
+    // the supplier's last row, so no row holds only the customer's column.
+    const run = (x: number, y: number, text: string, height = 10) => ({
+      x,
+      y,
+      width: text.length * 5,
+      height,
+      text,
+    });
+    const lines = layoutRuns([
+      run(50, 46, "INVOICE", 18),
+      run(330, 50, "Aire Valley Electrical Services Ltd"),
+      run(330, 66, "Unit 7, Canal Wharf"),
+      run(330, 80, "Skipton"),
+      run(50, 94, "Bill to:"),
+      run(330, 94, "North Yorkshire"),
+      run(50, 108, "Harrogate Lettings Ltd"),
+      run(330, 108, "BD23 2AB"),
+      run(50, 122, "22 Station Parade"),
+      run(330, 122, "VAT Reg No: GB 287 4401 62"),
+      run(50, 136, "Harrogate HG1 1UF"),
+      run(330, 136, "Tel: 01756 700 123"),
+      run(50, 170, "Invoice No:"),
+      run(150, 170, "AVE-2207"),
+    ]);
+    const requests: Request[] = [];
+    const extraction = await Effect.runPromise(
+      extractInvoiceLines(lines).pipe(
+        Effect.provide(
+          oracle(
+            {
+              supplier_vat_number: "GB287440162",
+              invoice_number: "AVE-2207",
+            },
+            requests,
+          ),
+        ),
+      ),
+    );
+
+    expect(extraction.supplierVatNumber).toBe("GB287440162");
+    const request = requests.find(
+      (entry) => entry.questions.supplier_vat_number,
+    )!;
+    const invoice = (request.state as { invoice: string }).invoice;
+    expect(invoice).toContain(
+      [
+        "L000| Aire Valley Electrical Services Ltd",
+        "L001| Unit 7, Canal Wharf",
+        "L002| Skipton",
+        "L003| North Yorkshire",
+        "L004| BD23 2AB",
+        "L005| VAT Reg No: GB 287 4401 62",
+        "L006| Tel: 01756 700 123",
+      ].join("\n"),
+    );
+    expect(invoice).toContain("L005| 22 Station Parade\n");
+    // A label/value row keeps its label beside its value.
+    expect(invoice).toContain("Invoice No:  AVE-2207");
+  });
+
   test("copies selected candidates into the structured invoice", async () => {
     const result = await Effect.runPromise(
       extractInvoiceText(invoiceText, "InvoiceWise Ltd").pipe(

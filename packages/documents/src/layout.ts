@@ -208,12 +208,21 @@ const splitColumns = (
   const wordyRights = rights.filter((side) =>
     side.right.some((segment) => WORDY.test(segment.text)),
   );
-  // Independent blocks each have rows the other lacks; a table or a
-  // label/value list fills its right side on every row, mostly with numbers.
+  const paired = sides.filter(
+    (side) => side.left.length > 0 && side.right.length > 0,
+  );
+  const labelled = paired.filter((side) =>
+    side.left.at(-1)!.text.endsWith(":"),
+  );
+  // Independent blocks rarely have the same number of rows, so one has rows
+  // the other lacks. A table fills its right side mostly with numbers, and a
+  // label/value list pairs most rows with a "Label:" on the left.
   const independent =
-    sides.some((side) => side.left.length === 0) &&
-    sides.some((side) => side.right.length === 0) &&
-    wordyRights.length * 2 > rights.length;
+    sides.some(
+      (side) => side.left.length === 0 || side.right.length === 0,
+    ) &&
+    wordyRights.length * 2 > rights.length &&
+    labelled.length * 2 <= paired.length;
   if (!independent) return null;
   const rows = (side: "left" | "right") =>
     sides
