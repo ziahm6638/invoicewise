@@ -1,6 +1,7 @@
 import type { InvoiceJudgment } from "@invoicewise/documents";
 import { Badge } from "@invoicewise/ui/badge";
 import { AlertTriangle, CheckCircle2, MinusCircle } from "lucide-react";
+import { checkDescription } from "../built-in-checks";
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 
@@ -41,6 +42,12 @@ export function JudgmentResults({
     <div className="divide-y border-t">
       {(judgments as InvoiceJudgment[]).map((judgment) => {
         const confidence = confidenceFor(judgment);
+        const description = checkDescription({
+          isBuiltIn: judgment.source !== "custom",
+          key: judgment.questionId,
+          label: judgment.label,
+          question: judgment.question,
+        });
 
         return (
           <div
@@ -71,9 +78,9 @@ export function JudgmentResults({
                     <Badge variant="tag">Your question</Badge>
                   )}
                 </div>
-                {judgment.question !== judgment.label && (
+                {description && (
                   <p className="mt-1.5 max-w-[65ch] text-xs leading-5 text-muted-foreground">
-                    {judgment.question}
+                    {description}
                   </p>
                 )}
               </div>

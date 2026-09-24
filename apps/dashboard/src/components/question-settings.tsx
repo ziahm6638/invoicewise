@@ -17,7 +17,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@invoicewise/ui/alert-dialog";
-import { Badge } from "@invoicewise/ui/badge";
 import { Button } from "@invoicewise/ui/button";
 import {
   Card,
@@ -43,6 +42,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { useState } from "react";
+import { QuestionSummary } from "./question-summary";
 
 type Question = RouterOutputs["questions"]["list"][number];
 type QuestionInput = RouterInputs["questions"]["create"];
@@ -286,32 +286,7 @@ export function QuestionSettings() {
                     } as RouterInputs["questions"]["update"])
                   }
                 />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-medium">{question.label}</p>
-                    {question.isDefault && <Badge variant="tag">Default</Badge>}
-                    <span className="text-xs text-muted-foreground">
-                      v{question.version}
-                    </span>
-                  </div>
-                  {question.label !== question.question && (
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {question.question}
-                    </p>
-                  )}
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {question.type === "boolean"
-                      ? "Yes or no"
-                      : question.type === "choice"
-                        ? `Choose: ${question.options?.join(", ")}`
-                        : `Score: ${question.options?.join(" → ")}`}
-                  </p>
-                  {question.context && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Context: {question.context}
-                    </p>
-                  )}
-                </div>
+                <QuestionSummary question={question} />
                 {canManage && !question.isDefault && (
                   <div className="flex items-center gap-1">
                     <Button
