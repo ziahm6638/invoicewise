@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test src",
     "verify": "bun run src/verify-workflows.ts",
-    "verify:accounting": "bun run src/verify-accounting.ts"
+    "verify:accounting": "bun run src/verify-accounting.ts",
+    "prove:accounting-sandbox": "bun run src/prove-accounting-sandbox.ts"
   },
   "exports": {
     ".": "./src/client.ts",

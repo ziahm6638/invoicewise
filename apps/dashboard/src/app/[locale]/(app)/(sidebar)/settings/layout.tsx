@@ -24,7 +24,10 @@ export default async function Layout({
       ? [{ path: "/settings/members", label: "Members" }]
       : []),
     ...(permissions?.manageIntegrations
-      ? [{ path: "/settings/developer", label: "Developer" }]
+      ? [
+          { path: "/settings/accounting", label: "Accounting" },
+          { path: "/settings/developer", label: "Developer" },
+        ]
       : []),
   ];
 

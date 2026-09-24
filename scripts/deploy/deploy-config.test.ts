@@ -17,8 +17,16 @@ type EnvBlock = { clear?: Record<string, unknown>; secret?: string[] };
 type DeployConfig = {
   env: EnvBlock;
   servers: Record<string, { env?: EnvBlock }>;
-  accessories: Record<string, { env?: EnvBlock }>;
+  accessories: Record<
+    string,
+    { env?: EnvBlock; port?: string; options?: Record<string, string> }
+  >;
 };
+
+// A Kamal secret entry is `NAME` or `NAME:SOURCE`: the container sees NAME,
+// set from SOURCE in .kamal/secrets.
+const secretSource = (entry: string) => entry.split(":").pop()!;
+const secretName = (entry: string) => entry.split(":")[0]!;
 
 const config = YAML.parse(
   readFileSync(join(ROOT, "config/deploy.yml"), "utf8"),
@@ -41,7 +49,7 @@ function roleEnv(role: string): Record<string, string> {
     for (const [key, value] of Object.entries(block.clear ?? {})) {
       env[key] = String(value);
     }
-    for (const key of block.secret ?? []) {
+    for (const key of (block.secret ?? []).map(secretName)) {
       env[key] =
         key === "MIDDAY_ENCRYPTION_KEY" ? ENCRYPTION_KEY : SECRET_VALUE;
     }
@@ -67,11 +75,15 @@ describe("deploy config", () => {
   });
 
   test(".kamal/secrets lists exactly the secrets the config names", () => {
-    const named = new Set<string>([
-      ...(config.env.secret ?? []),
-      ...Object.values(config.servers).flatMap((s) => s.env?.secret ?? []),
-      ...Object.values(config.accessories).flatMap((a) => a.env?.secret ?? []),
-    ]);
+    const named = new Set<string>(
+      [
+        ...(config.env.secret ?? []),
+        ...Object.values(config.servers).flatMap((s) => s.env?.secret ?? []),
+        ...Object.values(config.accessories).flatMap(
+          (a) => a.env?.secret ?? [],
+        ),
+      ].map(secretSource),
+    );
     expect([...kamalSecrets].sort()).toEqual([...named].sort());
   });
 
@@ -84,6 +96,33 @@ describe("deploy config", () => {
         expect(kamalSecrets).not.toContain(key);
       }
     }
+  });
+});
+
+describe("self-hosted Nango", () => {
+  const nango = config.accessories.nango!;
+  const api = roleEnv("api");
+
+  test("the API reaches the Nango accessory, never Nango Cloud", () => {
+    expect(api.NANGO_BASE_URL).toBe(
+      `http://invoicewise-nango:${nango.env?.clear?.SERVER_PORT}`,
+    );
+    expect(api.NANGO_PUBLIC_URL).toBe(
+      String(nango.env?.clear?.NANGO_SERVER_URL),
+    );
+    expect(Object.values(api).join(" ")).not.toContain("nango.dev");
+  });
+
+  test("the API key is the Nango prod environment secret key", () => {
+    expect(nango.env?.secret).toContain(
+      "NANGO_SECRET_KEY_PROD:NANGO_SECRET_KEY",
+    );
+    expect(config.servers.api?.env?.secret).toContain("NANGO_SECRET_KEY");
+  });
+
+  test("publishes Nango on loopback only, behind the tunnel", () => {
+    expect(nango.port).toStartWith("127.0.0.1:");
+    expect(nango.options?.publish).toStartWith("127.0.0.1:");
   });
 });
 

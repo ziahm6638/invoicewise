@@ -17,7 +17,7 @@ STORAGE_PUBLIC_URL MIDDAY_ENCRYPTION_KEY"
 
 case "$role" in
   web) required="$common NEXT_PUBLIC_URL NEXT_PUBLIC_API_URL" ;;
-  api) required="$common ALLOWED_API_ORIGINS TYPESAFE_API_KEY" ;;
+  api) required="$common ALLOWED_API_ORIGINS TYPESAFE_API_KEY NANGO_BASE_URL NANGO_SECRET_KEY" ;;
   *)
     echo "usage: require-env.sh web|api" >&2
     exit 2

@@ -57,7 +57,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Storage:** private local filesystem or S3-compatible (MinIO locally, R2 in production)
 - **Email:** transactional mail via Purelymail SMTP (nodemailer); **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)
 - **Extraction:** TypeSafe (text-only, selects among options, never generates): code mines candidates from laid-out text (PDF text layer, else tesseract OCR), TypeSafe picks; see `docs/document-intake.md#extraction`. Text PDF, scanned PDF, PNG and JPEG share one pipeline and record shape; HEIC is refused. The input matrix and limits are in `docs/document-intake.md#supported-inputs`
-- **Integrations:** Nango (Xero/QuickBooks), Polar (billing), API/MCP/webhooks
+- **Integrations:** self-hosted Nango on hp-slice for Xero/QuickBooks (auth + proxy only, so bill adapters live in `packages/jobs`; see `docs/accounting-integrations.md`), Polar (billing), API/MCP/webhooks
 
 ## Commands
 
@@ -109,6 +109,8 @@ project `invoicewise` (`prod`). Migrations apply when the API container boots. D
 A new required production setting goes in Infisical, `config/deploy.yml`, `.kamal/secrets` and
 `scripts/deploy/require-env.sh` together; `scripts/deploy/deploy-config.test.ts` checks they agree.
 Transactional mail is Purelymail SMTP as `auth@invoicewise.uk`, never Resend.
+Nango runs as the `nango`/`nango-db` Kamal accessories (never restarted by `kamal deploy`); the
+InvoiceWise and Nango databases are dumped nightly by `ops/backup` (see `docs/deployment.md`).
 
 ## Links
 

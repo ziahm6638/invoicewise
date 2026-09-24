@@ -19,6 +19,12 @@ kamal-proxy (shared, 127.0.0.1:3010, TLS terminates at Cloudflare)
   ├─ invoicewise-db             pgvector/pgvector:0.8.1-pg17, kamal network only,
   │                             data in /mnt/ssd/invoicewise/postgres
   └─ invoicewise-redis          redis:7.4-alpine, data in /mnt/ssd/invoicewise/redis
+
+nango.invoicewise.uk ─────┐   (same tunnel; see "Nango")
+nango-connect.invoicewise.uk ┴─▶ invoicewise-nango    nangohq/nango-server, 127.0.0.1:3020 (API)
+                                                      and 127.0.0.1:3021 (Connect UI)
+                                 invoicewise-nango-db postgres:16, kamal network only,
+                                                      data in /mnt/ssd/invoicewise/nango-postgres
 ```
 
 - Host: `hp-slice` (Tailscale `100.90.24.83`). Tailscale SSH as `root`.
@@ -69,6 +75,10 @@ line is `NAME=$NAME` from the environment `infisical run` injects.
 | `STORAGE_SIGNING_SECRET` | web, api | signed document links |
 | `MIDDAY_ENCRYPTION_KEY` | web, api | 32-byte hex key for encrypted columns |
 | `TYPESAFE_API_KEY` | api | invoice extraction and judgments (workflow runner) |
+| `NANGO_SECRET_KEY` | api, nango accessory | the Nango `prod` environment secret key (`NANGO_SECRET_KEY_PROD` in Nango) |
+| `NANGO_ENCRYPTION_KEY` | nango accessory | encrypts provider tokens in the Nango database; never change it |
+| `NANGO_DB_PASSWORD` | nango, nango-db accessories | the Nango database password |
+| `NANGO_DASHBOARD_PASSWORD` | nango accessory | basic-auth password for the Nango admin dashboard (user `invoicewise-admin`) |
 
 Infisical also holds `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `AUTH_EMAIL_FROM` and
 `TYPESAFE_BASE_URL` for reference; `config/deploy.yml` sets them in clear. To
@@ -78,8 +88,8 @@ list what Infisical holds without printing values:
 infisical export --env prod --format json | jq -r '.[].key'
 ```
 
-Not configured, so the matching features stay off: Nango (accounting
-delivery), Gmail/Outlook OAuth (mailbox connections), Polar (billing). To
+Not configured, so the matching features stay off: Gmail/Outlook OAuth
+(mailbox connections), Polar (billing). To
 enable one, add its keys to Infisical, name them under `env.secret` in
 `config/deploy.yml` (on the role that uses them) and in `.kamal/secrets`, and
 add any that must never be empty to `scripts/deploy/require-env.sh`.
@@ -139,6 +149,73 @@ infisical run --env prod -- kamal app logs -r api | grep -i migrat
 Recovery from a failed migration is forward only (fix the conflicting object or
 data, then deploy again); see `docs/development.md`.
 
+## Nango
+
+Self-hosted Nango (free edition: OAuth and the authenticated proxy) carries the
+Xero and QuickBooks connections; how InvoiceWise uses it is in
+[accounting-integrations.md](accounting-integrations.md). It runs as two Kamal
+accessories on hp-slice, `nango` and `nango-db`, with its own Postgres so
+Nango's schema and upgrades stay apart from the InvoiceWise database. The API
+reaches it as `http://invoicewise-nango:3003` on the kamal network.
+
+- `nango.invoicewise.uk` (API, OAuth callback `/oauth/callback`, websocket)
+  and `nango-connect.invoicewise.uk` (Connect UI) come through the Cloudflare
+  Tunnel to the loopback ports 3020 and 3021; TLS terminates at Cloudflare.
+- Every public API route needs the secret key or a connect-session token.
+  The admin dashboard's API (`/api/v1`) and `/internal` are refused (404) on
+  the public host by the tunnel ingress, and additionally require basic auth.
+- Admin dashboard, over SSH only:
+
+  ```bash
+  ssh -N -L 3020:127.0.0.1:3020 root@100.90.24.83
+  # open http://localhost:3020 as invoicewise-admin / NANGO_DASHBOARD_PASSWORD
+  ```
+
+  Create integrations under the `prod` environment; the integration keys and
+  provider apps are listed in accounting-integrations.md.
+
+Accessories are not touched by `kamal deploy`. Starting, upgrading (bump the
+image tag in `config/deploy.yml`) or changing Nango's settings leaves the web
+and api containers running:
+
+```bash
+infisical run --env prod -- kamal accessory boot nango-db     # first time only
+infisical run --env prod -- kamal accessory boot nango        # first time
+infisical run --env prod -- kamal accessory reboot nango      # after a config or image change
+infisical run --env prod -- kamal accessory logs nango
+curl -fsS https://nango.invoicewise.uk/health                 # {"result":"ok"}
+```
+
+A Nango API key change needs `kamal accessory reboot nango` and then an api
+deploy (the key is shared). `NANGO_ENCRYPTION_KEY` must never change: stored
+connections could no longer be decrypted and every workspace would have to
+reconnect.
+
+## Backups
+
+`invoicewise-backup.timer` (03:40 UTC) runs `/usr/local/sbin/invoicewise-backup`
+on hp-slice. It dumps both production databases (`invoicewise` from
+`invoicewise-db`, `nango` from `invoicewise-nango-db`) in custom format to
+`/var/backups/invoicewise` on the root NVMe disk, apart from the `/mnt/ssd`
+disk that holds the live data. Each dump is checked with `pg_restore --list`,
+checksummed (`.sha256`) and kept 14 days. The script and units live in
+`ops/backup/`; install or update them with `ops/backup/install.sh`, which also
+runs one backup. Document files in `/mnt/ssd/invoicewise/storage` are not in
+these dumps.
+
+```bash
+ssh root@100.90.24.83 'systemctl list-timers invoicewise-backup.timer; ls -lh /var/backups/invoicewise | tail'
+ssh root@100.90.24.83 journalctl -u invoicewise-backup.service -n 20
+```
+
+Restore into a stopped application (stop the api role or the nango accessory
+first), for example Nango:
+
+```bash
+ssh root@100.90.24.83 docker exec -i invoicewise-nango-db \
+  pg_restore -U nango -d nango --clean --if-exists < nango-<stamp>.dump
+```
+
 ## Rollback
 
 ```bash
@@ -162,8 +239,12 @@ infisical run --env prod -- kamal accessory logs db
 ## Tunnel and DNS
 
 `/root/.cloudflared/config.yml` on hp-slice routes `app.invoicewise.uk` and
-`api.invoicewise.uk` to `http://localhost:3010` (edit it, run
-`cloudflared tunnel ingress validate`, then `systemctl restart cloudflared`).
-Both hostnames are proxied CNAMEs to
+`api.invoicewise.uk` to `http://localhost:3010`, `nango.invoicewise.uk` to
+`http://localhost:3020` (except `^/(api/v1|internal)(/|$)`, answered 404) and
+`nango-connect.invoicewise.uk` to `http://localhost:3021`. Edit it, run
+`cloudflared tunnel ingress validate` (and `cloudflared tunnel ingress rule
+<url>` to check a path), then `systemctl restart cloudflared`; the tunnel
+serves other sites too, so the restart briefly interrupts them. All four
+hostnames are proxied CNAMEs to
 `7a0344f4-eee4-4222-acc7-b884164dd249.cfargotunnel.com` in the `invoicewise.uk`
 Cloudflare zone.
