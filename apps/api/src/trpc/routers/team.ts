@@ -131,27 +131,18 @@ export const teamRouter = createTRPCRouter({
 
   leave: protectedProcedure
     .input(leaveTeamSchema)
-    .mutation(
-      async ({ ctx: { db, requestHeaders, session, teamId }, input }) => {
-        try {
-          const result = await leaveTeam(db, {
-            userId: session.user.id,
-            teamId: input.teamId,
-          });
-
-          if (input.teamId === teamId) {
-            await auth.api.setActiveOrganization({
-              body: { organizationId: null },
-              headers: requestHeaders,
-            });
-          }
-
-          return result;
-        } catch (error) {
-          throw toTRPCError(error);
-        }
-      },
-    ),
+    .mutation(async ({ ctx: { db, session }, input }) => {
+      try {
+        // Sessions pointed at the workspace, including this one, move to
+        // another workspace the user belongs to inside `leaveTeam`.
+        return await leaveTeam(db, {
+          userId: session.user.id,
+          teamId: input.teamId,
+        });
+      } catch (error) {
+        throw toTRPCError(error);
+      }
+    }),
 
   acceptInvite: protectedProcedure
     .input(acceptTeamInviteSchema)

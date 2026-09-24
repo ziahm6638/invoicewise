@@ -427,9 +427,14 @@ suite("workspace permissions over real HTTP", () => {
     );
     expect(removed.error).toBeNull();
 
-    // The same cookie is refused on the next request, and the workspace is gone
-    // from the user's team list.
-    expect((await trpc(member.cookie, "team.members", null)).status).toBe(403);
+    // The same cookie can no longer read the workspace on the next request: it
+    // has moved to the member's own workspace, and the removed one is gone from
+    // the user's team list.
+    const members = await trpc(member.cookie, "team.members", null);
+    expect(members.status).toBe(200);
+    expect(
+      (members.data as { user: { id: string } }[]).map((row) => row.user.id),
+    ).not.toContain(owner.userId);
     expect(
       (await get(`/teams/${teamId}`, { cookie: member.cookie })).status,
     ).toBe(404);
@@ -1002,4 +1007,180 @@ suite("workspace permissions over real HTTP", () => {
     const me = await get("/users/me", { cookie: user.cookie });
     expect(me.status).toBe(200);
   });
+
+  // Each recovery scenario provisions accounts and a shared workspace over
+  // real HTTP, which outlasts bun's default per-test timeout.
+  const RECOVERY_TEST_TIMEOUT_MS = 30_000;
+
+  /** Owner creates a shared workspace and brings `member` into it as active. */
+  const joinSharedWorkspace = async (label: string) => {
+    const owner = await createUser(`${label}-owner`);
+    const member = await createUser(`${label}-member`);
+
+    const teamResult = await trpc(
+      owner.cookie,
+      "team.create",
+      { name: `${label} Shared`, baseCurrency: "GBP", switchTeam: true },
+      "mutation",
+    );
+    expect(teamResult.error).toBeNull();
+    const teamId = teamResult.data as string;
+    created.teamIds.push(teamId);
+
+    const invited = await trpc(
+      owner.cookie,
+      "team.invite",
+      [{ email: member.email, role: "member" }],
+      "mutation",
+    );
+    expect(invited.error).toBeNull();
+
+    const pending = await trpc(member.cookie, "team.invitesByEmail", null);
+    const inviteId = (pending.data as { id: string }[])[0]!.id;
+    const accepted = await trpc(
+      member.cookie,
+      "team.acceptInvite",
+      { id: inviteId },
+      "mutation",
+    );
+    expect(accepted.error).toBeNull();
+
+    expect((await switchTeam(member.cookie, teamId)).error).toBeNull();
+    const active = await trpc(member.cookie, "team.current", null);
+    expect((active.data as { id: string }).id).toBe(teamId);
+
+    return { owner, member, teamId };
+  };
+
+  const sessionPointers = async (userId: string) => {
+    const sessions = await primaryDb
+      .select({ teamId: schema.authSessions.activeOrganizationId })
+      .from(schema.authSessions)
+      .where(orm.eq(schema.authSessions.userId, userId));
+    const user = await primaryDb.query.users.findFirst({
+      where: orm.eq(schema.users.id, userId),
+      columns: { teamId: true },
+    });
+
+    return { sessions: sessions.map((row) => row.teamId), user: user?.teamId };
+  };
+
+  test(
+    "a member removed from their active workspace recovers on their next request",
+    async () => {
+      const { owner, member, teamId } = await joinSharedWorkspace("removed");
+
+      const removed = await trpc(
+        owner.cookie,
+        "team.deleteMember",
+        { teamId, userId: member.userId },
+        "mutation",
+      );
+      expect(removed.error).toBeNull();
+
+      // The next request lands in the workspace they still belong to.
+      const current = await trpc(member.cookie, "team.current", null);
+      expect(current.error).toBeNull();
+      expect((current.data as { id: string }).id).toBe(member.personalTeamId);
+
+      const me = await trpc(member.cookie, "user.me", null);
+      expect(me.error).toBeNull();
+      expect((me.data as { teamId: string }).teamId).toBe(
+        member.personalTeamId,
+      );
+
+      // Nothing from the workspace they were removed from is readable.
+      const members = await trpc(member.cookie, "team.members", null);
+      expect(members.error).toBeNull();
+      expect(
+        (members.data as { user: { id: string } }[]).map((row) => row.user.id),
+      ).toEqual([member.userId]);
+
+      const inbox = await get("/inbox", { cookie: member.cookie });
+      expect(inbox.status).toBe(200);
+
+      expect(await sessionPointers(member.userId)).toEqual({
+        sessions: [member.personalTeamId],
+        user: member.personalTeamId,
+      });
+    },
+    RECOVERY_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a stale active-workspace pointer is recovered server-side without exposing the stale workspace",
+    async () => {
+      const { member, teamId } = await joinSharedWorkspace("stale");
+
+      // The membership ends without the pointers being cleared, as a removal
+      // racing a workspace switch can leave them.
+      await primaryDb
+        .delete(schema.usersOnTeam)
+        .where(
+          orm.and(
+            orm.eq(schema.usersOnTeam.teamId, teamId),
+            orm.eq(schema.usersOnTeam.userId, member.userId),
+          ),
+        );
+      expect(await sessionPointers(member.userId)).toEqual({
+        sessions: [teamId],
+        user: teamId,
+      });
+
+      // The first request after removal is a workspace read: it is served from
+      // the workspace the member still belongs to, never the stale one.
+      const members = await trpc(member.cookie, "team.members", null);
+      expect(members.error).toBeNull();
+      expect(
+        (members.data as { user: { id: string } }[]).map((row) => row.user.id),
+      ).toEqual([member.userId]);
+
+      const current = await trpc(member.cookie, "team.current", null);
+      expect((current.data as { id: string }).id).toBe(member.personalTeamId);
+
+      expect(await sessionPointers(member.userId)).toEqual({
+        sessions: [member.personalTeamId],
+        user: member.personalTeamId,
+      });
+    },
+    RECOVERY_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a stale pointer with no workspace left sends the user to workspace creation",
+    async () => {
+      const user = await createUser("stale-last");
+
+      await primaryDb
+        .delete(schema.usersOnTeam)
+        .where(orm.eq(schema.usersOnTeam.userId, user.userId));
+
+      // REST resources refuse cleanly instead of reading the stale workspace.
+      const inbox = await get("/inbox", { cookie: user.cookie });
+      expect(inbox.status).toBe(403);
+
+      // The dashboard sees no active workspace and no workspace to choose, so it
+      // routes to the chooser and on to workspace creation.
+      const me = await trpc(user.cookie, "user.me", null);
+      expect(me.error).toBeNull();
+      expect((me.data as { teamId: string | null }).teamId).toBeNull();
+      expect((me.data as { team: unknown }).team).toBeNull();
+
+      const current = await trpc(user.cookie, "team.current", null);
+      expect(current.error).toBeNull();
+      expect(current.data).toBeNull();
+
+      const teams = await trpc(user.cookie, "team.list", null);
+      expect(teams.data).toEqual([]);
+
+      const members = await trpc(user.cookie, "team.members", null);
+      expect(members.status).toBe(403);
+
+      expect(await sessionPointers(user.userId)).toEqual({
+        sessions: [null],
+        user: null,
+      });
+    },
+    RECOVERY_TEST_TIMEOUT_MS,
+  );
 });
