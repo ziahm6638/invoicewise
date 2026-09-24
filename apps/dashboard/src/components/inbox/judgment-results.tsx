@@ -71,11 +71,19 @@ export function JudgmentResults({
                     <Badge variant="tag">Your question</Badge>
                   )}
                 </div>
-                {judgment.question !== judgment.label && (
-                  <p className="mt-1.5 max-w-[65ch] text-xs leading-5 text-muted-foreground">
-                    {judgment.question}
-                  </p>
-                )}
+                {/*
+                 * Built-in checks carry internal TypeSafe wording (field
+                 * paths in backticks) in `question`, which must never reach
+                 * the customer: their `label` is the plain-English
+                 * description. Custom questions keep the wording the
+                 * customer wrote.
+                 */}
+                {judgment.source === "custom" &&
+                  judgment.question !== judgment.label && (
+                    <p className="mt-1.5 max-w-[65ch] text-xs leading-5 text-muted-foreground">
+                      {judgment.question}
+                    </p>
+                  )}
               </div>
               <div className="shrink-0 text-right">
                 <p
