@@ -1176,6 +1176,40 @@ suite("identity lifecycle over real HTTP", () => {
     expect((await userByEmail(target))?.id).toBe(account.userId);
   });
 
+  test("a reused email-change link cannot redirect off-site through its callback", async () => {
+    const { signJWT } = await import("better-auth/crypto");
+    const account = await signUpAndVerify("callback-redirect");
+    const target = `callback-redirect-${crypto.randomUUID()}@example.test`;
+    const link = `/api/auth/verify-email?token=${await signJWT(
+      {
+        email: account.email,
+        updateTo: target,
+        userId: account.userId,
+        requestType: "change-email-verification",
+      },
+      process.env.BETTER_AUTH_SECRET!,
+    )}`;
+
+    expect((await get(link)).status).toBe(200);
+    expect((await userByEmail(target))?.id).toBe(account.userId);
+
+    for (const callbackURL of ["/\\evil.com", "/\\\t/evil.com"]) {
+      const response = await get(
+        `${link}&callbackURL=${encodeURIComponent(callbackURL)}`,
+      );
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get("location")).toBeNull();
+    }
+
+    const settings = await get(`${link}&callbackURL=%2Fsettings`);
+    expect(settings.status).toBe(302);
+    const location = new URL(settings.headers.get("location")!);
+    expect(location.origin).toBe(new URL(BASE).origin);
+    expect(location.pathname).toBe("/settings");
+    expect(location.searchParams.get("error")).toBe("INVALID_TOKEN");
+  });
+
   test("an old email-change link cannot rebind a later account at the same address", async () => {
     const original = await signUpAndVerify("token-subject");
     const firstTarget = `token-first-${crypto.randomUUID()}@example.test`;

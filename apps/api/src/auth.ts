@@ -228,9 +228,8 @@ function resolveCallbackUrl(
     return null;
   }
 
-  // A same-site path is always allowed.
-  if (raw.startsWith("/") && !raw.startsWith("//")) {
-    return new URL(raw, baseURL);
+  if (/[\\\s\x00-\x1f\x7f]/.test(raw)) {
+    return "untrusted";
   }
 
   let target: URL;
