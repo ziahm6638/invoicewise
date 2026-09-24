@@ -76,8 +76,9 @@ stores `last_error`; the job retries with backoff up to 8 attempts.
 
 ### When cleanup fails
 
-- `bun jobs:status` lists every unfinished deletion request with its progress
-  and last error. Failed runs also log `deletion_cleanup_failed`.
+- `bun jobs:status` lists the unfinished requests among the 50 most recent,
+  with their progress and last error. Failed runs also log
+  `deletion_cleanup_failed`.
 - When the job gives up, the request is marked `failed`; it is never deleted.
 - Fix the cause (provider credentials, storage access), then run
   `bun jobs:resume-deletions`. It re-queues every `pending` or `failed` request
