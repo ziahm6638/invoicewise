@@ -24,6 +24,15 @@ import { InboxConnector } from "@invoicewise/inbox/connector";
 import { isAuthenticationError } from "@invoicewise/inbox/utils";
 import { ensureFileExtension } from "@invoicewise/utils";
 import {
+  type TransactionalMessage,
+  assertTransactionalMailConfigured,
+  isProductionEnv,
+  resolveMailSender,
+  resolveMailSinkPath,
+  sendTransactionalSmtp,
+  writeMailSinkRecord,
+} from "@invoicewise/utils/transactional-mail";
+import {
   Config,
   Context,
   Effect,
@@ -33,12 +42,7 @@ import {
   Schema,
 } from "effect";
 import { nanoid } from "nanoid";
-import {
-  type CreateBatchOptions,
-  type CreateContactOptions,
-  type CreateEmailOptions,
-  Resend,
-} from "resend";
+import { type CreateContactOptions, Resend } from "resend";
 import { enqueueAccountingPost, postAccountingDraft } from "./accounting";
 import { workflowKey } from "./client";
 import {
@@ -85,14 +89,17 @@ export class WorkflowStorage extends Context.Tag("invoicewise/WorkflowStorage")<
   { readonly client: ReturnType<typeof createStorageClient> }
 >() {}
 
+/**
+ * A workflow message. A template's own `from` is kept for the local sink only
+ * when no AUTH_EMAIL_FROM is configured; SMTP always sends from AUTH_EMAIL_FROM.
+ */
+export type WorkflowMail = TransactionalMessage & { from?: string };
+
 export class WorkflowMailer extends Context.Tag("invoicewise/WorkflowMailer")<
   WorkflowMailer,
   {
     readonly send: (
-      message: CreateEmailOptions,
-    ) => Effect.Effect<void, WorkflowExecutionError>;
-    readonly batch: (
-      messages: CreateBatchOptions,
+      message: WorkflowMail,
     ) => Effect.Effect<void, WorkflowExecutionError>;
     readonly createContact: (
       contact: Omit<CreateContactOptions, "audienceId">,
@@ -262,36 +269,83 @@ export const WorkflowStorageLive = Layer.effect(
 export const WorkflowMailerLive = Layer.effect(
   WorkflowMailer,
   Config.all({
-    apiKey: Config.option(Config.redacted("RESEND_API_KEY")),
+    smtpHost: Config.option(Config.string("SMTP_HOST")),
+    smtpPort: Config.option(Config.string("SMTP_PORT")),
+    smtpUser: Config.option(Config.string("SMTP_USER")),
+    smtpPass: Config.option(Config.redacted("SMTP_PASS")),
+    sender: Config.option(Config.string("AUTH_EMAIL_FROM")),
+    sinkPath: Config.option(Config.string("AUTH_MAIL_SINK_PATH")),
+    resendApiKey: Config.option(Config.redacted("RESEND_API_KEY")),
     audienceId: Config.option(Config.string("RESEND_AUDIENCE_ID")),
   }).pipe(
     Effect.map((config) => {
-      const resend = Option.isSome(config.apiKey)
-        ? new Resend(Redacted.value(config.apiKey.value))
-        : null;
-      const requireClient = () => {
-        if (!resend) throw new Error("RESEND_API_KEY is not configured");
-        return resend;
+      // The same transactional-mail policy as the API: mail goes through
+      // Purelymail over SMTP, the configured AUTH_EMAIL_FROM is the sender for
+      // every workflow message, and a non-production AUTH_MAIL_SINK_PATH
+      // captures the real message locally instead of contacting a server.
+      const mailEnv = {
+        ...process.env,
+        SMTP_HOST: Option.getOrUndefined(config.smtpHost),
+        SMTP_PORT: Option.getOrUndefined(config.smtpPort),
+        SMTP_USER: Option.getOrUndefined(config.smtpUser),
+        SMTP_PASS: Option.isSome(config.smtpPass)
+          ? Redacted.value(config.smtpPass.value)
+          : undefined,
+        AUTH_EMAIL_FROM: Option.getOrUndefined(config.sender),
+        AUTH_MAIL_SINK_PATH: Option.getOrUndefined(config.sinkPath),
+      } as NodeJS.ProcessEnv;
+      const sender = resolveMailSender(mailEnv);
+      const sinkPath = resolveMailSinkPath(mailEnv);
+
+      // The worker runs on its own, without the API's auth import, so it
+      // enforces the same fail-closed production policy before it can send
+      // anything: missing SMTP credentials or a missing sender refuse the
+      // mailer instead of falling back to a template's sender.
+      if (isProductionEnv(mailEnv)) {
+        assertTransactionalMailConfigured(mailEnv);
+      }
+
+      // The marketing audience is optional and is not transactional mail: it
+      // stays on Resend and is skipped unless both values are configured.
+      const resendApiKey = Option.isSome(config.resendApiKey)
+        ? Redacted.value(config.resendApiKey.value).trim()
+        : "";
+      const audienceId = Option.getOrElse(config.audienceId, () => "").trim();
+      const audience =
+        resendApiKey && audienceId
+          ? { client: new Resend(resendApiKey), audienceId }
+          : null;
+
+      const applySender = (message: WorkflowMail): WorkflowMail =>
+        sender ? { ...message, from: sender } : message;
+
+      const deliver = async (message: WorkflowMail): Promise<void> => {
+        const final = applySender(message);
+        if (sinkPath) {
+          await writeMailSinkRecord(sinkPath, {
+            at: new Date().toISOString(),
+            to: Array.isArray(final.to) ? final.to.join(",") : final.to,
+            from: final.from ?? null,
+            subject: final.subject,
+            html: final.html ?? null,
+            text: final.text ?? null,
+          });
+          return;
+        }
+        const { from: _templateSender, ...smtpMessage } = final;
+        await sendTransactionalSmtp(smtpMessage, mailEnv);
       };
+
       return {
-        send: (message: CreateEmailOptions) =>
-          attempt(async () => {
-            const response = await requireClient().emails.send(message);
-            if (response.error) throw new Error(response.error.message);
-          }, "Unable to send email"),
-        batch: (messages: CreateBatchOptions) =>
-          attempt(async () => {
-            const response = await requireClient().batch.send(messages);
-            if (response.error) throw new Error(response.error.message);
-          }, "Unable to send email batch"),
+        send: (message: WorkflowMail) =>
+          attempt(() => deliver(message), "Unable to send email"),
         createContact: (contact: Omit<CreateContactOptions, "audienceId">) =>
           attempt(async () => {
-            if (Option.isNone(config.audienceId)) {
-              throw new Error("RESEND_AUDIENCE_ID is not configured");
-            }
-            const response = await requireClient().contacts.create({
+            // Local capture must not reach the provider's contact store.
+            if (sinkPath || !audience) return;
+            const response = await audience.client.contacts.create({
               ...contact,
-              audienceId: config.audienceId.value,
+              audienceId: audience.audienceId,
             });
             if (response.error) throw new Error(response.error.message);
           }, "Unable to create email contact"),
@@ -601,29 +655,30 @@ const makeInviteTeamMembers = (mailer: WorkflowMailer["Type"]) =>
   ) {
     yield* ensureTeam(job, payload.teamId);
     const { t } = getI18n({ locale: payload.locale });
-    const messages = yield* Effect.forEach(payload.invites, (invite) =>
-      Effect.promise(async () => ({
-        from: "InvoiceWise <hello@invoicewise.uk>",
-        to: [invite.email],
-        subject: t("invite.subject", {
+    const { invite } = payload;
+    const html = yield* Effect.sync(() =>
+      render(
+        InviteEmail({
+          invitedByEmail: invite.invitedByEmail,
           invitedByName: invite.invitedByName,
+          email: invite.email,
           teamName: invite.teamName,
+          ip: payload.ip,
+          locale: payload.locale,
         }),
-        headers: { "X-Entity-Ref-ID": nanoid() },
-        html: await render(
-          InviteEmail({
-            invitedByEmail: invite.invitedByEmail,
-            invitedByName: invite.invitedByName,
-            email: invite.email,
-            teamName: invite.teamName,
-            ip: payload.ip,
-            locale: payload.locale,
-          }),
-        ),
-      })),
+      ),
     );
-    yield* mailer.batch(messages);
-    return { invitationsSent: messages.length };
+    yield* mailer.send({
+      from: "InvoiceWise <hello@invoicewise.uk>",
+      to: [invite.email],
+      subject: t("invite.subject", {
+        invitedByName: invite.invitedByName,
+        teamName: invite.teamName,
+      }),
+      headers: { "X-Entity-Ref-ID": nanoid() },
+      html,
+    });
+    return { invitationsSent: 1 };
   });
 
 type OnboardingStage = NonNullable<OnboardTeamPayload["stage"]>;

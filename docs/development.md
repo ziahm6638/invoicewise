@@ -100,8 +100,9 @@ bun run dev:dashboard
 Open <http://localhost:3001/signup> to create a local account and workspace.
 Better Auth stores users, credentials, sessions, memberships, and invitations
 in the same Postgres database as product data. In local development,
-verification and password-reset links are printed in the dashboard terminal
-when `RESEND_API_KEY` has the placeholder value from the template.
+set `AUTH_MAIL_SINK_PATH` to capture verification and password-reset mail
+(with its links) in a local file; without a sink or SMTP credentials, only the
+subject and recipient are logged (see [Transactional mail](#transactional-mail)).
 
 If port 3001 is already in use, the dashboard script accepts an override:
 
@@ -158,6 +159,89 @@ queued attachment workflow through TypeSafe extraction and judgments, checks
 the persisted invoice (including workspace questions), repeats the same
 idempotency key, prints the structured runner logs and a verification summary,
 and removes its temporary rows and file.
+
+## Identity lifecycle
+
+Better Auth owns verified addresses, credentials and sessions. The product adds
+the workspace rules around them instead of keeping a second copy.
+
+| Action | Supported entry point | Session effect |
+| --- | --- | --- |
+| Signup | `/api/auth/sign-up/email`, then the emailed verification link | Verification signs the account in and provisions one personal workspace; a failed provisioning attempt is retried on the link and on sign-in |
+| Email change | `/api/auth/change-email`, then the link sent to the new address | Requires a session signed in within the recent-auth window; completing the change ends every session, including the one the completion response would issue |
+| Password reset | `/api/auth/request-password-reset`, then `/api/auth/reset-password` | Every session ends and the account signs in again |
+| Password change | `/api/auth/change-password` with `revokeOtherSessions` | The caller receives one fresh session; every other session ends |
+| Invitations | dashboard `team.invite` / `team.acceptInvite` (tRPC), delivered by the `invite-team-members` queue job | Unaffected by identity changes |
+
+The rules that keep those flows safe:
+
+- A verified address changes only through Better Auth's verification or
+  email-change flow. The generic profile endpoints accept no `email` field and
+  reject unknown keys, the DB update helper has no email parameter, and
+  `/api/auth/update-user` accepts name and image only.
+- An email change needs a session created inside `session.freshAge` (24 hours).
+  A stale session is refused with `403` before any message is sent.
+- An address that already belongs to an account is never taken over. The
+  request is answered without disclosing which address is taken, and neither
+  account changes.
+- Invitations bind recipient email, workspace, role, status and expiry in one
+  locked transaction that re-reads the invite, consumes it and grants the
+  membership. Replay, revocation, expiry, wrong-recipient and concurrent
+  acceptance are covered by `apps/api/src/identity.http.integration.test.ts`.
+- Signup provisioning is idempotent and takes the user row lock before reading
+  memberships, the accepted order that account deletion also uses. A signup or
+  verification whose workspace insert failed is repaired by the next
+  verification request and by the next sign-in, and repeated or concurrent
+  attempts settle on exactly one workspace and one membership. The customer
+  never needs a manual database repair.
+- Session revocation is ordered *before* the identity or credential mutation it
+  protects: `/verify-email` for a change-email token, `/reset-password`, and
+  `/change-password` with `revokeOtherSessions`. If the revocation cannot
+  complete, the request fails with the verified address, reset token and
+  password unchanged, so the customer can retry the same link instead of being
+  left with a moved address or a new password beside live old sessions.
+
+### Transactional mail
+
+Transactional mail is sent through Purelymail over SMTP with nodemailer. The
+API (Better Auth identity mail, API-key and OAuth-application notices, inbox
+forwarding) and the workflow worker (invitation and onboarding mail) share one
+policy in `@invoicewise/utils/transactional-mail`:
+
+| Variable | Purpose |
+| --- | --- |
+| `SMTP_HOST` | SMTP server, default `smtp.purelymail.com` |
+| `SMTP_PORT` | Default `465`, which uses implicit TLS; any other port starts in plain text |
+| `SMTP_USER`, `SMTP_PASS` | The Purelymail mailbox credentials; mail is "not configured" without both |
+| `AUTH_EMAIL_FROM` | The sender for every transactional message, a Purelymail address such as `InvoiceWise <auth@invoicewise.uk>` |
+| `AUTH_MAIL_SINK_PATH` | Optional local capture file, honoured outside production only |
+
+Verification, invitation and reset links carry bearer tokens, so delivery is
+fail-closed:
+
+- Production refuses to start when `SMTP_USER`, `SMTP_PASS` or
+  `AUTH_EMAIL_FROM` is missing (the API at import time, the worker when it
+  builds its mailer).
+- Token-bearing links are never written to a log or a file in production, and
+  production ignores `AUTH_MAIL_SINK_PATH`.
+- Outside production the explicit sink wins: mail is captured in the file named
+  by `AUTH_MAIL_SINK_PATH` instead of being sent, and that sink covers the
+  queued workflow mail as well as Better Auth identity mail. The captured
+  record holds the real link, so the whole journey completes locally. Without
+  a sink, the API sends over SMTP when it is configured and otherwise logs only
+  the subject and recipient.
+- `AUTH_EMAIL_FROM` is the sender for every transactional message, including
+  the invitation and onboarding templates that previously hardcoded their own
+  `from` address (Purelymail only relays for its own addresses), and the
+  configured application origin (`NEXT_PUBLIC_URL`) is used for links in that
+  mail.
+- Resend is not used for transactional mail. `RESEND_API_KEY` and
+  `RESEND_AUDIENCE_ID` only serve the optional marketing audience (onboarding
+  contacts and contact removal on account deletion), which is skipped unless
+  both are set.
+- Tests and verification send to a loopback SMTP trap
+  (`@invoicewise/utils/smtp-trap`) with explicit synthetic credentials; live
+  Purelymail delivery stays owner-gated evidence.
 
 ## Document storage
 
@@ -304,9 +388,12 @@ Requirements and isolation rules:
   none. Bun children additionally run with `--no-env-file`, and every
   provider/telemetry key is defined-but-empty so a stray file cannot inject a
   live value.
-- Resend, TypeSafe, Nango and Polar base URLs point at a loopback provider trap
-  started by the run; the trap records every request (the e2e's Better Auth
-  verification emails and TypeSafe calls appear there, not at a paid endpoint).
+- TypeSafe, Nango and Polar base URLs point at a loopback provider trap started
+  by the run, and `SMTP_HOST`/`SMTP_PORT` point at a loopback SMTP trap with
+  synthetic credentials. The traps record every request and message (the
+  e2e's production-mode Better Auth verification emails reach the SMTP trap
+  and TypeSafe calls reach the provider trap, not a paid endpoint).
+  `RESEND_API_KEY` is pinned empty.
   Redis uses the disposable logical database `redis://127.0.0.1:6379/9`
   (override with `VERIFY_REDIS_URL`) and MinIO objects use a unique per-run key
   prefix, so no development cache namespace or bucket object is reset.
@@ -315,7 +402,8 @@ Requirements and isolation rules:
   stops the command (a missing bucket is created) with a redacted summary
   (`bun run verify:selftest` proves the abort with a non-loopback target).
 - Redacted logs and `summary.json` are written to `.verify-artifacts/<run-id>/`
-  (gitignored) and include the provider-trap request list, the excluded `.env`
+  (gitignored) and include the provider-trap request list, the SMTP trap's
+  connection and message counts (never message content), the excluded `.env`
   files and the workspace overlay size. The command exits non-zero if any step
   fails, is aborted, or throws unexpectedly. Credential-shaped text is redacted
   before it reaches any note, abort detail, cleanup message or the serialized

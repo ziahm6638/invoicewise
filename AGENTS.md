@@ -35,7 +35,7 @@ current, observed repository map is:
 | `packages/jobs` | Postgres-backed Effect workflow queue plus document, delivery and accounting work |
 | `packages/documents` | Bounded PDF/image validation and preview in an isolated child process, TypeSafe extraction types |
 | `packages/inbox` | Gmail/Outlook mailbox connection |
-| `packages/email` | Transactional email (Resend) |
+| `packages/email` | Transactional email templates (sent over Purelymail SMTP) |
 | `packages/cache` | Redis-backed cache for auth, team-permission and read-after-write paths |
 | `packages/supabase` | Legacy Supabase client used only by the inherited marketing site |
 | `packages/{ui,utils,invoice,location,logger,encryption,events,categories,tsconfig}` | Shared libraries |
@@ -55,7 +55,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Auth:** Better Auth (users, sessions, memberships, invitations) in the primary database
 - **Background jobs:** Postgres-backed Effect workflow queue (`packages/jobs`)
 - **Storage:** private local filesystem or S3-compatible (MinIO locally, R2 in production)
-- **Email:** Resend; **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)
+- **Email:** transactional mail via Purelymail SMTP (nodemailer); **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)
 - **Extraction:** TypeSafe for semantic extraction and judgments; the inherited Mistral image path remains until #36 removes it
 - **Integrations:** Nango (Xero/QuickBooks), Polar (billing), API/MCP/webhooks
 

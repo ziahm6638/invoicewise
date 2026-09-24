@@ -275,22 +275,17 @@ export const teamRouter = createTRPCRouter({
         inviteCode: invite?.code!,
       }));
 
-      // Only trigger email sending if there are valid invites
-      if (invites.length > 0) {
-        const payload = {
-          teamId: teamId!,
-          invites,
-          ip,
-          locale: "en",
-        } satisfies InviteTeamMembersPayload;
+      for (const invite of invites) {
         await enqueueWorkflow(db, {
           name: "invite-team-members",
           teamId: teamId!,
-          payload,
-          idempotencyKey: workflowKey.invitations(
-            teamId!,
-            invites.map(({ inviteCode }) => inviteCode),
-          ),
+          payload: {
+            teamId: teamId!,
+            invite,
+            ip,
+            locale: "en",
+          } satisfies InviteTeamMembersPayload,
+          idempotencyKey: workflowKey.invitations(teamId!, [invite.inviteCode]),
         });
       }
 

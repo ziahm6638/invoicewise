@@ -77,7 +77,7 @@ Forked from [Midday](https://github.com/midday-ai/midday), an open-source busine
 - Effect workflows on a Postgres-backed queue (`packages/jobs`)
 - Private local filesystem storage in development, S3-compatible (MinIO/R2) elsewhere
 - TypeSafe for semantic extraction and judgments
-- Nango for Xero/QuickBooks delivery, Polar for billing, Resend for email
+- Nango for Xero/QuickBooks delivery, Polar for billing, Purelymail SMTP for transactional email
 
 ## Development
 

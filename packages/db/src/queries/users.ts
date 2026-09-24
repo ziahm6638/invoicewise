@@ -43,11 +43,17 @@ export const getUserById = async (
   return result;
 };
 
+/**
+ * Generic profile fields.
+ *
+ * `email` is deliberately absent: a verified address only changes through the
+ * authoritative Better Auth email-change flow (#33), so no generic profile
+ * write can rebind the account, its invitations or its memberships.
+ */
 export type UpdateUserParams = {
   id: string;
   fullName?: string | null;
   teamId?: string | null;
-  email?: string | null;
   avatarUrl?: string | null;
   locale?: string | null;
   timeFormat?: number | null;

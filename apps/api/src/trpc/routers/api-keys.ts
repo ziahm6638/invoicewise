@@ -1,5 +1,5 @@
 import { deleteApiKeySchema, upsertApiKeySchema } from "@api/schemas/api-keys";
-import { resend } from "@api/services/resend";
+import { deliverMail } from "@api/services/mail";
 import { adminProcedure, createTRPCRouter } from "@api/trpc/init";
 import {
   clampScopesForRole,
@@ -8,6 +8,7 @@ import {
   upsertApiKey,
 } from "@invoicewise/db/queries";
 import { ApiKeyCreatedEmail } from "@invoicewise/email/emails/api-key-created";
+import { render } from "@invoicewise/email/render";
 import { logger } from "@invoicewise/logger";
 import { TRPCError } from "@trpc/server";
 
@@ -39,18 +40,19 @@ export const apiKeysRouter = createTRPCRouter({
         if (data) {
           try {
             // We don't need to await this, it will be sent in the background
-            resend.emails.send({
-              from: "InvoiceWise <middaybot@midday.ai>",
+            deliverMail({
               to: session.user.email!,
               subject: "New API Key Created",
-              react: ApiKeyCreatedEmail({
-                fullName: session.user.full_name!,
-                keyName: input.name,
-                createdAt: data.createdAt,
-                email: session.user.email!,
-                ip: geo.ip!,
-              }),
-            });
+              html: render(
+                ApiKeyCreatedEmail({
+                  fullName: session.user.full_name!,
+                  keyName: input.name,
+                  createdAt: data.createdAt,
+                  email: session.user.email!,
+                  ip: geo.ip!,
+                }),
+              ),
+            }).catch((error) => logger.error(error));
           } catch (error) {
             logger.error(error);
           }

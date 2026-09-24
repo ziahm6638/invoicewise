@@ -166,16 +166,6 @@ export const SECRET_EXCEPTIONS: {
   },
   {
     path: "apps/api/.env-template",
-    value: "re_local_development",
-    reason: "committed local template placeholder for the Resend key",
-  },
-  {
-    path: "apps/dashboard/.env-example",
-    value: "re_local_development",
-    reason: "committed local template placeholder for the Resend key",
-  },
-  {
-    path: "apps/api/.env-template",
     value: "polar_local_development",
     reason: "committed local template placeholder for the Polar token",
   },

@@ -9,7 +9,7 @@ import {
   updateOAuthApplicationSchema,
 } from "@api/schemas/oauth-applications";
 import { revokeUserApplicationAccessSchema } from "@api/schemas/oauth-flow";
-import { resend } from "@api/services/resend";
+import { deliverMail } from "@api/services/mail";
 import {
   adminProcedure,
   createTRPCRouter,
@@ -203,8 +203,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
               }),
             );
 
-            await resend.emails.send({
-              from: "InvoiceWise <middaybot@midday.ai>",
+            await deliverMail({
               to: session.user.email,
               subject: "An app has been added to your team",
               html,
@@ -372,8 +371,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
               }),
             );
 
-            await resend.emails.send({
-              from: "InvoiceWise <middaybot@midday.ai>",
+            await deliverMail({
               to: "pontus@midday.ai",
               subject: `Application Review Request - ${application.name}`,
               html,

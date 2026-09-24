@@ -35,15 +35,13 @@ export const InviteTeamMembersPayload = Schema.Struct({
   teamId: Schema.String,
   ip: Schema.String,
   locale: Schema.String,
-  invites: Schema.Array(
-    Schema.Struct({
-      email: Schema.String,
-      invitedByName: Schema.String,
-      invitedByEmail: Schema.String,
-      teamName: Schema.String,
-      inviteCode: Schema.optional(Schema.String),
-    }),
-  ),
+  invite: Schema.Struct({
+    email: Schema.String,
+    invitedByName: Schema.String,
+    invitedByEmail: Schema.String,
+    teamName: Schema.String,
+    inviteCode: Schema.optional(Schema.String),
+  }),
 });
 export type InviteTeamMembersPayload = typeof InviteTeamMembersPayload.Type;
 

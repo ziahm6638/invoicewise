@@ -51,50 +51,56 @@ export function TeamInvite({ invite }: Props) {
     }),
   );
 
+  const failure =
+    acceptInviteMutation.error?.message ?? declineInviteMutation.error?.message;
+
   return (
-    <div className="flex justify-between items-center">
-      <div className="flex items-center gap-4">
-        <Avatar className="size-8 rounded-none">
-          <AvatarImage
-            src={invite.team?.logoUrl ?? ""}
-            className="rounded-none"
-            width={32}
-            height={32}
-          />
-          <AvatarFallback className="rounded-none">
-            <span className="text-xs">
-              {invite.team?.name?.charAt(0)?.toUpperCase()}
-            </span>
-          </AvatarFallback>
-        </Avatar>
+    <div className="space-y-2">
+      <div className="flex justify-between items-center">
+        <div className="flex items-center gap-4">
+          <Avatar className="size-8 rounded-none">
+            <AvatarImage
+              src={invite.team?.logoUrl ?? ""}
+              className="rounded-none"
+              width={32}
+              height={32}
+            />
+            <AvatarFallback className="rounded-none">
+              <span className="text-xs">
+                {invite.team?.name?.charAt(0)?.toUpperCase()}
+              </span>
+            </AvatarFallback>
+          </Avatar>
 
-        <span className="text-sm font-medium">{invite.team?.name}</span>
-      </div>
+          <span className="text-sm font-medium">{invite.team?.name}</span>
+        </div>
 
-      <div className="flex gap-2">
-        <SubmitButton
-          isSubmitting={acceptInviteMutation.isPending}
-          variant="outline"
-          onClick={() =>
-            acceptInviteMutation.mutate({
-              id: invite.id,
-            })
-          }
-        >
-          Accept
-        </SubmitButton>
-        <SubmitButton
-          isSubmitting={declineInviteMutation.isPending}
-          variant="outline"
-          onClick={() =>
-            declineInviteMutation.mutate({
-              id: invite.id,
-            })
-          }
-        >
-          Decline
-        </SubmitButton>
+        <div className="flex gap-2">
+          <SubmitButton
+            isSubmitting={acceptInviteMutation.isPending}
+            variant="outline"
+            onClick={() =>
+              acceptInviteMutation.mutate({
+                id: invite.id,
+              })
+            }
+          >
+            Accept
+          </SubmitButton>
+          <SubmitButton
+            isSubmitting={declineInviteMutation.isPending}
+            variant="outline"
+            onClick={() =>
+              declineInviteMutation.mutate({
+                id: invite.id,
+              })
+            }
+          >
+            Decline
+          </SubmitButton>
+        </div>
       </div>
+      {failure && <p className="text-sm text-destructive">{failure}</p>}
     </div>
   );
 }

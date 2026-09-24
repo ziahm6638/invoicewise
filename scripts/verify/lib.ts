@@ -12,6 +12,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export {
+  type SmtpTrap,
+  type SmtpTrapMessage,
+  startSmtpTrap,
+} from "../../packages/utils/src/smtp-trap";
+
 export const ROOT = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -52,7 +58,7 @@ const SYNTHETIC_SECRETS = {
   MIDDAY_ENCRYPTION_KEY:
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   STORAGE_SIGNING_SECRET: "invoicewise-verify-storage-signing-secret",
-  RESEND_API_KEY: "re_verify_stub",
+  SMTP_PASS: "invoicewise-verify-smtp-password",
   POLAR_ACCESS_TOKEN: "polar_verify_stub",
   TYPESAFE_API_KEY: "ts_verify_stub",
   NANGO_SECRET_KEY: "nango_verify_stub",
@@ -81,6 +87,9 @@ export const BLOCKED_PROVIDER_KEYS = [
   "MISTRAL_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
   "POLAR_WEBHOOK_SECRET",
+  // Resend only serves the optional marketing audience; transactional mail
+  // goes to the loopback SMTP trap.
+  "RESEND_API_KEY",
   "RESEND_AUDIENCE_ID",
   "NEXT_PUBLIC_SENTRY_DSN",
   "INVOICE_JWT_SECRET",
@@ -194,9 +203,13 @@ export function syntheticEnv(
     TYPESAFE_BASE_URL: providerStubBaseUrl,
     TYPESAFE_MODEL: "verify-stub",
     NANGO_BASE_URL: providerStubBaseUrl,
-    RESEND_BASE_URL: providerStubBaseUrl,
     POLAR_SERVER_URL: providerStubBaseUrl,
     POLAR_ENVIRONMENT: "sandbox",
+    // Transactional mail is fully configured, but only against the loopback
+    // SMTP trap: production-mode steps ignore AUTH_MAIL_SINK_PATH and send.
+    SMTP_HOST: SMTP_TRAP_HOST,
+    SMTP_PORT: String(smtpTrapPort),
+    SMTP_USER: "verify@localhost.test",
     AUTH_EMAIL_FROM: "InvoiceWise Verify <verify@localhost.test>",
     LOG_LEVEL: "info",
     BETTER_AUTH_URL: "http://localhost:31990",
@@ -233,6 +246,10 @@ export function syntheticEnv(
 
 let providerStubBaseUrl = "http://127.0.0.1:9";
 
+const SMTP_TRAP_HOST = "127.0.0.1";
+/** A closed loopback port until the verifier starts its SMTP trap. */
+let smtpTrapPort = 9;
+
 /** Points every supported provider SDK base URL at the loopback trap. */
 export function setProviderStubBaseUrl(url: string) {
   const parsed = assertLoopbackUrl("provider stub base URL", url);
@@ -240,6 +257,14 @@ export function setProviderStubBaseUrl(url: string) {
 }
 
 export const providerStubOrigin = () => providerStubBaseUrl;
+
+/** Points SMTP_PORT at the verifier's loopback SMTP trap. */
+export function setSmtpTrapPort(port: number) {
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new Error(`SMTP trap port must be a TCP port, received ${port}`);
+  }
+  smtpTrapPort = port;
+}
 
 /**
  * Verification must never be able to reach a live provider or a shared
@@ -250,7 +275,6 @@ export function assertSyntheticEnvironment(env: Record<string, string>) {
   const providerUrls = [
     "TYPESAFE_BASE_URL",
     "NANGO_BASE_URL",
-    "RESEND_BASE_URL",
     "POLAR_SERVER_URL",
   ] as const;
   for (const key of providerUrls) {
@@ -259,6 +283,16 @@ export function assertSyntheticEnvironment(env: Record<string, string>) {
       throw new Error(`${key} must be set to a closed loopback URL`);
     }
     assertLoopbackUrl(key, value);
+  }
+
+  const smtpHost = env.SMTP_HOST ?? "";
+  if (!isLoopbackHostname(smtpHost)) {
+    throw new Error(
+      `SMTP_HOST must be the loopback SMTP trap, received host "${smtpHost}"`,
+    );
+  }
+  if (!/^\d+$/.test(env.SMTP_PORT ?? "")) {
+    throw new Error("SMTP_PORT must be the loopback SMTP trap port");
   }
 
   for (const key of BLOCKED_PROVIDER_KEYS) {
@@ -270,7 +304,7 @@ export function assertSyntheticEnvironment(env: Record<string, string>) {
   }
 
   const expectedSecrets: Record<string, string> = {
-    RESEND_API_KEY: SYNTHETIC_SECRETS.RESEND_API_KEY,
+    SMTP_PASS: SYNTHETIC_SECRETS.SMTP_PASS,
     POLAR_ACCESS_TOKEN: SYNTHETIC_SECRETS.POLAR_ACCESS_TOKEN,
     TYPESAFE_API_KEY: SYNTHETIC_SECRETS.TYPESAFE_API_KEY,
     NANGO_SECRET_KEY: SYNTHETIC_SECRETS.NANGO_SECRET_KEY,
@@ -299,6 +333,7 @@ const SECRET_PATTERNS: [RegExp, string][] = [
     "postgresql://$1:[redacted]@",
   ],
   [/\bre_[A-Za-z0-9_]{12,}/g, "[redacted-resend-key]"],
+  [/\bSMTP_PASS=[^\s"']+/g, "SMTP_PASS=[redacted]"],
   [/\bpolar_[A-Za-z0-9_]{8,}/g, "[redacted-polar-token]"],
   [/\bnango_[A-Za-z0-9_]{8,}/g, "[redacted-nango-key]"],
   [/\bts_[A-Za-z0-9_]{8,}/g, "[redacted-typesafe-key]"],

@@ -13,6 +13,7 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [pending, setPending] = useState(false);
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string>();
   const isSignUp = mode === "sign-up";
 
   const rawReturnTo = searchParams.get("return_to");
@@ -25,6 +26,7 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
     event.preventDefault();
     setError(undefined);
     setMessage(undefined);
+    setUnverifiedEmail(undefined);
     setPending(true);
 
     const form = new FormData(event.currentTarget);
@@ -42,7 +44,13 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
     setPending(false);
 
     if (result.error) {
-      setError(result.error.message ?? "Authentication failed");
+      const failure = result.error.message ?? "Authentication failed";
+      setError(failure);
+      // A blocked sign-in is the moment a lost verification link matters, so
+      // offer the retry here instead of leaving the account stranded.
+      if (!isSignUp && /not verified/i.test(failure)) {
+        setUnverifiedEmail(email);
+      }
       return;
     }
 
@@ -52,6 +60,26 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
     }
 
     window.location.assign(returnTo);
+  }
+
+  async function resendVerification() {
+    if (!unverifiedEmail) return;
+
+    setError(undefined);
+    setPending(true);
+    const result = await authClient.sendVerificationEmail({
+      email: unverifiedEmail,
+      callbackURL: returnTo,
+    });
+    setPending(false);
+
+    if (result.error) {
+      setError(result.error.message ?? "Could not send the verification email");
+      return;
+    }
+
+    setMessage(`Verification sent to ${unverifiedEmail}.`);
+    setUnverifiedEmail(undefined);
   }
 
   return (
@@ -99,6 +127,17 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {message && <p className="text-sm text-emerald-600">{message}</p>}
+      {unverifiedEmail && (
+        <Button
+          className="w-full"
+          type="button"
+          variant="outline"
+          disabled={pending}
+          onClick={resendVerification}
+        >
+          Resend verification email
+        </Button>
+      )}
 
       <Button className="w-full" type="submit" disabled={pending}>
         {pending ? "Please wait…" : isSignUp ? "Create account" : "Sign in"}
