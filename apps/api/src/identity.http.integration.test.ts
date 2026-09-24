@@ -25,7 +25,7 @@ import type { Database, PrimaryDatabase } from "@invoicewise/db/client";
 import { type SmtpTrap, startSmtpTrap } from "@invoicewise/utils/smtp-trap";
 
 const testDatabaseUrl = process.env.IDENTITY_TEST_DATABASE_URL;
-const PORT = 31783;
+const PORT = Number(process.env.IDENTITY_TEST_PORT ?? 31783);
 const BASE = `http://localhost:${PORT}`;
 const AUTH_BASE = `${BASE}/api/auth`;
 

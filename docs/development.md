@@ -389,6 +389,18 @@ Requirements and isolation rules:
   bucket through the S3 API, so no `mc` container is needed. Override
   `VERIFY_POSTGRES_BASE`/`VERIFY_REDIS_URL`/`VERIFY_MINIO_ENDPOINT` to point at
   a different disposable stack (defaults are local: `localhost` for Postgres, `127.0.0.1` for Redis and MinIO).
+- Every port the command itself binds is per-run. The API executable and
+  dashboard origins are chosen free at start (or pinned with
+  `VERIFY_API_PORT` / `VERIFY_DASHBOARD_PORT`), the three HTTP regression suites
+  receive their own free ports through `PERMISSIONS_TEST_PORT`,
+  `INTAKE_TEST_PORT` and `IDENTITY_TEST_PORT`, and the delivery verifier's
+  webhook listener binds port 0. Two `bun run verify` runs in different
+  worktrees on one machine therefore cannot collide on app ports; give each run
+  its own backing stack by starting a second `ci-services.sh` with a distinct
+  `VERIFY_CONTAINER_PREFIX` and `VERIFY_PG_PORT`/`VERIFY_REDIS_PORT`/
+  `VERIFY_MINIO_PORT`, then point the run at it with
+  `VERIFY_POSTGRES_BASE`/`VERIFY_REDIS_URL`/`VERIFY_MINIO_ENDPOINT`. CI keeps
+  the default service ports and needs no overrides.
 - Every database is created and validated as disposable
   (`invoicewise_<name>_test`) before it is dropped or recreated. The command
   refuses loopback violations and protected names and never resets the

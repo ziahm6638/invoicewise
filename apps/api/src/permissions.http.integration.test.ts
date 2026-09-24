@@ -19,7 +19,7 @@ import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import type { Database, PrimaryDatabase } from "@invoicewise/db/client";
 
 const testDatabaseUrl = process.env.PERMISSIONS_TEST_DATABASE_URL;
-const PORT = 31777;
+const PORT = Number(process.env.PERMISSIONS_TEST_PORT ?? 31777);
 const BASE = `http://localhost:${PORT}`;
 
 if (testDatabaseUrl) {
