@@ -847,6 +847,53 @@ suite("account security over real HTTP", () => {
     expect(secret).toBeTruthy();
   });
 
+  test("only budgeted paths write rate-limit rows, and expired rows are pruned", async () => {
+    const { authRateLimits } = schema;
+    const rateLimitRowsFor = (ip: string) =>
+      primaryDb
+        .select({ key: authRateLimits.key, count: authRateLimits.count })
+        .from(authRateLimits)
+        .where(orm.like(authRateLimits.key, `${ip}|%`));
+    const account = await createAccount("rate-limit-rows");
+
+    const reader = "198.51.100.41";
+    for (let poll = 0; poll < 3; poll++) {
+      const session = await request("GET", "/api/auth/get-session", {
+        jar: account.jar,
+        ip: reader,
+      });
+      expect(session.status).toBe(200);
+    }
+    expect(await rateLimitRowsFor(reader)).toEqual([]);
+
+    const now = Date.now();
+    const abandoned = "198.51.100.42";
+    const returning = "198.51.100.43";
+    await primaryDb.insert(authRateLimits).values([
+      {
+        key: `${abandoned}|/sign-up/email`,
+        count: 5,
+        lastRequest: now - 60 * 60 * 1000,
+      },
+      {
+        key: `${returning}|/sign-in/email`,
+        count: 10,
+        lastRequest: now - 61 * 1000,
+      },
+    ]);
+
+    const signedIn = await passwordStep(
+      account.email,
+      account.password,
+      returning,
+    );
+    expect(signedIn.response.status).toBe(200);
+    expect(await rateLimitRowsFor(returning)).toEqual([
+      { key: `${returning}|/sign-in/email`, count: 1 },
+    ]);
+    expect(await rateLimitRowsFor(abandoned)).toEqual([]);
+  });
+
   test("no account-security message reached an SMTP server", () => {
     expect(smtpTrap.connections).toBe(0);
   });

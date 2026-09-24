@@ -25,6 +25,11 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
  * The two-factor plugin additionally caps each sign-in challenge at five
  * attempts and locks an account's second factor for 15 minutes after ten
  * consecutive failures, independent of the caller's IP.
+ *
+ * Rules match in order, so the trailing catch-all keeps every other path
+ * (session reads, sign-out, settings) out of `auth_rate_limits` entirely.
+ * Better Auth deletes rows older than the longest window whenever a budget
+ * rolls over, which keeps the table bounded without a scheduled job.
  */
 export const AUTH_RATE_LIMIT_RULES = {
   "/sign-in/*": { window: 60, max: 10 },
@@ -37,6 +42,7 @@ export const AUTH_RATE_LIMIT_RULES = {
   "/change-password": { window: 600, max: 10 },
   "/change-email": { window: 600, max: 5 },
   "/two-factor/*": { window: 60, max: 10 },
+  "/**": false,
 } as const;
 
 /**

@@ -246,7 +246,9 @@ plugin and session APIs; there is no custom factor or session store.
 - **Rate limits.** `AUTH_RATE_LIMIT_RULES` in `apps/api/src/auth-policy.ts`
   budgets sign-in, signup, reset, verification, password/email change and every
   `/two-factor/*` path per client IP, stored in `auth_rate_limits` so the
-  dashboard and API share one budget. The client IP is the first untrusted hop
+  dashboard and API share one budget. No other auth path (session reads,
+  sign-out, settings) touches that table, and rows older than the longest
+  window are deleted whenever a budget rolls over. The client IP is the first untrusted hop
   in `X-Forwarded-For`. The plugin also caps each sign-in challenge at five
   code attempts and locks the factor for 15 minutes after ten failures.
   Limiting is always on in production; elsewhere it is off unless
