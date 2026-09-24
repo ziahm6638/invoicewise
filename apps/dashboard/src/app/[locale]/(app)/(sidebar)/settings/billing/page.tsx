@@ -11,6 +11,20 @@ export const metadata: Metadata = {
 
 export default async function Billing() {
   const queryClient = getQueryClient();
+
+  const currentTeam = await queryClient.fetchQuery(
+    trpc.team.current.queryOptions(),
+  );
+
+  // Billing stays with the workspace owner.
+  if (!currentTeam?.permissions?.manageBilling) {
+    return (
+      <p className="text-sm text-[#606060]">
+        Only the workspace owner can manage billing.
+      </p>
+    );
+  }
+
   const user = await queryClient.fetchQuery(trpc.user.me.queryOptions());
 
   const team = user?.team;

@@ -21,77 +21,84 @@ const formatRange = (key: string) => {
   }
 };
 
-const items = {
+type SidebarSection = "1d" | "2d" | "7d" | "30d";
+type SidebarEntry = { id: string; title: string };
+
+const titleAt = (index: number) => chatExamples[index]?.title ?? "";
+
+const items: Record<SidebarSection, SidebarEntry[]> = {
   "1d": [
     {
       id: "1",
-      title: chatExamples.at(0).title,
+      title: titleAt(0),
     },
     {
       id: "2",
-      title: chatExamples.at(2).title,
+      title: titleAt(2),
     },
   ],
   "2d": [
     {
       id: "1",
-      title: chatExamples.at(3).title,
+      title: titleAt(3),
     },
     {
       id: "2",
-      title: chatExamples.at(4).title,
+      title: titleAt(4),
     },
   ],
   "7d": [
     {
       id: "1",
-      title: chatExamples.at(5).title,
+      title: titleAt(5),
     },
     {
       id: "2",
-      title: chatExamples.at(6).title,
+      title: titleAt(6),
     },
     {
       id: "3",
-      title: chatExamples.at(0).title,
+      title: titleAt(0),
     },
     {
       id: "4",
-      title: chatExamples.at(2).title,
+      title: titleAt(2),
     },
     {
       id: "5",
-      title: chatExamples.at(3).title,
+      title: titleAt(3),
     },
   ],
   "30d": [
     {
       id: "1",
-      title: chatExamples.at(2).title,
+      title: titleAt(2),
     },
     {
       id: "2",
-      title: chatExamples.at(3).title,
+      title: titleAt(3),
     },
     {
       id: "3",
-      title: chatExamples.at(4).title,
+      title: titleAt(4),
     },
     {
       id: "4",
-      title: chatExamples.at(5).title,
+      title: titleAt(5),
     },
     {
       id: "5",
-      title: chatExamples.at(6).title,
+      title: titleAt(6),
     },
   ],
 };
 
+const sections = Object.keys(items) as SidebarSection[];
+
 export function SidebarItems({ onSelect }: SidebarItemsProps) {
   return (
     <div className="overflow-auto relative h-full md:h-[410px] mt-4 scrollbar-hide p-4 pt-0 pb-[70px] flex flex-col space-y-6">
-      {!Object.keys(items).length && (
+      {!sections.length && (
         <div className="flex flex-col justify-center items-center h-full">
           <div className="flex flex-col items-center -mt-12 text-xs space-y-1">
             <span className="text-[#878787]">History</span>
@@ -100,7 +107,7 @@ export function SidebarItems({ onSelect }: SidebarItemsProps) {
         </div>
       )}
 
-      {Object.keys(items).map((key) => {
+      {sections.map((key) => {
         const section = items[key];
 
         return (

@@ -11,8 +11,15 @@ import {
   updateTeamByIdSchema,
   updateTeamMemberSchema,
 } from "@api/schemas/team";
-import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
 import {
+  adminProcedure,
+  createTRPCRouter,
+  ownerProcedure,
+  protectedProcedure,
+  workspaceProcedure,
+} from "@api/trpc/init";
+import {
+  TeamPermissionError,
   acceptTeamInvite,
   createTeam,
   createTeamInvites,
@@ -22,6 +29,7 @@ import {
   deleteTeamMember,
   getInvitesByEmail,
   getTeamById,
+  getTeamCapabilities,
   getTeamInvites,
   getTeamMembersByTeamId,
   getTeamsByUserId,
@@ -33,16 +41,32 @@ import { enqueueWorkflow, workflowKey } from "@invoicewise/jobs";
 import type { InviteTeamMembersPayload } from "@invoicewise/jobs/schema";
 import { TRPCError } from "@trpc/server";
 
+/** Maps DB-level invariant violations onto transport errors. */
+const toTRPCError = (error: unknown) =>
+  error instanceof TeamPermissionError
+    ? new TRPCError({ code: error.code, message: error.message })
+    : error;
+
 export const teamRouter = createTRPCRouter({
-  current: protectedProcedure.query(async ({ ctx: { db, teamId } }) => {
-    if (!teamId) {
-      return null;
-    }
+  current: protectedProcedure.query(
+    async ({ ctx: { db, teamId, teamRole } }) => {
+      if (!teamId) {
+        return null;
+      }
 
-    return getTeamById(db, teamId!);
-  }),
+      const team = await getTeamById(db, teamId!);
 
-  update: protectedProcedure
+      return team
+        ? {
+            ...team,
+            role: teamRole,
+            permissions: getTeamCapabilities(teamRole),
+          }
+        : null;
+    },
+  ),
+
+  update: adminProcedure
     .input(updateTeamByIdSchema)
     .mutation(async ({ ctx: { db, teamId }, input }) => {
       return updateTeamById(db, {
@@ -51,7 +75,7 @@ export const teamRouter = createTRPCRouter({
       });
     }),
 
-  members: protectedProcedure.query(async ({ ctx: { db, teamId } }) => {
+  members: workspaceProcedure.query(async ({ ctx: { db, teamId } }) => {
     return getTeamMembersByTeamId(db, teamId!);
   }),
 
@@ -109,44 +133,38 @@ export const teamRouter = createTRPCRouter({
     .input(leaveTeamSchema)
     .mutation(
       async ({ ctx: { db, requestHeaders, session, teamId }, input }) => {
-        const teamMembersData = await getTeamMembersByTeamId(db, input.teamId);
-
-        const currentUser = teamMembersData?.find(
-          (member) => member.user?.id === session.user.id,
-        );
-
-        const totalOwners = teamMembersData?.filter(
-          (member) => member.role === "owner",
-        ).length;
-
-        if (currentUser?.role === "owner" && totalOwners === 1) {
-          throw Error("Action not allowed");
-        }
-
-        const result = await leaveTeam(db, {
-          userId: session.user.id,
-          teamId: input.teamId,
-        });
-
-        if (input.teamId === teamId) {
-          await auth.api.setActiveOrganization({
-            body: { organizationId: null },
-            headers: requestHeaders,
+        try {
+          const result = await leaveTeam(db, {
+            userId: session.user.id,
+            teamId: input.teamId,
           });
-        }
 
-        return result;
+          if (input.teamId === teamId) {
+            await auth.api.setActiveOrganization({
+              body: { organizationId: null },
+              headers: requestHeaders,
+            });
+          }
+
+          return result;
+        } catch (error) {
+          throw toTRPCError(error);
+        }
       },
     ),
 
   acceptInvite: protectedProcedure
     .input(acceptTeamInviteSchema)
     .mutation(async ({ ctx: { db, session }, input }) => {
-      return acceptTeamInvite(db, {
-        id: input.id,
-        userId: session.user.id,
-        email: session.user.email!,
-      });
+      try {
+        return await acceptTeamInvite(db, {
+          id: input.id,
+          userId: session.user.id,
+          email: session.user.email!,
+        });
+      } catch (error) {
+        throw toTRPCError(error);
+      }
     }),
 
   declineInvite: protectedProcedure
@@ -158,13 +176,19 @@ export const teamRouter = createTRPCRouter({
       });
     }),
 
-  delete: protectedProcedure
+  delete: ownerProcedure
     .input(deleteTeamSchema)
     .mutation(async ({ ctx: { db, session }, input }) => {
-      const data = await deleteTeam(db, {
-        teamId: input.teamId,
-        userId: session.user.id,
-      });
+      let data: Awaited<ReturnType<typeof deleteTeam>>;
+
+      try {
+        data = await deleteTeam(db, {
+          teamId: input.teamId,
+          userId: session.user.id,
+        });
+      } catch (error) {
+        throw toTRPCError(error);
+      }
 
       if (!data) {
         throw new TRPCError({
@@ -176,30 +200,42 @@ export const teamRouter = createTRPCRouter({
       return data;
     }),
 
-  deleteMember: protectedProcedure
+  deleteMember: adminProcedure
     .input(deleteTeamMemberSchema)
-    .mutation(async ({ ctx: { db, teamId }, input }) => {
+    .mutation(async ({ ctx: { db, teamId, session }, input }) => {
       if (input.teamId !== teamId) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
 
-      return deleteTeamMember(db, {
-        teamId: input.teamId,
-        userId: input.userId,
-      });
+      try {
+        return await deleteTeamMember(db, {
+          teamId: input.teamId,
+          userId: input.userId,
+          actorUserId: session.user.id,
+        });
+      } catch (error) {
+        throw toTRPCError(error);
+      }
     }),
 
-  updateMember: protectedProcedure
+  updateMember: adminProcedure
     .input(updateTeamMemberSchema)
-    .mutation(async ({ ctx: { db, teamId }, input }) => {
+    .mutation(async ({ ctx: { db, teamId, session }, input }) => {
       if (input.teamId !== teamId) {
         throw new TRPCError({ code: "FORBIDDEN" });
       }
 
-      return updateTeamMember(db, input);
+      try {
+        return await updateTeamMember(db, {
+          ...input,
+          actorUserId: session.user.id,
+        });
+      } catch (error) {
+        throw toTRPCError(error);
+      }
     }),
 
-  teamInvites: protectedProcedure.query(async ({ ctx: { db, teamId } }) => {
+  teamInvites: workspaceProcedure.query(async ({ ctx: { db, teamId } }) => {
     return getTeamInvites(db, teamId!);
   }),
 
@@ -207,18 +243,25 @@ export const teamRouter = createTRPCRouter({
     return getInvitesByEmail(db, session.user.email!);
   }),
 
-  invite: protectedProcedure
+  invite: adminProcedure
     .input(inviteTeamMembersSchema)
     .mutation(async ({ ctx: { db, session, teamId, geo }, input }) => {
       const ip = geo.ip ?? "127.0.0.1";
 
-      const data = await createTeamInvites(db, {
-        teamId: teamId!,
-        invites: input.map((invite) => ({
-          ...invite,
-          invitedBy: session.user.id,
-        })),
-      });
+      let data: Awaited<ReturnType<typeof createTeamInvites>>;
+
+      try {
+        data = await createTeamInvites(db, {
+          teamId: teamId!,
+          actorUserId: session.user.id,
+          invites: input.map((invite) => ({
+            ...invite,
+            invitedBy: session.user.id,
+          })),
+        });
+      } catch (error) {
+        throw toTRPCError(error);
+      }
 
       const results = data?.results ?? [];
       const skippedInvites = data?.skippedInvites ?? [];
@@ -259,12 +302,17 @@ export const teamRouter = createTRPCRouter({
       };
     }),
 
-  deleteInvite: protectedProcedure
+  deleteInvite: adminProcedure
     .input(deleteTeamInviteSchema)
-    .mutation(async ({ ctx: { db, teamId }, input }) => {
-      return deleteTeamInvite(db, {
-        teamId: teamId!,
-        id: input.id,
-      });
+    .mutation(async ({ ctx: { db, teamId, session }, input }) => {
+      try {
+        return await deleteTeamInvite(db, {
+          teamId: teamId!,
+          id: input.id,
+          actorUserId: session.user.id,
+        });
+      } catch (error) {
+        throw toTRPCError(error);
+      }
     }),
 });

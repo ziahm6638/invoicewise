@@ -6,12 +6,13 @@ import { Icons } from "@invoicewise/ui/icons";
 export type Story = {
   id: number;
   title: string;
-  description: string;
+  description?: string;
   name: string;
   company: string;
   country: string;
   src: string;
   video?: string;
+  content?: { type: string; content: string }[];
 };
 
 export function StoryCard({

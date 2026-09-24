@@ -7,6 +7,7 @@ import { OAuthApplicationEditSheet } from "@/components/sheets/oauth-application
 import { DataTable } from "@/components/tables/api-keys";
 import { OAuthDataTable } from "@/components/tables/oauth-applications";
 import { batchPrefetch, trpc } from "@/trpc/server";
+import { getQueryClient } from "@/trpc/server";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -14,6 +15,19 @@ export const metadata: Metadata = {
 };
 
 export default async function Page() {
+  const team = await getQueryClient().fetchQuery(
+    trpc.team.current.queryOptions(),
+  );
+
+  // API keys and OAuth applications are workspace integrations: admin and up.
+  if (!team?.permissions?.manageIntegrations) {
+    return (
+      <p className="text-sm text-[#606060]">
+        Only workspace owners and admins can manage API keys and applications.
+      </p>
+    );
+  }
+
   batchPrefetch([
     trpc.apiKeys.get.queryOptions(),
     trpc.oauthApplications.list.queryOptions(),

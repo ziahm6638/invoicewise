@@ -39,6 +39,7 @@ import "@tanstack/react-table";
 import { useTRPC } from "@/trpc/client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import { memberRowPermissions } from "./permissions";
 
 type TeamMember = RouterOutputs["team"]["members"][number];
 
@@ -130,20 +131,30 @@ export const columns: ColumnDef<TeamMember>[] = [
         }),
       );
 
+      const { canManageRow, canRemoveRow, assignableRoles } =
+        memberRowPermissions({
+          canManageMembers: meta?.canManageMembers ?? false,
+          currentUserRole: meta?.currentUser?.role,
+          currentUserId: meta?.currentUser?.user?.id,
+          targetUserId: row.original.user?.id,
+          targetRole: row.original.role,
+          totalOwners: meta?.totalOwners ?? 0,
+        });
+
+      const canManageMembers = meta?.canManageMembers ?? false;
+      const isSelf = meta?.currentUser?.user?.id === row.original.user?.id;
+
       return (
         <div className="flex justify-end">
           <div className="flex space-x-2 items-center">
-            {(meta?.currentUser?.role === "owner" &&
-              meta?.currentUser?.user?.id !== row.original.user?.id) ||
-            (meta?.currentUser?.role === "owner" &&
-              (meta?.totalOwners ?? 0) > 1) ? (
+            {canManageRow ? (
               <Select
                 value={row.original.role ?? undefined}
                 onValueChange={(role) => {
                   updateMemberMutation.mutate({
                     userId: row.original.user?.id!,
                     teamId: row.original.teamId!,
-                    role: role as "owner" | "member",
+                    role: role as "owner" | "admin" | "member",
                   });
                 }}
               >
@@ -153,8 +164,11 @@ export const columns: ColumnDef<TeamMember>[] = [
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="owner">Owner</SelectItem>
-                  <SelectItem value="member">Member</SelectItem>
+                  {assignableRoles.map((role) => (
+                    <SelectItem key={role} value={role}>
+                      {role.charAt(0).toUpperCase() + role.slice(1)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             ) : (
@@ -162,7 +176,7 @@ export const columns: ColumnDef<TeamMember>[] = [
                 {t(`roles.${row.original.role || "member"}`)}
               </span>
             )}
-            {meta?.currentUser?.role === "owner" && (
+            {canManageMembers && (canRemoveRow || isSelf) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="h-8 w-8 p-0">
@@ -170,7 +184,7 @@ export const columns: ColumnDef<TeamMember>[] = [
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  {meta?.currentUser?.user?.id !== row.original.user?.id && (
+                  {canRemoveRow && (
                     <AlertDialog>
                       <DropdownMenuItem
                         className="text-destructive"
@@ -211,7 +225,7 @@ export const columns: ColumnDef<TeamMember>[] = [
                     </AlertDialog>
                   )}
 
-                  {meta?.currentUser?.user?.id === row.original.user?.id && (
+                  {isSelf && (
                     <AlertDialog>
                       <DropdownMenuItem
                         className="text-destructive"

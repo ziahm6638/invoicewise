@@ -148,20 +148,13 @@ export const deleteInboxSchema = z
     description: "Schema for deleting an inbox item by its ID.",
   });
 
-export const createInboxItemSchema = z.object({
-  filename: z.string(),
-  mimetype: z.string(),
-  size: z.number(),
-  filePath: z.array(z.string()),
+/**
+ * Retry takes only the server-owned inbox id. Storage path, content type and
+ * size are always resolved from the persisted workspace binding.
+ */
+export const retryInboxSchema = z.object({
+  id: z.string().uuid(),
 });
-
-export const processAttachmentsSchema = z.array(
-  z.object({
-    mimetype: z.string(),
-    size: z.number(),
-    filePath: z.array(z.string()),
-  }),
-);
 
 export const updateInboxSchema = z.object({
   id: z.string().openapi({
@@ -170,8 +163,10 @@ export const updateInboxSchema = z.object({
       name: "id",
     },
   }),
+  // Deletion is not a status edit: it must run the deletion lifecycle
+  // (tombstone, object removal, replay identity). Use the delete endpoint.
   status: z
-    .enum(["new", "archived", "processing", "done", "pending", "deleted"])
+    .enum(["new", "archived", "processing", "done", "pending"])
     .optional(),
   displayName: z.string().optional(),
   currency: z.string().optional(),

@@ -1,24 +1,15 @@
 "use client";
 
-import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
-import { resumableUpload } from "@/utils/upload";
 import { cn } from "@invoicewise/ui/cn";
 import { useToast } from "@invoicewise/ui/use-toast";
-import { stripSpecialCharacters } from "@invoicewise/utils";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";
 
-type UploadResult = {
-  filename: string;
-  file: File;
-};
-
-type ProcessAttachmentInput = {
-  filePath: string[];
-  mimetype: string;
-  size: number;
+type UploadOutcome = {
+  fileName: string;
+  error: string | null;
 };
 
 type Props = {
@@ -26,21 +17,45 @@ type Props = {
   onUploadComplete?: () => void;
 };
 
+/**
+ * Intake is a single server call per file: the server owns the object path,
+ * validates the real bytes and only reports success once the processing
+ * intent is durable.
+ */
+async function uploadInvoice(file: File): Promise<UploadOutcome> {
+  const formData = new FormData();
+  formData.set("file", file);
+
+  try {
+    const response = await fetch("/api/storage/upload", {
+      method: "POST",
+      body: formData,
+    });
+    const body = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+
+    if (!response.ok) {
+      return {
+        fileName: file.name,
+        error: body?.error ?? "Upload failed. Try again.",
+      };
+    }
+
+    return { fileName: file.name, error: null };
+  } catch {
+    return { fileName: file.name, error: "Upload failed. Try again." };
+  }
+}
+
 export function UploadZone({ children, onUploadComplete }: Props) {
   const trpc = useTRPC();
-  const { data: user } = useUserQuery();
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState(0);
   const [showProgress, setShowProgress] = useState(false);
   const [toastId, setToastId] = useState<string | undefined>(undefined);
   const uploadProgress = useRef<number[]>([]);
   const { toast, dismiss, update } = useToast();
-  const processAttachmentsMutation = useMutation(
-    trpc.inbox.processAttachments.mutationOptions(),
-  );
-  const createInboxItemMutation = useMutation(
-    trpc.inbox.create.mutationOptions(),
-  );
 
   useEffect(() => {
     if (!toastId && showProgress) {
@@ -65,101 +80,62 @@ export function UploadZone({ children, onUploadComplete }: Props) {
   }, [showProgress, progress, toastId]);
 
   const onDrop = async (files: File[]) => {
-    // NOTE: If onDropRejected
     if (!files.length) {
       return;
     }
 
-    // Set default progress
     uploadProgress.current = files.map(() => 0);
-
+    setProgress(0);
     setShowProgress(true);
 
-    const path = [user?.teamId, "inbox"] as string[];
+    let completed = 0;
+    const outcomes = await Promise.all(
+      files.map(async (file) => {
+        const outcome = await uploadInvoice(file);
+        completed += 1;
+        setProgress(Math.round((completed / files.length) * 100));
+        return outcome;
+      }),
+    );
 
-    try {
-      // First, create inbox items immediately for instant feedback
-      const inboxItems = await Promise.all(
-        files.map(async (file: File) => {
-          // Use the same filename processing as resumableUpload
-          const processedFilename = stripSpecialCharacters(file.name);
-          const filePath = [...path, processedFilename];
-          return createInboxItemMutation.mutateAsync({
-            filename: processedFilename,
-            mimetype: file.type,
-            size: file.size,
-            filePath,
-          });
-        }),
-      );
+    // Refresh inbox to show the accepted records (and any rejected attempt).
+    queryClient.invalidateQueries({ queryKey: trpc.inbox.get.queryKey() });
 
-      // Invalidate inbox queries to show new items immediately
-      queryClient.invalidateQueries({
-        queryKey: trpc.inbox.get.queryKey(),
-      });
+    uploadProgress.current = [];
+    setProgress(0);
+    setShowProgress(false);
+    setToastId(undefined);
+    dismiss(toastId);
 
-      const results = (await Promise.all(
-        files.map(async (file: File, idx: number) =>
-          resumableUpload({
-            bucket: "vault",
-            path,
-            file,
-            onProgress: (bytesUploaded, bytesTotal) => {
-              uploadProgress.current[idx] = (bytesUploaded / bytesTotal) * 100;
+    const failed = outcomes.filter(
+      (outcome): outcome is UploadOutcome & { error: string } =>
+        outcome.error !== null,
+    );
 
-              const _progress = uploadProgress.current.reduce(
-                (acc, currentValue) => {
-                  return acc + currentValue;
-                },
-                0,
-              );
-
-              setProgress(Math.round(_progress / files.length));
-            },
-          }),
-        ),
-      )) as UploadResult[];
-
-      // Trigger the upload jobs
-      processAttachmentsMutation.mutate(
-        results.map(
-          (result): ProcessAttachmentInput => ({
-            filePath: [...path, result.filename],
-            mimetype: result.file.type,
-            size: result.file.size,
-          }),
-        ),
-      );
-
-      // Reset once done
-      uploadProgress.current = [];
-
-      setProgress(0);
+    const first = failed.at(0);
+    if (first) {
       toast({
-        title: "Upload successful.",
+        duration: 5000,
+        variant: "error",
+        title:
+          failed.length === 1
+            ? `${first.fileName} was not accepted`
+            : `${failed.length} files were not accepted`,
+        description:
+          failed.length === 1
+            ? first.error
+            : `${first.fileName}: ${first.error}`,
+      });
+    }
+
+    if (failed.length < files.length) {
+      toast({
+        title:
+          failed.length === 0 ? "Upload successful." : "Some files uploaded.",
         variant: "success",
         duration: 2000,
       });
-
-      setShowProgress(false);
-      setToastId(undefined);
-      dismiss(toastId);
       onUploadComplete?.();
-    } catch (error) {
-      // Refresh inbox to show current state after error
-      queryClient.invalidateQueries({
-        queryKey: trpc.inbox.get.queryKey(),
-      });
-
-      setShowProgress(false);
-      setToastId(undefined);
-      dismiss(toastId);
-
-      toast({
-        duration: 2500,
-        variant: "error",
-        title: "Something went wrong please try again.",
-      });
     }
   };
 
@@ -185,7 +161,8 @@ export function UploadZone({ children, onUploadComplete }: Props) {
     maxSize: 5000000, // 5MB
     maxFiles: 25,
     accept: {
-      "image/*": [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".avif"],
+      "image/jpeg": [".jpg", ".jpeg"],
+      "image/png": [".png"],
       "application/pdf": [".pdf"],
     },
   });

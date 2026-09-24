@@ -5,7 +5,6 @@ import { useTRPC } from "@/trpc/client";
 import { Avatar, AvatarFallback, AvatarImage } from "@invoicewise/ui/avatar";
 import { cn } from "@invoicewise/ui/cn";
 import { Icons } from "@invoicewise/ui/icons";
-import { stripSpecialCharacters } from "@invoicewise/utils";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useRef, useState } from "react";
@@ -45,11 +44,9 @@ export const AvatarUpload = forwardRef<HTMLInputElement, Props>(
       const { files } = evt.target;
       const selectedFile = files as FileList;
 
-      const filename = stripSpecialCharacters(selectedFile[0]?.name ?? "");
-
       const { url } = await uploadFile({
         bucket: "avatars",
-        path: [userId, filename],
+        kind: "avatar",
         file: selectedFile[0] as File,
       });
 

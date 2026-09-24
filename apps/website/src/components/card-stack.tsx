@@ -8,13 +8,14 @@ import {
   TooltipTrigger,
 } from "@invoicewise/ui/tooltip";
 import { motion } from "framer-motion";
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
-let interval: any;
+let interval: ReturnType<typeof setInterval> | undefined;
 
 type Card = {
   id: number;
-  content: React.ReactNode;
+  content: ReactNode;
   name: string;
 };
 
@@ -30,7 +31,8 @@ export const CardStack = ({
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const CARD_OFFSET = isDesktop ? 10 : 5;
   const SCALE_FACTOR = scaleFactor || 0.06;
-  const [cards, setCards] = useState<Card[]>([items.at(0)]);
+  const firstCard = items[0];
+  const [cards, setCards] = useState<Card[]>(firstCard ? [firstCard] : []);
 
   useEffect(() => {
     startFlipping();
@@ -49,14 +51,21 @@ export const CardStack = ({
     }, 5000);
   };
 
-  const onChangeCardByIndex = (index) => {
+  const onChangeCardByIndex = (index: number) => {
     const item = cards.at(index);
+    if (!item) return;
     setCards([item, ...cards.slice(0, index), ...cards.slice(index + 1)]);
   };
 
-  const onChangeCard = (item) => {
+  const onChangeCard = (item: Card) => {
     const index = cards.findIndex((card) => card.id === item.id);
+    if (index < 0) return;
     setCards([item, ...cards.slice(0, index), ...cards.slice(index + 1)]);
+  };
+
+  const selectCard = (id: number) => {
+    const target = items.find((card) => card.id === id);
+    if (target) onChangeCard(target);
   };
 
   // TODO: Get screen width
@@ -75,7 +84,7 @@ export const CardStack = ({
               display: index > 2 ? "none" : "block",
             }}
             whileHover={{
-              top: index > 0 && index > 0 && index * -CARD_OFFSET - 30,
+              top: index > 0 ? index * -CARD_OFFSET - 30 : 0,
               transition: { duration: 0.3 },
             }}
             animate={{
@@ -91,7 +100,7 @@ export const CardStack = ({
                   <button
                     type="button"
                     className="w-[35px] h-[20px] z-20 absolute top-[75px] left-[8px]"
-                    onClick={() => onChangeCard(cards.find((c) => c.id === 1))}
+                    onClick={() => selectCard(1)}
                   >
                     <span className="sr-only">Overview</span>
                   </button>
@@ -110,7 +119,7 @@ export const CardStack = ({
                   <button
                     type="button"
                     className="w-[35px] h-[20px] z-20 absolute top-[105px] left-[8px]"
-                    onClick={() => onChangeCard(cards.find((c) => c.id === 5))}
+                    onClick={() => selectCard(5)}
                   >
                     <span className="sr-only">Transactions</span>
                   </button>
@@ -129,7 +138,7 @@ export const CardStack = ({
                   <button
                     type="button"
                     className="w-[35px] h-[20px] z-20 absolute top-[135px] left-[8px]"
-                    onClick={() => onChangeCard(cards.find((c) => c.id === 3))}
+                    onClick={() => selectCard(3)}
                   >
                     <span className="sr-only">Inbox</span>
                   </button>
@@ -148,7 +157,7 @@ export const CardStack = ({
                   <button
                     type="button"
                     className="w-[35px] h-[20px] z-20 absolute top-[170px] left-[8px]"
-                    onClick={() => onChangeCard(cards.find((c) => c.id === 2))}
+                    onClick={() => selectCard(2)}
                   >
                     <span className="sr-only">Tracker</span>
                   </button>
@@ -167,7 +176,7 @@ export const CardStack = ({
                   <button
                     type="button"
                     className="w-[35px] h-[20px] z-20 absolute top-[230px] left-[8px]"
-                    onClick={() => onChangeCard(cards.find((c) => c.id === 4))}
+                    onClick={() => selectCard(4)}
                   >
                     <span className="sr-only">Vault</span>
                   </button>

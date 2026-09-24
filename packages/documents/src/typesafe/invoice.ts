@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { extractText, getDocumentProxy } from "unpdf";
+import { extractPdfTextIsolated } from "../isolated";
 import type { GetDocumentRequest } from "../types";
 import {
   TypeSafe,
@@ -121,6 +121,15 @@ type Candidate<T> = {
 
 const ABSENT = "absent";
 const MAX_TEXT_LENGTH = 60_000;
+
+/** Bounds for the isolated PDF text extraction used by the invoice pipeline. */
+const PDF_TEXT_LIMITS = {
+  timeoutMs: 20_000,
+  maxPages: 50,
+  maxPageDimension: 10_000,
+  maxTotalPixels: 100_000_000,
+  maxChars: 400_000,
+} as const;
 
 export const DEFAULT_INVOICE_JUDGMENTS: readonly InvoiceJudgmentQuestion[] = [
   {
@@ -811,11 +820,19 @@ const loadPdfText = (documentUrl: string) =>
       });
       if (!response.ok)
         throw new Error(`Unable to fetch PDF (${response.status})`);
-      const pdf = await getDocumentProxy(await response.arrayBuffer());
-      const { text } = await extractText(pdf);
-      const value = (Array.isArray(text) ? text.join("\n") : text)
-        .replaceAll("\u0000", "")
-        .trim();
+      // Text extraction runs in a killable worker with explicit output
+      // bounds: pdf.js cannot be interrupted on this thread in Node/Bun, and a
+      // hostile PDF must not pin the extraction process.
+      const extracted = await extractPdfTextIsolated(
+        new Uint8Array(await response.arrayBuffer()),
+        PDF_TEXT_LIMITS,
+      );
+      if (!extracted.ok) {
+        throw new Error(
+          `PDF text extraction failed (${extracted.code}): ${extracted.message}`,
+        );
+      }
+      const value = extracted.result.text.replaceAll("\u0000", "").trim();
       if (!value) throw new Error("PDF contains no extractable text");
       return value;
     },

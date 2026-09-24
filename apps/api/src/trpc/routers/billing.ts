@@ -1,10 +1,10 @@
 import { getBillingOrdersSchema } from "@api/schemas/billing";
-import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
+import { createTRPCRouter, ownerProcedure } from "@api/trpc/init";
 import { api } from "@api/utils/polar";
 import { z } from "zod";
 
 export const billingRouter = createTRPCRouter({
-  orders: protectedProcedure
+  orders: ownerProcedure
     .input(getBillingOrdersSchema)
     .query(async ({ input, ctx: { teamId } }) => {
       try {
@@ -61,7 +61,7 @@ export const billingRouter = createTRPCRouter({
       }
     }),
 
-  getInvoice: protectedProcedure
+  getInvoice: ownerProcedure
     .input(z.string())
     .mutation(async ({ input: orderId, ctx: { teamId } }) => {
       try {
@@ -110,7 +110,7 @@ export const billingRouter = createTRPCRouter({
       }
     }),
 
-  checkInvoiceStatus: protectedProcedure
+  checkInvoiceStatus: ownerProcedure
     .input(z.string())
     .query(async ({ input: orderId, ctx: { teamId } }) => {
       try {

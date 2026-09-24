@@ -1,5 +1,6 @@
 "use client";
 
+import { useTeamQuery } from "@/hooks/use-team";
 import { useZodForm } from "@/hooks/use-zod-form";
 import { useTRPC } from "@/trpc/client";
 import { Button } from "@invoicewise/ui/button";
@@ -23,7 +24,7 @@ const formSchema = z.object({
   invites: z.array(
     z.object({
       email: z.string().email(),
-      role: z.enum(["owner", "member"]),
+      role: z.enum(["owner", "admin", "member"]),
     }),
   ),
 });
@@ -37,6 +38,10 @@ export function InviteForm({ onSuccess, skippable = true }: InviteFormProps) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { data: team } = useTeamQuery();
+
+  // Only an owner may invite another owner; the server rejects it regardless.
+  const canInviteOwner = team?.role === "owner";
 
   const inviteMutation = useMutation(
     trpc.team.invite.mutationOptions({
@@ -55,12 +60,12 @@ export function InviteForm({ onSuccess, skippable = true }: InviteFormProps) {
         } else if (data.sent > 0 && data.skipped > 0) {
           toast({
             title: "Invites partially sent",
-            description: `${data.sent} invite${data.sent > 1 ? "s" : ""} sent, ${data.skipped} skipped (already members or invited)`,
+            description: `${data.sent} invite${data.sent > 1 ? "s" : ""} sent, ${data.skipped} skipped (already members, invited, or a role you cannot grant)`,
           });
         } else if (data.sent === 0 && data.skipped > 0) {
           toast({
             title: "No invites sent",
-            description: `All ${data.skipped} invite${data.skipped > 1 ? "s" : ""} were skipped (already members or invited)`,
+            description: `All ${data.skipped} invite${data.skipped > 1 ? "s" : ""} were skipped (already members, invited, or a role you cannot grant)`,
           });
         }
 
@@ -133,7 +138,10 @@ export function InviteForm({ onSuccess, skippable = true }: InviteFormProps) {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="owner">Owner</SelectItem>
+                      {canInviteOwner && (
+                        <SelectItem value="owner">Owner</SelectItem>
+                      )}
+                      <SelectItem value="admin">Admin</SelectItem>
                       <SelectItem value="member">Member</SelectItem>
                     </SelectContent>
                   </Select>

@@ -36,6 +36,6 @@
   "devDependencies": {
     "@invoicewise/tsconfig": "workspace:*",
     "@types/node": "^22.15.29",
-    "@types/react": "19.1.6"
+    "@types/react": "19.1.8"
   }
 }

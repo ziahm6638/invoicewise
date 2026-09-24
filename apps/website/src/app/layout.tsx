@@ -10,7 +10,7 @@ import { Provider as Analytics } from "@invoicewise/events/client";
 import { GeistMono } from "geist/font/mono";
 import { GeistSans } from "geist/font/sans";
 import type { Metadata } from "next";
-import type { ReactElement } from "react";
+import type { ReactNode } from "react";
 import { baseUrl } from "./sitemap";
 
 export const metadata: Metadata = {
@@ -80,7 +80,7 @@ export const viewport = {
   ],
 };
 
-export default function Layout({ children }: { children: ReactElement }) {
+export default function Layout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body

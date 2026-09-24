@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from "@invoicewise/ui/select";
 import Image from "next/image";
-import { useRef, useState } from "react";
+import { type MutableRefObject, useRef, useState } from "react";
 import { useDraggable } from "react-use-draggable-scroll";
 
 const assets = [
@@ -98,7 +98,7 @@ const repeated = [...assets, ...assets, ...assets, ...assets, ...assets];
 
 export function BrandCanvas() {
   const [value, setValue] = useState("https://cdn.midday.ai/all.zip");
-  const ref = useRef(undefined);
+  const ref = useRef<HTMLDivElement>(null) as MutableRefObject<HTMLDivElement>;
   const { events } = useDraggable(ref);
 
   return (

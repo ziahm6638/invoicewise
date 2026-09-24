@@ -1,8 +1,7 @@
 import { logger } from "@/utils/logger";
 import { resend } from "@api/services/resend";
-import { db } from "@invoicewise/db/client";
+import { db, primaryDb } from "@invoicewise/db/client";
 import { teams } from "@invoicewise/db/schema";
-import { upload } from "@invoicewise/db/storage";
 import { getAllowedAttachments } from "@invoicewise/documents";
 import { LogEvents } from "@invoicewise/events/events";
 import { setupAnalytics } from "@invoicewise/events/server";
@@ -10,7 +9,11 @@ import {
   getInboxIdFromEmail,
   inboxWebhookPostSchema,
 } from "@invoicewise/inbox";
-import { enqueueWorkflow, workflowKey } from "@invoicewise/jobs";
+import {
+  acceptIntakeUpload,
+  defaultIntakeStorage,
+} from "@invoicewise/jobs/intake";
+import { isTransientIntakeFailure } from "@invoicewise/jobs/intake-failure";
 import { getExtensionFromMimeType } from "@invoicewise/utils";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -125,45 +128,17 @@ export async function POST(req: Request) {
     // Transform and upload files, filtering out attachments smaller than 100kb except PDFs
     // This helps avoid processing small images like logos, favicons and tracking pixels while keeping all PDFs for processing
     // Note: application/octet-stream is also allowed regardless of size since PDFs are often sent with this generic MIME type
-    const uploadedAttachments = allowedAttachments
-      ?.filter(
+    const candidateAttachments =
+      allowedAttachments?.filter(
         (attachment) =>
           !(
             attachment.ContentLength < 100000 &&
             attachment.ContentType !== "application/pdf" &&
             attachment.ContentType !== "application/octet-stream"
           ),
-      )
-      ?.map(async (attachment) => {
-        // Add a random 4 character string to the end of the file name
-        // to make it unique before the extension
-        const hasExtension = /\.[^.]+$/.test(attachment.Name);
-        const uniqueFileName = hasExtension
-          ? attachment.Name.replace(
-              /(\.[^.]+)$/,
-              (ext) => `_${nanoid(4)}${ext}`,
-            )
-          : `${attachment.Name}_${nanoid(4)}${getExtensionFromMimeType(attachment.ContentType)}`;
+      ) ?? [];
 
-        const data = await upload({
-          bucket: "vault",
-          path: `${teamId}/inbox/${uniqueFileName}`,
-          file: Buffer.from(attachment.Content, "base64"),
-        });
-
-        return {
-          // NOTE: If we can't parse the name using OCR this will be the fallback name
-          display_name: Subject || attachment.Name,
-          team_id: teamId,
-          file_path: data.path.split("/"),
-          file_name: uniqueFileName,
-          content_type: attachment.ContentType,
-          reference_id: `${MessageID}_${attachment.Name}`,
-          size: attachment.ContentLength,
-        };
-      });
-
-    if (!uploadedAttachments?.length) {
+    if (!candidateAttachments.length) {
       logger("No uploaded attachments");
 
       return NextResponse.json({
@@ -171,23 +146,57 @@ export async function POST(req: Request) {
       });
     }
 
-    const insertData = await Promise.all(uploadedAttachments ?? []);
+    // Attachments go through intake one at a time. The isolated PDF parser
+    // admits a small bounded number of documents, so validating every
+    // attachment of a large email at once would exhaust admission and turn
+    // every provider retry into the same 503.
+    const intakeResults: Awaited<ReturnType<typeof acceptIntakeUpload>>[] = [];
+    for (const [index, attachment] of candidateAttachments.entries()) {
+      // Add a random 4 character string to the end of the file name
+      // to make it unique before the extension
+      const hasExtension = /\.[^.]+$/.test(attachment.Name);
+      const uniqueFileName = hasExtension
+        ? attachment.Name.replace(/(\.[^.]+)$/, (ext) => `_${nanoid(4)}${ext}`)
+        : `${attachment.Name}_${nanoid(4)}${getExtensionFromMimeType(attachment.ContentType)}`;
 
-    await Promise.all(
-      insertData.map((item) =>
-        enqueueWorkflow(db, {
-          name: "process-attachment",
+      // Intake owns object identity, validation and the processing intent.
+      intakeResults.push(
+        await acceptIntakeUpload(primaryDb, defaultIntakeStorage, {
           teamId,
-          idempotencyKey: workflowKey.attachment(teamId, item.file_path!),
-          payload: {
-            filePath: item.file_path!,
-            mimetype: item.content_type!,
-            size: item.size!,
-            teamId,
-          },
+          bytes: new Uint8Array(Buffer.from(attachment.Content, "base64")),
+          declaredMimeType: attachment.ContentType,
+          // NOTE: If we can't parse the name using OCR this will be the fallback name
+          displayName: Subject || attachment.Name,
+          fileName: uniqueFileName,
+          // Two same-named attachments in one message are separate
+          // occurrences, and provider identity is workspace scoped.
+          referenceId: `${MessageID}_${index}_${attachment.Name}`,
         }),
-      ),
-    );
+      );
+    }
+
+    let transientFailures = 0;
+
+    for (const result of intakeResults) {
+      if (result.status !== "rejected") continue;
+
+      // A transient storage/enqueue failure is recoverable: tell the provider
+      // to retry instead of silently losing the attachment. Permanent
+      // rejections stay visible in the log and are not retried.
+      if (isTransientIntakeFailure(result.code)) {
+        transientFailures += 1;
+      }
+      logger(`Attachment rejected (${result.code}): ${result.message}`);
+    }
+
+    if (transientFailures > 0) {
+      return NextResponse.json(
+        {
+          error: `${transientFailures} attachment(s) could not be stored; retry the delivery`,
+        },
+        { status: 503 },
+      );
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
 

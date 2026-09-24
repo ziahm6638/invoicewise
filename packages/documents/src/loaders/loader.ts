@@ -3,8 +3,17 @@ import { PPTXLoader } from "@langchain/community/document_loaders/fs/pptx";
 import { Mistral } from "@mistralai/mistralai";
 import { TextLoader } from "langchain/document_loaders/fs/text";
 import { parseOfficeAsync } from "officeparser";
-import { extractText, getDocumentProxy } from "unpdf";
+import { extractPdfTextIsolated } from "../isolated";
 import { cleanText, extractTextFromRtf } from "../utils";
+
+/** Bounds for the isolated PDF text extraction task. */
+const PDF_EXTRACTION_LIMITS = {
+  timeoutMs: 20_000,
+  maxPages: 50,
+  maxPageDimension: 10_000,
+  maxTotalPixels: 100_000_000,
+  maxChars: 400_000,
+} as const;
 
 // Currently, the Vercel AI SDK doesn't support base64-encoded PDF files
 // And here we only have the Blob object
@@ -23,11 +32,27 @@ export async function loadDocument({
     case "application/pdf":
     case "application/x-pdf": {
       const arrayBuffer = await content.arrayBuffer();
-      const pdf = await getDocumentProxy(arrayBuffer);
+      // Text extraction runs in a killable worker: pdf.js cannot be
+      // interrupted on this thread, and a hostile PDF must not pin the
+      // extraction worker.
+      const extracted = await extractPdfTextIsolated(
+        new Uint8Array(arrayBuffer),
+        {
+          timeoutMs: PDF_EXTRACTION_LIMITS.timeoutMs,
+          maxPages: PDF_EXTRACTION_LIMITS.maxPages,
+          maxPageDimension: PDF_EXTRACTION_LIMITS.maxPageDimension,
+          maxTotalPixels: PDF_EXTRACTION_LIMITS.maxTotalPixels,
+          maxChars: PDF_EXTRACTION_LIMITS.maxChars,
+        },
+      );
 
-      const { text } = await extractText(pdf, {
-        mergePages: true,
-      });
+      if (!extracted.ok) {
+        throw new Error(
+          `PDF text extraction failed (${extracted.code}): ${extracted.message}`,
+        );
+      }
+
+      const text = extracted.result.text;
 
       // Unsupported Unicode escape sequence
       document = text.replaceAll("\u0000", "");

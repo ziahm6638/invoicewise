@@ -6,6 +6,7 @@ import {
   getInvoiceAccountingStatus,
   getInvoiceDeliveryStatus,
   getInvoiceExportRows,
+  isValidDocumentBinding,
 } from "@invoicewise/db/queries";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
 import {
@@ -183,6 +184,7 @@ export class InvoiceStorage extends Context.Tag("invoicewise/InvoiceStorage")<
       path: string;
       expireIn: number;
       download: boolean;
+      inboxId: string;
     }) => Effect.Effect<string, InvoiceReadError>;
   }
 >() {}
@@ -325,6 +327,7 @@ export const InvoiceStorageLive = Layer.effect(
               bucket: input.bucket,
               path: input.path,
               expireIn: input.expireIn,
+              inboxId: input.inboxId,
               options: { download: input.download },
             }),
           catch: () =>
@@ -452,7 +455,10 @@ export const InvoiceReadLayer = Layer.effect(
             new InvoiceNotFound({ error: "Invoice not found" }),
           );
         }
-        if (!item.filePath?.length) {
+        if (
+          !item.filePath?.length ||
+          !isValidDocumentBinding({ teamId, filePath: item.filePath })
+        ) {
           return yield* Effect.fail(
             new InvoiceReadError({ error: "Invoice document is unavailable" }),
           );
@@ -462,6 +468,7 @@ export const InvoiceReadLayer = Layer.effect(
           path: item.filePath.join("/"),
           expireIn: 300,
           download: false,
+          inboxId: id,
         });
         const extraction = record(item.extraction);
         return yield* decode(InvoiceDetail, {
@@ -508,7 +515,10 @@ export const InvoiceReadLayer = Layer.effect(
             new InvoiceNotFound({ error: "Inbox item not found" }),
           );
         }
-        if (!item.filePath?.length) {
+        if (
+          !item.filePath?.length ||
+          !isValidDocumentBinding({ teamId, filePath: item.filePath })
+        ) {
           return yield* Effect.fail(
             new AttachmentUnavailable({
               error: "Attachment file path not available",
@@ -522,6 +532,7 @@ export const InvoiceReadLayer = Layer.effect(
           path: item.filePath.join("/"),
           expireIn,
           download,
+          inboxId: id,
         });
         const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
         return {

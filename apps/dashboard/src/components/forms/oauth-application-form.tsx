@@ -38,9 +38,7 @@ import { Switch } from "@invoicewise/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@invoicewise/ui/tabs";
 import { Textarea } from "@invoicewise/ui/textarea";
 import { useToast } from "@invoicewise/ui/use-toast";
-import { stripSpecialCharacters } from "@invoicewise/utils";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { nanoid } from "nanoid";
 import { useEffect, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { useFieldArray } from "react-hook-form";
@@ -328,13 +326,9 @@ export function OAuthApplicationForm({ data }: Props) {
     try {
       const uploadedUrls = await Promise.all(
         imageFiles.map(async (file) => {
-          const originalFilename = file.name ?? "";
-          const extension = originalFilename.split(".").pop() || "";
-          const filename = extension ? `${nanoid()}.${extension}` : nanoid();
-
           const { url } = await uploadFile({
             bucket: "apps",
-            path: ["screenshots", filename],
+            kind: "screenshot",
             file,
           });
 

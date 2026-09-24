@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStorageClient, createStorageClientFromEnv } from "./storage";
 
+const inboxId = "11111111-1111-4111-8111-111111111111";
+
 describe("local storage", () => {
   let root: string;
   let storage: ReturnType<typeof createStorageClient>;
@@ -35,8 +37,14 @@ describe("local storage", () => {
     ).toBe("invoice");
 
     const url = new URL(
-      await storage.signedUrl({ bucket: "vault", path, expireIn: 60 }),
+      await storage.signedUrl({
+        bucket: "vault",
+        path,
+        expireIn: 60,
+        inboxId,
+      }),
     );
+    expect(url.searchParams.get("inbox")).toBe(inboxId);
     expect(
       storage.verifySignedUrl({
         bucket: "vault",
@@ -44,11 +52,120 @@ describe("local storage", () => {
         expires: Number(url.searchParams.get("expires")),
         providedSignature: url.searchParams.get("signature")!,
         download: false,
+        inboxId,
       }),
     ).toBe(true);
 
+    // A capability minted for one inbox record never authorizes another.
+    expect(
+      storage.verifySignedUrl({
+        bucket: "vault",
+        path,
+        expires: Number(url.searchParams.get("expires")),
+        providedSignature: url.searchParams.get("signature")!,
+        download: false,
+        inboxId: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).toBe(false);
+
+    expect(
+      storage.verifySignedUrl({
+        bucket: "vault",
+        path: ["team-id", "inbox", "other.pdf"],
+        expires: Number(url.searchParams.get("expires")),
+        providedSignature: url.searchParams.get("signature")!,
+        download: false,
+        inboxId,
+      }),
+    ).toBe(false);
+
     await storage.remove({ bucket: "vault", path });
     expect(storage.download({ bucket: "vault", path })).rejects.toThrow();
+  });
+
+  test("requires an inbox binding and a bounded expiry for signed URLs", async () => {
+    const path = ["team-id", "inbox", "invoice.pdf"];
+
+    expect(
+      storage.signedUrl({
+        bucket: "vault",
+        path,
+        expireIn: 60,
+        inboxId: "",
+      }),
+    ).rejects.toThrow("inbox id");
+
+    expect(
+      storage.signedUrl({
+        bucket: "vault",
+        path,
+        expireIn: 60 * 60 * 24,
+        inboxId,
+      }),
+    ).rejects.toThrow("may not outlive");
+
+    const expired = await storage.signedUrl({
+      bucket: "vault",
+      path,
+      expireIn: 1,
+      inboxId,
+    });
+    const expiredUrl = new URL(expired);
+    expect(
+      storage.verifySignedUrl({
+        bucket: "vault",
+        path,
+        expires: Number(expiredUrl.searchParams.get("expires")) - 10,
+        providedSignature: expiredUrl.searchParams.get("signature")!,
+        download: false,
+        inboxId,
+      }),
+    ).toBe(false);
+  });
+
+  test("writes immutably and never replaces an existing object", async () => {
+    const path = ["team-id", "inbox", "1111", "object.pdf"];
+
+    const first = await storage.uploadIfAbsent({
+      bucket: "vault",
+      path,
+      file: Buffer.from("original"),
+    });
+    expect(first.created).toBe(true);
+
+    const second = await storage.uploadIfAbsent({
+      bucket: "vault",
+      path,
+      file: Buffer.from("replacement"),
+    });
+    expect(second.created).toBe(false);
+    expect(
+      await (await storage.download({ bucket: "vault", path })).text(),
+    ).toBe("original");
+  });
+
+  test("honours abort signals on local reads and removals", async () => {
+    const path = ["team-id", "inbox", "abort.pdf"];
+    await storage.upload({
+      bucket: "vault",
+      path,
+      file: Buffer.from("invoice"),
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      storage.download({ bucket: "vault", path, signal: controller.signal }),
+    ).rejects.toThrow();
+    await expect(
+      storage.remove({ bucket: "vault", path, signal: controller.signal }),
+    ).rejects.toThrow();
+
+    // The aborted removal did not touch the immutable object.
+    expect(
+      await (await storage.download({ bucket: "vault", path })).text(),
+    ).toBe("invoice");
   });
 
   test("rejects paths outside the storage root", async () => {

@@ -15,16 +15,19 @@ import { getAuthSession } from "@api/utils/auth";
 import { validateClientCredentials } from "@api/utils/oauth";
 import { validateResponse } from "@api/utils/validate-response";
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
-import type { Database } from "@invoicewise/db/client";
+import { type Database, primaryDb } from "@invoicewise/db/client";
 import {
+  clampScopesForRole,
   createAuthorizationCode,
   exchangeAuthorizationCode,
   getOAuthApplicationByClientId,
-  getTeamsByUserId,
+  getTeamRole,
   hasUserEverAuthorizedApp,
   refreshAccessToken,
   revokeAccessToken,
+  scopesWithinRole,
 } from "@invoicewise/db/queries";
+import { scopesWithinApplication } from "@invoicewise/db/utils/scopes";
 import { AppInstalledEmail } from "@invoicewise/email/emails/app-installed";
 import { render } from "@invoicewise/email/render";
 import { rateLimiter } from "hono-rate-limiter";
@@ -105,15 +108,13 @@ app.openapi(
       });
     }
 
-    // Validate scopes
+    // Validate scopes against the registered set, normalized so an application
+    // that registered an alias covers the concrete scopes it expands to.
     const requestedScopes = scope.split(" ").filter(Boolean);
-    const invalidScopes = requestedScopes.filter(
-      (s) => !application.scopes.includes(s),
-    );
 
-    if (invalidScopes.length > 0) {
+    if (!scopesWithinApplication(application.scopes, requestedScopes)) {
       throw new HTTPException(400, {
-        message: `Invalid scopes: ${invalidScopes.join(", ")}`,
+        message: `Invalid scopes: ${requestedScopes.join(", ")}`,
       });
     }
 
@@ -218,6 +219,25 @@ app.openapi(
       });
     }
 
+    // The decision is redirected to this URI, so it must be registered even
+    // when the user denies.
+    if (!application.redirectUris.includes(redirect_uri)) {
+      throw new HTTPException(400, {
+        message: "Invalid redirect_uri",
+      });
+    }
+
+    // A denial grants nothing, so it needs no role or scope check.
+    if (decision === "deny") {
+      const denyUrl = new URL(redirect_uri);
+      denyUrl.searchParams.set("error", "access_denied");
+      denyUrl.searchParams.set("error_description", "User denied access");
+      if (state) {
+        denyUrl.searchParams.set("state", state);
+      }
+      return c.json({ redirect_url: denyUrl.toString() });
+    }
+
     // Enforce PKCE for public clients
     if (application.isPublic && !code_challenge) {
       throw new HTTPException(400, {
@@ -225,34 +245,41 @@ app.openapi(
       });
     }
 
-    // Validate user is a member of the selected team
-    const userTeams = await getTeamsByUserId(db, session.user.id);
-    const isMemberOfTeam = userTeams.some((team) => team.id === teamId);
+    // Validate user is a member of the selected team, resolved fresh.
+    const role = await getTeamRole(primaryDb, teamId, session.user.id);
 
-    if (!isMemberOfTeam) {
+    if (!role) {
       throw new HTTPException(403, {
         message: "User is not a member of the selected team",
       });
     }
 
-    const redirectUrl = new URL(redirect_uri);
-
-    // Handle denial
-    if (decision === "deny") {
-      redirectUrl.searchParams.set("error", "access_denied");
-      redirectUrl.searchParams.set("error_description", "User denied access");
-      if (state) {
-        redirectUrl.searchParams.set("state", state);
-      }
-      return c.json({ redirect_url: redirectUrl.toString() });
+    // Scopes must be registered on the application and may never exceed the
+    // authorizing actor's current role. Both checks are normalized sets.
+    if (!scopesWithinApplication(application.scopes, scopes)) {
+      throw new HTTPException(400, {
+        message: `Invalid scopes: ${scopes.join(", ")}`,
+      });
     }
+
+    // Aliases expand and duplicates collapse, so the decision is set
+    // membership rather than a length comparison.
+    if (!scopesWithinRole(role, scopes)) {
+      throw new HTTPException(403, {
+        message: "Requested scopes exceed your permissions in this workspace",
+      });
+    }
+
+    const grantedScopes = clampScopesForRole(role, scopes);
+
+    const redirectUrl = new URL(redirect_uri);
 
     // Create authorization code
     const authCode = await createAuthorizationCode(db, {
       applicationId: application.id,
       userId: session.user.id,
       teamId: teamId,
-      scopes,
+      scopes: grantedScopes,
       redirectUri: redirect_uri,
       codeChallenge: code_challenge,
     });
@@ -275,7 +302,10 @@ app.openapi(
 
       if (!hasAuthorizedBefore) {
         // Get team information
-        const userTeam = userTeams.find((team) => team.id === teamId);
+        const userTeam = await db.query.teams.findFirst({
+          where: (teams, { eq }) => eq(teams.id, teamId),
+          columns: { id: true, name: true },
+        });
 
         if (userTeam && session.user.email) {
           const html = await render(

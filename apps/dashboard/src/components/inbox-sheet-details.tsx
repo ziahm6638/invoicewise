@@ -124,11 +124,11 @@ export function InboxSheetDetails() {
 
       {/* Document preview */}
       <div className="flex-1 mb-4 overflow-hidden relative">
-        {data?.filePath && (
+        {data?.id && (
           <div className="h-full flex items-center justify-center">
             <FileViewer
               mimeType={data.contentType}
-              url={`/api/proxy?filePath=vault/${data.filePath.join("/")}`}
+              url={`/api/proxy?id=${data.id}`}
               maxWidth={565}
             />
           </div>

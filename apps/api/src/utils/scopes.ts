@@ -1,15 +1,19 @@
-export const SCOPES = [
-  "inbox.read",
-  "inbox.write",
-  "teams.read",
-  "teams.write",
-  "users.read",
-  "users.write",
-  "apis.all", // All API scopes
-  "apis.read", // All read scopes
-] as const;
+import { RESOURCE_SCOPES, expandScopes } from "@invoicewise/db/utils/scopes";
 
-export type Scope = (typeof SCOPES)[number];
+// The scope vocabulary and alias expansion live in the database package so the
+// authorization helpers and the API share exactly one list.
+export {
+  RESOURCE_SCOPES,
+  SCOPE_ALIASES,
+  SCOPES,
+  expandScopes,
+  isResourceScope,
+  isScope,
+  type ResourceScope,
+  type Scope,
+  type ScopeAlias,
+} from "@invoicewise/db/utils/scopes";
+
 export type ScopePreset = "all_access" | "read_only" | "restricted";
 
 export const scopePresets = [
@@ -31,7 +35,10 @@ export const scopePresets = [
 ];
 
 export const scopesToName = (scopes: string[]) => {
-  if (scopes.includes("apis.all")) {
+  const granted = new Set<string>(expandScopes(scopes));
+  const readScopes = RESOURCE_SCOPES.filter((scope) => scope.endsWith(".read"));
+
+  if (RESOURCE_SCOPES.every((scope) => granted.has(scope))) {
     return {
       name: "All access",
       description: "full access to all resources",
@@ -39,7 +46,10 @@ export const scopesToName = (scopes: string[]) => {
     };
   }
 
-  if (scopes.includes("apis.read")) {
+  if (
+    granted.size === readScopes.length &&
+    readScopes.every((scope) => granted.has(scope))
+  ) {
     return {
       name: "Read-only",
       description: "read-only access to all resources",
@@ -52,21 +62,4 @@ export const scopesToName = (scopes: string[]) => {
     description: "restricted access to some resources",
     preset: "restricted",
   };
-};
-
-export const expandScopes = (scopes: string[]): string[] => {
-  if (scopes.includes("apis.all")) {
-    // Return all scopes except any that start with "apis."
-    return SCOPES.filter((scope) => !scope.startsWith("apis."));
-  }
-
-  if (scopes.includes("apis.read")) {
-    // Return all read scopes except any that start with "apis."
-    return SCOPES.filter(
-      (scope) => scope.endsWith(".read") && !scope.startsWith("apis."),
-    );
-  }
-
-  // For custom scopes, filter out any "apis." scopes
-  return scopes.filter((scope) => !scope.startsWith("apis."));
 };

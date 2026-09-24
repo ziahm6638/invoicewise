@@ -3,17 +3,16 @@ import { resolve } from "node:path";
 import { type Database, createDatabaseClient } from "@invoicewise/db/client";
 import {
   type WorkflowJob,
-  createInbox,
   enqueueWorkflowJob,
   getExistingInboxAttachments,
   getInboxAccountInfo,
-  getInboxByFilePath,
   getTeamById,
   getUserById,
   updateInbox,
   updateInboxAccount,
 } from "@invoicewise/db/queries";
 import { createStorageClient } from "@invoicewise/db/storage";
+import { INTAKE_LIMITS } from "@invoicewise/documents";
 import { GetStartedEmail } from "@invoicewise/email/emails/get-started";
 import { InviteEmail } from "@invoicewise/email/emails/invite";
 import { TrialEndedEmail } from "@invoicewise/email/emails/trial-ended";
@@ -33,7 +32,6 @@ import {
   Redacted,
   Schema,
 } from "effect";
-import convert from "heic-convert";
 import { nanoid } from "nanoid";
 import {
   type CreateBatchOptions,
@@ -41,9 +39,14 @@ import {
   type CreateEmailOptions,
   Resend,
 } from "resend";
-import sharp from "sharp";
 import { enqueueAccountingPost, postAccountingDraft } from "./accounting";
 import { workflowKey } from "./client";
+import {
+  acceptIntakeUpload,
+  resolveWorkerIntakeBinding,
+  verifyStoredIntake,
+} from "./intake";
+import { isTransientIntakeFailure } from "./intake-failure";
 import { processDocumentAttachment } from "./process-document";
 import {
   type DeliverWebhookPayload,
@@ -64,7 +67,6 @@ import {
 } from "./webhooks";
 
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
-const HEIC_MAX_WIDTH = 1500;
 
 export class WorkflowExecutionError extends Schema.TaggedError<WorkflowExecutionError>()(
   "WorkflowExecutionError",
@@ -307,93 +309,49 @@ const makeProcessAttachment = (
     payload: ProcessAttachmentPayload,
   ) {
     yield* ensureTeam(job, payload.teamId);
-    const existing = yield* attempt(
-      () =>
-        getInboxByFilePath(db, {
-          filePath: [...payload.filePath],
-          teamId: payload.teamId,
-        }),
-      "Unable to find invoice record",
+    // Path, type and size always come from the persisted workspace binding.
+    // Nothing serialized in the payload is trusted as ownership proof.
+    const binding = yield* attempt(
+      () => resolveWorkerIntakeBinding(db, payload),
+      "Unable to resolve invoice document binding",
     );
-    if (existing && existing.status !== "processing") {
-      return { inboxId: existing.id, idempotent: true };
-    }
 
-    const inboxItem =
-      existing ??
-      (yield* attempt(
-        () =>
-          createInbox(db, {
-            displayName: payload.filePath.at(-1) ?? "Unknown",
-            teamId: payload.teamId,
-            filePath: [...payload.filePath],
-            fileName: payload.filePath.at(-1) ?? "Unknown",
-            contentType: payload.mimetype,
-            size: payload.size,
-            referenceId: payload.referenceId,
-            website: payload.website,
-            inboxAccountId: payload.inboxAccountId,
-            status: "processing",
-          }),
-        "Unable to create invoice record",
-      ));
-    if (!inboxItem) {
+    if (!binding?.filePath?.length) {
       return yield* Effect.fail(
         new WorkflowExecutionError({
-          reason: "Unable to create invoice record",
-          retryable: true,
+          reason: "Invoice document is not authorized for this workspace",
+          retryable: false,
         }),
       );
     }
 
+    if (binding.status !== "processing") {
+      return { inboxId: binding.id, idempotent: true };
+    }
+
+    const inboxItem = binding;
+    const filePath = [...binding.filePath];
+
     const processing = Effect.gen(function* () {
-      let mimetype = payload.mimetype;
       const file = yield* attempt(
-        () =>
-          storage.download({ bucket: "vault", path: [...payload.filePath] }),
+        () => storage.download({ bucket: "vault", path: filePath }),
         "Unable to load invoice attachment",
       );
-      let bytes: Buffer<ArrayBufferLike> = Buffer.from(
+      const bytes = Buffer.from(
         yield* Effect.promise(() => file.arrayBuffer()),
       );
 
-      if (mimetype === "image/heic") {
-        const decoded = yield* attempt(
-          () =>
-            convert({
-              buffer: bytes.buffer.slice(
-                bytes.byteOffset,
-                bytes.byteOffset + bytes.byteLength,
-              ) as ArrayBuffer,
-              format: "JPEG",
-              quality: 1,
-            }),
-          "Unable to decode HEIC attachment",
-          false,
+      const stored = verifyStoredIntake(binding, bytes);
+      if (!stored.ok) {
+        return yield* Effect.fail(
+          new WorkflowExecutionError({
+            reason: stored.message,
+            retryable: false,
+          }),
         );
-        const image = yield* attempt(
-          () =>
-            sharp(decoded)
-              .rotate()
-              .resize({ width: HEIC_MAX_WIDTH })
-              .jpeg()
-              .toBuffer(),
-          "Unable to convert HEIC attachment",
-          false,
-        );
-        yield* attempt(
-          () =>
-            storage.upload({
-              bucket: "vault",
-              path: [...payload.filePath],
-              file: image,
-            }),
-          "Unable to store converted attachment",
-        );
-        mimetype = "image/jpeg";
-        bytes = image;
       }
 
+      const mimetype = stored.mimeType;
       const team = yield* attempt(
         () => getTeamById(db, payload.teamId),
         "Unable to load invoice team",
@@ -479,6 +437,18 @@ const makeSyncInboxAccount = (
     }
     const provider = account.provider;
 
+    const scheduleNextSync = async () => {
+      if (!payload.scheduleNext) return;
+      const runAt = nextInboxSync(payload.id);
+      await enqueueWorkflowJob(db, {
+        name: "sync-inbox-account",
+        teamId: account.teamId,
+        payload: { id: payload.id, scheduleNext: true },
+        runAt,
+        idempotencyKey: workflowKey.inboxSync(payload.id, runAt.toISOString()),
+      });
+    };
+
     const syncing = attempt(async () => {
       const connector = new InboxConnector(provider, db);
       const attachments = await connector.getAttachments({
@@ -490,47 +460,56 @@ const makeSyncInboxAccount = (
       });
       const existing = await getExistingInboxAttachments(
         db,
+        account.teamId,
         attachments.map(({ referenceId }) => referenceId),
       );
       const known = new Set(existing.map(({ referenceId }) => referenceId));
       let queued = 0;
+      const transientFailures: string[] = [];
+      const rejectedAttachments: string[] = [];
 
       for (const attachment of attachments) {
         if (
           known.has(attachment.referenceId) ||
-          attachment.size > MAX_ATTACHMENT_SIZE
+          attachment.size > INTAKE_LIMITS.maxBytes
         ) {
           continue;
         }
-        const filename = ensureFileExtension(
-          attachment.filename,
-          attachment.mimeType,
-        );
-        const uploaded = await storage.upload({
-          bucket: "vault",
-          path: `${account.teamId}/inbox/${filename}`,
-          file: attachment.data,
-        });
-        const filePath = uploaded.path.split("/");
-        await enqueueWorkflowJob(db, {
-          name: "process-attachment",
+
+        // Mailbox attachments use the same server-owned intake contract as
+        // uploads: reserve, store immutably, validate, then queue.
+        const accepted = await acceptIntakeUpload(db, storage, {
           teamId: account.teamId,
-          payload: {
-            filePath,
-            size: attachment.size,
-            mimetype: attachment.mimeType,
-            website: attachment.website,
-            referenceId: attachment.referenceId,
-            teamId: account.teamId,
-            inboxAccountId: payload.id,
-          },
-          idempotencyKey: workflowKey.attachment(
-            account.teamId,
-            filePath,
-            attachment.referenceId,
+          bytes: attachment.data,
+          declaredMimeType: attachment.mimeType,
+          fileName: ensureFileExtension(
+            attachment.filename,
+            attachment.mimeType,
           ),
+          website: attachment.website,
+          referenceId: attachment.referenceId,
+          inboxAccountId: payload.id,
         });
-        queued += 1;
+        if (accepted.status === "accepted") {
+          queued += 1;
+        } else if (isTransientIntakeFailure(accepted.code)) {
+          // Transient: keep the attempt recoverable by failing the sync job
+          // rather than marking the account synced.
+          transientFailures.push(
+            `${attachment.referenceId}: ${accepted.message}`,
+          );
+        } else {
+          // Permanent rejection: visible in the job result, not retried.
+          rejectedAttachments.push(
+            `${attachment.referenceId} (${accepted.code}): ${accepted.message}`,
+          );
+        }
+      }
+
+      if (transientFailures.length > 0) {
+        throw new Error(
+          `Mailbox intake could not store ${transientFailures.length} attachment(s): ${transientFailures.join("; ")}`,
+        );
       }
 
       await updateInboxAccount(db, {
@@ -540,23 +519,12 @@ const makeSyncInboxAccount = (
         errorMessage: null,
       });
 
-      if (payload.scheduleNext) {
-        const runAt = nextInboxSync(payload.id);
-        await enqueueWorkflowJob(db, {
-          name: "sync-inbox-account",
-          teamId: account.teamId,
-          payload: { id: payload.id, scheduleNext: true },
-          runAt,
-          idempotencyKey: workflowKey.inboxSync(
-            payload.id,
-            runAt.toISOString(),
-          ),
-        });
-      }
+      await scheduleNextSync();
 
       return {
         accountId: payload.id,
         attachmentsProcessed: queued,
+        attachmentsRejected: rejectedAttachments,
         syncedAt: new Date().toISOString(),
       };
     }, "Unable to sync inbox account");
@@ -573,6 +541,28 @@ const makeSyncInboxAccount = (
                 }).then(() => undefined),
               "Unable to mark inbox account disconnected",
             ).pipe(Effect.ignore)
+          : Effect.void,
+      ),
+      // The schedule is a chain: each run enqueues the next. A run that has
+      // exhausted its retries still enqueues the next slot (the key is the
+      // slot time, so this never duplicates) without advancing lastAccessed,
+      // so one failing message or outage cannot stop the mailbox for good.
+      Effect.tapError((error) =>
+        !error.retryable || job.attempts >= job.maxAttempts
+          ? attempt(
+              scheduleNextSync,
+              "Unable to schedule the next inbox sync",
+            ).pipe(
+              Effect.catchAll((scheduleError) =>
+                Effect.logError("inbox_sync_schedule_failed").pipe(
+                  Effect.annotateLogs({
+                    event: "inbox_sync_schedule_failed",
+                    accountId: payload.id,
+                    error: scheduleError.reason,
+                  }),
+                ),
+              ),
+            )
           : Effect.void,
       ),
     );

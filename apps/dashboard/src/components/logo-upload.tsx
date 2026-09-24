@@ -3,7 +3,6 @@
 import { useUpload } from "@/hooks/use-upload";
 import { Avatar, AvatarImage } from "@invoicewise/ui/avatar";
 import { Spinner } from "@invoicewise/ui/spinner";
-import { nanoid } from "nanoid";
 import { useRef, useState } from "react";
 
 type Props = {
@@ -24,13 +23,9 @@ export const LogoUpload = ({ logoUrl: initialLogoUrl, onUpload }: Props) => {
 
     if (!selectedFile[0]) return;
 
-    const originalFilename = selectedFile[0]?.name ?? "";
-    const extension = originalFilename.split(".").pop() || "";
-    const filename = extension ? `${nanoid()}.${extension}` : nanoid();
-
     const { url } = await uploadFile({
       bucket: "apps",
-      path: ["logos", filename],
+      kind: "app-logo",
       file: selectedFile[0] as File,
     });
 

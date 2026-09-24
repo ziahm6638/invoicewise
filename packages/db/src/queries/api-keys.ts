@@ -1,4 +1,4 @@
-import type { Database } from "@db/client";
+import type { Database, PrimaryDatabase } from "@db/client";
 import { apiKeys, users } from "@db/schema";
 import { generateApiKey } from "@db/utils/api-keys";
 import { encrypt, hash } from "@invoicewise/encryption";
@@ -13,7 +13,10 @@ export type ApiKey = {
   scopes: string[] | null;
 };
 
-export async function getApiKeyByToken(db: Database, keyHash: string) {
+export async function getApiKeyByToken(
+  db: Database | PrimaryDatabase,
+  keyHash: string,
+) {
   const [result] = await db
     .select({
       id: apiKeys.id,
@@ -47,7 +50,9 @@ export async function upsertApiKey(db: Database, data: UpsertApiKeyData) {
         name: data.name,
         scopes: data.scopes,
       })
-      .where(eq(apiKeys.id, data.id))
+      // Team scope is part of the predicate: an id from another workspace
+      // must never be updateable, even by an admin of the current one.
+      .where(and(eq(apiKeys.id, data.id), eq(apiKeys.teamId, data.teamId)))
       .returning({
         keyHash: apiKeys.keyHash,
       });
@@ -122,7 +127,10 @@ export async function deleteApiKey(db: Database, params: DeleteApiKeyParams) {
   return result?.keyHash;
 }
 
-export async function updateApiKeyLastUsedAt(db: Database, id: string) {
+export async function updateApiKeyLastUsedAt(
+  db: Database | PrimaryDatabase,
+  id: string,
+) {
   return db
     .update(apiKeys)
     .set({ lastUsedAt: new Date().toISOString() })

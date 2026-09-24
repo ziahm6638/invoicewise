@@ -1,72 +1,75 @@
 import { deleteApiKeySchema, upsertApiKeySchema } from "@api/schemas/api-keys";
 import { resend } from "@api/services/resend";
-import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
-import { apiKeyCache } from "@invoicewise/cache/api-key-cache";
+import { adminProcedure, createTRPCRouter } from "@api/trpc/init";
 import {
+  clampScopesForRole,
   deleteApiKey,
   getApiKeysByTeam,
   upsertApiKey,
 } from "@invoicewise/db/queries";
 import { ApiKeyCreatedEmail } from "@invoicewise/email/emails/api-key-created";
 import { logger } from "@invoicewise/logger";
+import { TRPCError } from "@trpc/server";
 
 export const apiKeysRouter = createTRPCRouter({
-  get: protectedProcedure.query(async ({ ctx: { db, teamId } }) => {
+  get: adminProcedure.query(async ({ ctx: { db, teamId } }) => {
     return getApiKeysByTeam(db, teamId!);
   }),
 
-  upsert: protectedProcedure
+  upsert: adminProcedure
     .input(upsertApiKeySchema)
-    .mutation(async ({ ctx: { db, teamId, session, geo }, input }) => {
-      const { data, key, keyHash } = await upsertApiKey(db, {
-        teamId: teamId!,
-        userId: session.user.id,
-        ...input,
-      });
+    .mutation(
+      async ({ ctx: { db, teamId, teamRole, session, geo }, input }) => {
+        const { data, key, keyHash } = await upsertApiKey(db, {
+          teamId: teamId!,
+          userId: session.user.id,
+          ...input,
+          // A key can never carry scopes above the issuer's role.
+          scopes: clampScopesForRole(teamRole, input.scopes),
+        });
 
-      // Invalidate cache if this was an update (has keyHash)
-      if (keyHash) {
-        await apiKeyCache.delete(keyHash);
-      }
-
-      if (data) {
-        try {
-          // We don't need to await this, it will be sent in the background
-          resend.emails.send({
-            from: "InvoiceWise <middaybot@midday.ai>",
-            to: session.user.email!,
-            subject: "New API Key Created",
-            react: ApiKeyCreatedEmail({
-              fullName: session.user.full_name!,
-              keyName: input.name,
-              createdAt: data.createdAt,
-              email: session.user.email!,
-              ip: geo.ip!,
-            }),
+        // An update matched no row: the key belongs to another workspace.
+        if (input.id && !keyHash) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "API key not found",
           });
-        } catch (error) {
-          logger.error(error);
         }
-      }
 
-      return {
-        key,
-        data,
-      };
-    }),
+        if (data) {
+          try {
+            // We don't need to await this, it will be sent in the background
+            resend.emails.send({
+              from: "InvoiceWise <middaybot@midday.ai>",
+              to: session.user.email!,
+              subject: "New API Key Created",
+              react: ApiKeyCreatedEmail({
+                fullName: session.user.full_name!,
+                keyName: input.name,
+                createdAt: data.createdAt,
+                email: session.user.email!,
+                ip: geo.ip!,
+              }),
+            });
+          } catch (error) {
+            logger.error(error);
+          }
+        }
 
-  delete: protectedProcedure
+        return {
+          key,
+          data,
+        };
+      },
+    ),
+
+  delete: adminProcedure
     .input(deleteApiKeySchema)
     .mutation(async ({ ctx: { db, teamId }, input }) => {
       const keyHash = await deleteApiKey(db, {
         teamId: teamId!,
         ...input,
       });
-
-      // Invalidate cache if key was deleted
-      if (keyHash) {
-        await apiKeyCache.delete(keyHash);
-      }
 
       return keyHash;
     }),

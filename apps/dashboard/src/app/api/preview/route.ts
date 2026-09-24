@@ -1,39 +1,25 @@
-import { getSession } from "@/lib/auth";
 import { getPdfImage } from "@/utils/pdf-to-img";
 import { download } from "@invoicewise/db/storage";
 import type { NextRequest } from "next/server";
+import { resolveDocumentBinding } from "../documents/binding";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  let filePath = searchParams.get("filePath");
+  const binding = await resolveDocumentBinding(searchParams.get("id"));
 
-  if (!filePath) {
-    return new Response("No file path provided", { status: 400 });
+  if (!binding?.filePath?.length) {
+    return new Response("Not found", { status: 404 });
   }
 
-  // Remove 'vault/' prefix if it exists
-  if (filePath.startsWith("vault/")) {
-    filePath = filePath.substring("vault/".length);
-  }
-
-  const session = await getSession();
-  if (!session) {
-    return new Response("Unauthorized", { status: 401 });
-  }
-
-  if (!session.teamId || filePath.split("/")[0] !== session.teamId) {
-    return new Response("Forbidden", { status: 403 });
+  if ((binding.contentType ?? "") !== "application/pdf") {
+    return new Response("File is not a PDF", { status: 400 });
   }
 
   let pdfBlob: Blob;
   try {
-    pdfBlob = await download({ bucket: "vault", path: filePath });
+    pdfBlob = await download({ bucket: "vault", path: binding.filePath });
   } catch {
     return new Response("Error downloading file", { status: 500 });
-  }
-
-  if (pdfBlob.type !== "application/pdf") {
-    return new Response("File is not a PDF", { status: 400 });
   }
 
   try {
@@ -47,14 +33,18 @@ export async function GET(request: NextRequest) {
     return new Response(new Uint8Array(imageBuffer), {
       headers: {
         "Content-Type": "image/png",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        // Rendered invoice pages are tenant content and must never enter a
+        // shared or CDN cache.
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
       },
     });
-  } catch (error: unknown) {
-    throw new Error(
+  } catch (error) {
+    return new Response(
       `PDF to PNG conversion failed: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      { status: 500 },
     );
   }
 }

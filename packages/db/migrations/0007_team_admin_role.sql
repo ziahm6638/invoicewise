@@ -1,0 +1,1 @@
+ALTER TYPE "public"."teamRoles" ADD VALUE 'admin' BEFORE 'member';

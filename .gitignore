@@ -43,6 +43,9 @@ yarn-error.log*
 # turbo
 .turbo
 
+# local release verification artifacts
+.verify-artifacts
+
 # react-email
 .react-email
 packages/email/public
@@ -84,3 +87,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local code-index cache (graft); never commit it.
+graft/

@@ -1,10 +1,11 @@
 import { getAuthSession } from "@api/utils/auth";
 import { expandScopes } from "@api/utils/scopes";
 import { isValidApiKeyFormat } from "@db/utils/api-keys";
-import { apiKeyCache } from "@invoicewise/cache/api-key-cache";
-import { userCache } from "@invoicewise/cache/user-cache";
+import { primaryDb } from "@invoicewise/db/client";
 import {
+  clampScopesForRole,
   getApiKeyByToken,
+  getTeamRole,
   getUserById,
   updateApiKeyLastUsedAt,
   validateAccessToken,
@@ -12,6 +13,19 @@ import {
 import { hash } from "@invoicewise/encryption";
 import type { MiddlewareHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
+
+/**
+ * Resolves the caller's role for a workspace straight from the primary
+ * database. Membership, role and key revocation therefore take effect on the
+ * very next request without any cache invalidation protocol.
+ */
+const resolveRole = async (teamId: string | null, userId: string) => {
+  if (!teamId) {
+    return null;
+  }
+
+  return getTeamRole(primaryDb, teamId, userId);
+};
 
 export const withAuth: MiddlewareHandler = async (c, next) => {
   const authHeader = c.req.header("Authorization");
@@ -23,8 +37,17 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
       throw new HTTPException(401, { message: "Authentication required" });
     }
 
-    c.set("session", session);
+    const role = await resolveRole(session.teamId, session.user.id);
+
+    if (session.teamId && !role) {
+      throw new HTTPException(403, {
+        message: "No permission to access this team",
+      });
+    }
+
+    c.set("session", { ...session, authType: "session" });
     c.set("teamId", session.teamId);
+    c.set("teamRole", role);
     c.set("scopes", expandScopes(["apis.all"]));
     await next();
     return;
@@ -47,18 +70,25 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
       throw new HTTPException(401, { message: "Invalid session token" });
     }
 
-    c.set("session", session);
+    const role = await resolveRole(session.teamId, session.user.id);
+
+    if (session.teamId && !role) {
+      throw new HTTPException(403, {
+        message: "No permission to access this team",
+      });
+    }
+
+    c.set("session", { ...session, authType: "session" });
     c.set("teamId", session.teamId);
+    c.set("teamRole", role);
     c.set("scopes", expandScopes(["apis.all"]));
     await next();
     return;
   }
 
-  const db = c.get("db");
-
   // Handle OAuth access tokens (start with mid_access_token_)
   if (token.startsWith("mid_access_token_")) {
-    const tokenData = await validateAccessToken(db, token);
+    const tokenData = await validateAccessToken(primaryDb, token);
 
     if (!tokenData || !tokenData.user) {
       throw new HTTPException(401, {
@@ -80,9 +110,19 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
       },
     };
 
-    c.set("session", session);
+    const role = await resolveRole(session.teamId, session.user.id);
+
+    if (!role) {
+      throw new HTTPException(403, {
+        message: "No permission to access this team",
+      });
+    }
+
+    c.set("session", { ...session, authType: "oauth" });
     c.set("teamId", session.teamId);
-    c.set("scopes", expandScopes(tokenData.scopes ?? []));
+    c.set("teamRole", role);
+    // Aliases are expanded and unknown scopes dropped inside the clamp.
+    c.set("scopes", clampScopesForRole(role, tokenData.scopes ?? []));
 
     await next();
     return;
@@ -95,36 +135,26 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
 
   const keyHash = hash(token);
 
-  // Check cache first for API key
-  let apiKey = await apiKeyCache.get(keyHash);
-
-  if (!apiKey) {
-    // If not in cache, query database
-    apiKey = await getApiKeyByToken(db, keyHash);
-    if (apiKey) {
-      // Store in cache for future requests
-      await apiKeyCache.set(keyHash, apiKey);
-    }
-  }
+  // Always read the key from the primary database: a deleted or edited key
+  // must stop working immediately, not after a cache TTL.
+  const apiKey = await getApiKeyByToken(primaryDb, keyHash);
 
   if (!apiKey) {
     throw new HTTPException(401, { message: "Invalid API key" });
   }
 
-  // Check cache first for user
-  let user = await userCache.get(apiKey.userId);
-
-  if (!user) {
-    // If not in cache, query database
-    user = await getUserById(db, apiKey.userId);
-    if (user) {
-      // Store in cache for future requests
-      await userCache.set(apiKey.userId, user);
-    }
-  }
+  const user = await getUserById(primaryDb, apiKey.userId);
 
   if (!user) {
     throw new HTTPException(401, { message: "User not found" });
+  }
+
+  const role = await resolveRole(apiKey.teamId, apiKey.userId);
+
+  if (!role) {
+    throw new HTTPException(403, {
+      message: "No permission to access this team",
+    });
   }
 
   const session = {
@@ -136,12 +166,13 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
     },
   };
 
-  c.set("session", session);
+  c.set("session", { ...session, authType: "api_key" });
   c.set("teamId", session.teamId);
-  c.set("scopes", expandScopes(apiKey.scopes ?? []));
+  c.set("teamRole", role);
+  c.set("scopes", clampScopesForRole(role, apiKey.scopes ?? []));
 
   // Update last used at
-  updateApiKeyLastUsedAt(db, apiKey.id);
+  updateApiKeyLastUsedAt(primaryDb, apiKey.id);
 
   await next();
 };

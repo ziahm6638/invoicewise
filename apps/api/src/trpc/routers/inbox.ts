@@ -1,24 +1,25 @@
 import {
-  createInboxItemSchema,
   deleteInboxSchema,
   getInboxByIdSchema,
   getInboxSchema,
-  processAttachmentsSchema,
+  retryInboxSchema,
   updateInboxSchema,
 } from "@api/schemas/inbox";
-import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
+import { createTRPCRouter, workspaceProcedure } from "@api/trpc/init";
 import {
-  createInbox,
   deleteInbox,
   getInbox,
   getInboxById,
   updateInbox,
 } from "@invoicewise/db/queries";
 import { signedUrl } from "@invoicewise/db/storage";
-import { enqueueWorkflow, workflowKey } from "@invoicewise/jobs";
+import {
+  resolveTeamDocumentBinding,
+  retryIntakeProcessing,
+} from "@invoicewise/jobs/intake";
 
 export const inboxRouter = createTRPCRouter({
-  get: protectedProcedure
+  get: workspaceProcedure
     .input(getInboxSchema.optional())
     .query(async ({ ctx: { db, teamId }, input }) => {
       return getInbox(db, {
@@ -27,7 +28,7 @@ export const inboxRouter = createTRPCRouter({
       });
     }),
 
-  getById: protectedProcedure
+  getById: workspaceProcedure
     .input(getInboxByIdSchema)
     .query(async ({ ctx: { db, teamId }, input }) => {
       const item = await getInboxById(db, {
@@ -37,19 +38,27 @@ export const inboxRouter = createTRPCRouter({
 
       if (!item) return item;
 
+      // Signing goes through the shared binding guard: a row whose persisted
+      // path is not this workspace's document path is never signed.
+      const binding = await resolveTeamDocumentBinding(db, {
+        teamId: teamId!,
+        id: item.id,
+      });
+
       return {
         ...item,
-        attachmentUrl: item.filePath?.length
+        attachmentUrl: binding?.filePath?.length
           ? await signedUrl({
               bucket: "vault",
-              path: item.filePath,
-              expireIn: 60 * 60,
+              path: binding.filePath,
+              expireIn: 300,
+              inboxId: item.id,
             }).catch(() => null)
           : null,
       };
     }),
 
-  delete: protectedProcedure
+  delete: workspaceProcedure
     .input(deleteInboxSchema)
     .mutation(async ({ ctx: { db, teamId }, input }) => {
       await deleteInbox(db, {
@@ -58,41 +67,17 @@ export const inboxRouter = createTRPCRouter({
       });
     }),
 
-  create: protectedProcedure
-    .input(createInboxItemSchema)
+  /**
+   * Re-queues processing for a workspace document. The caller supplies an
+   * inbox id; path, type and size are resolved from the persisted binding.
+   */
+  retry: workspaceProcedure
+    .input(retryInboxSchema)
     .mutation(async ({ ctx: { db, teamId }, input }) => {
-      return createInbox(db, {
-        displayName: input.filename,
-        teamId: teamId!,
-        filePath: input.filePath,
-        fileName: input.filename,
-        contentType: input.mimetype,
-        size: input.size,
-        status: "processing",
-      });
+      return retryIntakeProcessing(db, { teamId: teamId!, inboxId: input.id });
     }),
 
-  processAttachments: protectedProcedure
-    .input(processAttachmentsSchema)
-    .mutation(async ({ ctx: { db, teamId }, input }) => {
-      return Promise.all(
-        input.map((item) =>
-          enqueueWorkflow(db, {
-            name: "process-attachment",
-            teamId: teamId!,
-            idempotencyKey: workflowKey.attachment(teamId!, item.filePath),
-            payload: {
-              filePath: item.filePath,
-              mimetype: item.mimetype,
-              size: item.size,
-              teamId: teamId!,
-            },
-          }),
-        ),
-      );
-    }),
-
-  update: protectedProcedure
+  update: workspaceProcedure
     .input(updateInboxSchema)
     .mutation(async ({ ctx: { db, teamId }, input }) => {
       return updateInbox(db, { ...input, teamId: teamId! });

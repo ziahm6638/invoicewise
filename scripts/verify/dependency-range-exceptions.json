@@ -1,0 +1,75 @@
+{
+  "note": "Exact, reviewed workspace dependency-range mismatches. `scripts/verify/dependency-ranges.ts` re-runs the installed manypkg check over a probe copy of the current manifests and fails if it finds a mismatch that is not listed here (or if a listed entry no longer exists). Aligning a range is only allowed when it is safe and lock-consistent; incompatible runtime upgrades (zod v4, 0.x Polar) are deliberately not forced.",
+  "exceptions": [
+    {
+      "workspace": "@invoicewise/api",
+      "dependency": "@types/bun",
+      "range": "^1.2.16",
+      "mostCommonRange": "^1.2.21",
+      "reason": "dev-only runtime type shim pinned locally; a types bump is not part of this review"
+    },
+    {
+      "workspace": "@invoicewise/dashboard",
+      "dependency": "@date-fns/utc",
+      "range": "^2.1.0",
+      "mostCommonRange": "^2.1.1",
+      "reason": "patch-level runtime dependency difference; aligning would change an installed package"
+    },
+    {
+      "workspace": "@invoicewise/dashboard",
+      "dependency": "@polar-sh/sdk",
+      "range": "^0.33.1",
+      "mostCommonRange": "^0.34.9",
+      "reason": "0.x SDK minor difference between billing surfaces; requires a reviewed runtime upgrade"
+    },
+    {
+      "workspace": "@invoicewise/dashboard",
+      "dependency": "@types/node",
+      "range": "^24.0.1",
+      "mostCommonRange": "^24.3.0",
+      "reason": "dev-only Node type package; not part of this review"
+    },
+    {
+      "workspace": "@invoicewise/website",
+      "dependency": "@team-plain/typescript-sdk",
+      "range": "5.9.0",
+      "mostCommonRange": "^5.9.0",
+      "reason": "exact pin versus caret for the same installed version"
+    },
+    {
+      "workspace": "@invoicewise/website",
+      "dependency": "framer-motion",
+      "range": "^12.15.0",
+      "mostCommonRange": "^12.18.1",
+      "reason": "minor runtime dependency difference in the marketing app; upgrade not part of this review"
+    },
+    {
+      "workspace": "@invoicewise/website",
+      "dependency": "@types/node",
+      "range": "^22.15.29",
+      "mostCommonRange": "^24.3.0",
+      "reason": "dev-only Node type package; not part of this review"
+    },
+    {
+      "workspace": "@invoicewise/categories",
+      "dependency": "zod",
+      "range": "^4.1.5",
+      "mostCommonRange": "3.25.64",
+      "reason": "zod v4 is required by the category/tax schemas while the API surface stays on v3; forcing v3 would change validation behaviour"
+    },
+    {
+      "workspace": "@invoicewise/documents",
+      "dependency": "ai",
+      "range": "5.0.28",
+      "mostCommonRange": "5.0.29",
+      "reason": "patch-level difference in the extraction package's provider SDK"
+    },
+    {
+      "workspace": "@invoicewise/documents",
+      "dependency": "zod",
+      "range": "4.1.5",
+      "mostCommonRange": "3.25.64",
+      "reason": "zod v4 is required by the extraction schemas; forcing v3 would change validation behaviour"
+    }
+  ]
+}

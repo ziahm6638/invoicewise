@@ -10,15 +10,8 @@ export async function Ticker() {
     process.env.SUPABASE_SERVICE_KEY!,
     {
       cookies: {
-        get() {
-          return null;
-        },
-        set() {
-          return null;
-        },
-        remove() {
-          return null;
-        },
+        getAll: () => [],
+        setAll: () => {},
       },
     },
   );

@@ -12,6 +12,26 @@ export function useTeamQuery() {
   return useSuspenseQuery(trpc.team.current.queryOptions());
 }
 
+/**
+ * Server-decided capabilities for the current workspace. UI gating only; the
+ * server re-checks every mutation.
+ */
+export function useTeamPermissions() {
+  const { data } = useTeamQuery();
+
+  return (
+    data?.permissions ?? {
+      manageMembers: false,
+      manageQuestions: false,
+      manageIntegrations: false,
+      manageWorkspaceSettings: false,
+      manageBilling: false,
+      deleteWorkspace: false,
+      transferOwnership: false,
+    }
+  );
+}
+
 export function useTeamMutation() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();

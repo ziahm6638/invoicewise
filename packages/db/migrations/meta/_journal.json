@@ -50,6 +50,41 @@
       "when": 1790097017054,
       "tag": "0006_curly_network",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790110572783,
+      "tag": "0007_team_admin_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790115000000,
+      "tag": "0008_document_intake_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790117000000,
+      "tag": "0009_workspace_scoped_reference_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790119000000,
+      "tag": "0010_durable_object_removal",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790121000000,
+      "tag": "0011_ambiguous_object_removal",
+      "breakpoints": true
     }
   ]
 }

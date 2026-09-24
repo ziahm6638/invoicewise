@@ -10,28 +10,37 @@ import {
 } from "@api/schemas/oauth-applications";
 import { revokeUserApplicationAccessSchema } from "@api/schemas/oauth-flow";
 import { resend } from "@api/services/resend";
-import { createTRPCRouter, protectedProcedure } from "@api/trpc/init";
 import {
+  adminProcedure,
+  createTRPCRouter,
+  protectedProcedure,
+  workspaceProcedure,
+} from "@api/trpc/init";
+import { primaryDb } from "@invoicewise/db/client";
+import {
+  clampScopesForRole,
   createAuthorizationCode,
   createOAuthApplication,
   deleteOAuthApplication,
   getOAuthApplicationByClientId,
   getOAuthApplicationById,
   getOAuthApplicationsByTeam,
-  getTeamsByUserId,
+  getTeamRole,
   getUserAuthorizedApplications,
   hasUserEverAuthorizedApp,
   regenerateClientSecret,
   revokeUserApplicationTokens,
+  scopesWithinRole,
   updateOAuthApplication,
   updateOAuthApplicationstatus,
 } from "@invoicewise/db/queries";
+import { isScope, scopesWithinApplication } from "@invoicewise/db/utils/scopes";
 import { AppInstalledEmail } from "@invoicewise/email/emails/app-installed";
 import { AppReviewRequestEmail } from "@invoicewise/email/emails/app-review-request";
 import { render } from "@invoicewise/email/render";
 
 export const oauthApplicationsRouter = createTRPCRouter({
-  list: protectedProcedure.query(async ({ ctx }) => {
+  list: workspaceProcedure.query(async ({ ctx }) => {
     const { db, teamId } = ctx;
 
     const applications = await getOAuthApplicationsByTeam(db, teamId!);
@@ -58,14 +67,12 @@ export const oauthApplicationsRouter = createTRPCRouter({
         throw new Error("Invalid redirect_uri");
       }
 
-      // Validate scopes
+      // Validate scopes against the registered set, normalized so an
+      // application that registered an alias covers its concrete scopes.
       const requestedScopes = scope.split(" ").filter(Boolean);
-      const invalidScopes = requestedScopes.filter(
-        (s) => !application.scopes.includes(s),
-      );
 
-      if (invalidScopes.length > 0) {
-        throw new Error(`Invalid scopes: ${invalidScopes.join(", ")}`);
+      if (!scopesWithinApplication(application.scopes, requestedScopes)) {
+        throw new Error(`Invalid scopes: ${requestedScopes.join(", ")}`);
       }
 
       // Return application info for consent screen
@@ -80,7 +87,8 @@ export const oauthApplicationsRouter = createTRPCRouter({
         installUrl: application.installUrl,
         screenshots: application.screenshots,
         clientId: application.clientId,
-        scopes: requestedScopes,
+        // Validated above, so this only narrows the type for the client.
+        scopes: requestedScopes.filter(isScope),
         redirectUri: redirectUri,
         state,
         status: application.status,
@@ -107,13 +115,16 @@ export const oauthApplicationsRouter = createTRPCRouter({
         throw new Error("Invalid client_id");
       }
 
-      // Validate scopes against application's registered scopes (prevent privilege escalation)
-      const invalidScopes = scopes.filter(
-        (scope) => !application.scopes.includes(scope),
-      );
+      // Validate scopes against the application's registered set (prevent
+      // privilege escalation); comparison is normalized set inclusion.
+      if (!scopesWithinApplication(application.scopes, scopes)) {
+        throw new Error(`Invalid scopes: ${scopes.join(", ")}`);
+      }
 
-      if (invalidScopes.length > 0) {
-        throw new Error(`Invalid scopes: ${invalidScopes.join(", ")}`);
+      // The decision is redirected to this URI, so it must be registered even
+      // when the user denies.
+      if (!application.redirectUris.includes(redirectUri)) {
+        throw new Error("Invalid redirect_uri");
       }
 
       const redirectUrl = new URL(redirectUri);
@@ -129,17 +140,23 @@ export const oauthApplicationsRouter = createTRPCRouter({
       }
 
       // Only validate team membership for "allow" decisions
-      const userTeams = await getTeamsByUserId(db, session.user.id);
+      const role = await getTeamRole(primaryDb, teamId, session.user.id);
 
-      if (!userTeams) {
-        throw new Error("User not found");
-      }
-
-      const hasTeamAccess = userTeams.some((team) => team.id === teamId);
-
-      if (!hasTeamAccess) {
+      if (!role) {
         throw new Error("User is not a member of the specified team");
       }
+
+      // A granted token can never carry scopes above the authorizing actor's
+      // current role, so a member cannot hand a write scope to an app.
+      // Aliases expand and duplicates collapse, so the decision is set
+      // membership rather than a length comparison.
+      if (!scopesWithinRole(role, scopes)) {
+        throw new Error(
+          "Requested scopes exceed your permissions in this workspace",
+        );
+      }
+
+      const grantedScopes = clampScopesForRole(role, scopes);
 
       // Enforce PKCE for public clients
       if (application.isPublic && !codeChallenge) {
@@ -151,7 +168,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
         applicationId: application.id,
         userId: session.user.id,
         teamId,
-        scopes,
+        scopes: grantedScopes,
         redirectUri,
         codeChallenge,
       });
@@ -172,7 +189,10 @@ export const oauthApplicationsRouter = createTRPCRouter({
 
         if (!hasAuthorizedBefore) {
           // Get team information
-          const userTeam = userTeams.find((team) => team.id === teamId);
+          const userTeam = await db.query.teams.findFirst({
+            where: (teams, { eq }) => eq(teams.id, teamId),
+            columns: { id: true, name: true },
+          });
 
           if (userTeam && session.user.email) {
             const html = await render(
@@ -205,7 +225,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
       return { redirect_url: redirectUrl.toString() };
     }),
 
-  create: protectedProcedure
+  create: adminProcedure
     .input(createOAuthApplicationSchema)
     .mutation(async ({ ctx, input }) => {
       const { db, teamId, session } = ctx;
@@ -219,7 +239,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
       return application;
     }),
 
-  get: protectedProcedure
+  get: workspaceProcedure
     .input(getOAuthApplicationSchema)
     .query(async ({ ctx, input }) => {
       const { db, teamId } = ctx;
@@ -233,7 +253,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
       return application;
     }),
 
-  update: protectedProcedure
+  update: adminProcedure
     .input(updateOAuthApplicationSchema)
     .mutation(async ({ ctx, input }) => {
       const { db, teamId } = ctx;
@@ -252,7 +272,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
       return application;
     }),
 
-  delete: protectedProcedure
+  delete: adminProcedure
     .input(deleteOAuthApplicationSchema)
     .mutation(async ({ ctx, input }) => {
       const { db, teamId } = ctx;
@@ -269,7 +289,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  regenerateSecret: protectedProcedure
+  regenerateSecret: adminProcedure
     .input(regenerateClientSecretSchema)
     .mutation(async ({ ctx, input }) => {
       const { db, teamId } = ctx;
@@ -283,7 +303,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
       return result;
     }),
 
-  authorized: protectedProcedure.query(async ({ ctx }) => {
+  authorized: workspaceProcedure.query(async ({ ctx }) => {
     const { db, teamId, session } = ctx;
 
     const applications = await getUserAuthorizedApplications(
@@ -311,7 +331,7 @@ export const oauthApplicationsRouter = createTRPCRouter({
       return { success: true };
     }),
 
-  updateApprovalStatus: protectedProcedure
+  updateApprovalStatus: adminProcedure
     .input(updateApprovalStatusSchema)
     .mutation(async ({ ctx, input }) => {
       const { db, teamId, session } = ctx;
@@ -337,8 +357,10 @@ export const oauthApplicationsRouter = createTRPCRouter({
       if (input.status === "pending") {
         try {
           // Get team information
-          const userTeams = await getTeamsByUserId(db, session.user.id);
-          const currentTeam = userTeams?.find((team) => team.id === teamId);
+          const currentTeam = await db.query.teams.findFirst({
+            where: (teams, { eq }) => eq(teams.id, teamId!),
+            columns: { id: true, name: true },
+          });
 
           if (currentTeam && session.user.email) {
             const html = await render(

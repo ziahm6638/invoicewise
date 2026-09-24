@@ -23,129 +23,81 @@ Email in → TypeSafe extraction + judgments → Auto-post or API/webhooks out
 
 ## Origin: Midday Fork
 
-This repo is forked from [midday-ai/midday](https://github.com/midday-ai/midday). Key packages we inherit:
+This repo is forked from [midday-ai/midday](https://github.com/midday-ai/midday). The
+current, observed repository map is:
 
-| Package | Purpose | Keep/Modify |
-|---------|---------|-------------|
-| `packages/inbox` | Gmail/Outlook email connection | Keep, extend |
-| `packages/documents` | PDF extraction, invoice/receipt schemas | Keep, replace AI with TypeSafe |
-| `packages/jobs` | Trigger.dev background jobs | Keep, modify tasks |
-| `packages/email` | Transactional email (Resend) | Keep |
-| `packages/supabase` | Database client | Keep |
-| `packages/db` | Drizzle queries | Modify for our schema |
-| `apps/dashboard` | Next.js app | Heavy modification |
-| `apps/api` | API routes | Modify |
-| `apps/engine` | Cloudflare worker | Evaluate |
+| Path | Purpose |
+|------|---------|
+| `apps/dashboard` | Next.js customer app: Better Auth sessions, inbox, intake upload, document viewer, settings |
+| `apps/api` | Hono/Effect HTTP API: REST, tRPC, MCP, OAuth, storage capability route, workflow runner |
+| `apps/website` | invoicewise.uk marketing site (inherited Midday content; rewrite tracked in #16) |
+| `packages/db` | Drizzle schema and queries for the primary Postgres database, migrations, storage adapters |
+| `packages/jobs` | Postgres-backed Effect workflow queue plus document, delivery and accounting work |
+| `packages/documents` | Bounded PDF/image validation and preview in an isolated child process, TypeSafe extraction types |
+| `packages/inbox` | Gmail/Outlook mailbox connection |
+| `packages/email` | Transactional email (Resend) |
+| `packages/cache` | Redis-backed cache for auth, team-permission and read-after-write paths |
+| `packages/supabase` | Legacy Supabase client used only by the inherited marketing site |
+| `packages/{ui,utils,invoice,location,logger,encryption,events,categories,tsconfig}` | Shared libraries |
 
-**Remove/ignore:**
-- Bank connections (GoCardless, Plaid, Teller) — we don't need bank feeds
-- Transaction matching — replaced by authorisation matching
-- Time tracking, invoicing creation, vault — not our product
-- Desktop/mobile apps — not MVP
-
-## Key Modifications Needed
-
-### 1. Replace AI with TypeSafe
-
-Midday uses Gemini/OpenAI for extraction. We replace with TypeSafe for:
-- Invoice extraction (structured data from PDFs)
-- User-defined judgment questions
-- Semantic matching (Layer 2)
-
-Files to modify:
-- `packages/documents/src/processors/`
-- `packages/documents/src/prompt.ts`
-- `packages/jobs/src/tasks/inbox/`
-
-### 2. Add User-Defined Questions
-
-New table: `user_questions`
-- `id`, `team_id`, `question`, `type` (boolean/enum/number), `options`, `created_at`
-
-Questions run via TypeSafe on every invoice extraction.
-
-### 3. Replace Transaction Matching with Delivery
-
-Midday matches receipts to bank transactions. We:
-- Remove bank connection (GoCardless/Plaid)
-- Add Nango for accounting integrations (Xero, QuickBooks)
-- Auto-post extracted invoices to connected accounting
-- Expose API/MCP/webhooks for non-connected customers
-
-### 4. Simplify Dashboard
-
-Strip:
-- Time tracking UI
-- Invoice creation UI
-- Bank account connections
-- Transaction categorization
-
-Keep:
-- Inbox (email connections, incoming invoices)
-- Document viewer
-- Settings (team, integrations)
-
-Add:
-- User-defined questions editor
-- Extraction results viewer
-- Delivery status
+Retired or inherited and deliberately outside the product path: bank feeds
+(GoCardless/Plaid/Teller), bank-line transaction matching, time tracking,
+invoice creation, vault, desktop/mobile apps and the Trigger.dev task runner.
+The remaining retired bank-matching code lives in `packages/db/src/queries/inbox-matching.ts`,
+`packages/db/src/queries/transaction-matching.ts` and `packages/db/src/test/transaction-matching*.test.ts`;
+the release gate pins its three known failures as a recorded baseline (see `docs/development.md`).
 
 ## Stack
 
-- **Runtime:** Bun
-- **Framework:** Next.js (dashboard), Hono (API)
-- **Database:** Supabase (Postgres)
-- **Background jobs:** Trigger.dev
-- **Email ingestion:** Gmail/Outlook OAuth (from Midday)
-- **AI:** TypeSafe (replacing Gemini/OpenAI)
-- **Integrations:** Nango (accounting), API/MCP/webhooks
+- **Runtime:** Bun `1.3.13` (pinned in `packageManager`, CI and docs)
+- **Framework:** Next.js 15 (dashboard, website), Hono + Effect (API)
+- **Database:** Postgres 17 with pgvector, accessed with Drizzle; local services from `docker-compose.yml`
+- **Auth:** Better Auth (users, sessions, memberships, invitations) in the primary database
+- **Background jobs:** Postgres-backed Effect workflow queue (`packages/jobs`)
+- **Storage:** private local filesystem or S3-compatible (MinIO locally, R2 in production)
+- **Email:** Resend; **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)
+- **Extraction:** TypeSafe for semantic extraction and judgments; the inherited Mistral image path remains until #36 removes it
+- **Integrations:** Nango (Xero/QuickBooks), Polar (billing), API/MCP/webhooks
 
 ## Commands
 
 ```bash
-bun install
-bun dev                    # All apps
-bun dev:dashboard          # Dashboard only
-bun dev:api                # API only
-bun jobs:dashboard         # Trigger.dev jobs
+bun install                # frozen install in CI: bun install --frozen-lockfile
+bun dev                    # all apps
+bun dev:dashboard          # dashboard only
+bun dev:api                # API + workflow runner
+bun dev:website             # marketing site
+bun db:migrate             # apply packages/db/migrations forward
+bun jobs:worker            # standalone Effect workflow runner
+bun jobs:status            # inspect queued/running/stuck jobs
 bun typecheck
 bun lint
 bun format
+bun run verify             # authoritative local release verification
+bun run verify:security    # dependency + secret checks only
+bun run verify:migrations  # fresh, upgrade and recovery migration proof only
 ```
 
-## Environment Variables (TBD)
+## Environment variables
 
-```bash
-# Supabase
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
+Committed templates are authoritative: `.env.example` (Docker Compose, migrations and root
+workflow commands), `apps/api/.env-template`, `apps/dashboard/.env-example` and
+`packages/jobs/.env-template`. Postgres, Redis, private local/S3 storage, Better Auth,
+TypeSafe, Nango and Polar values are documented in `docs/development.md`. Real
+`.env` files are gitignored and are never loaded by the verification command.
 
-# Gmail OAuth
-GMAIL_CLIENT_ID=
-GMAIL_CLIENT_SECRET=
-GMAIL_REDIRECT_URI=
+## Database
 
-# TypeSafe
-TYPESAFE_API_KEY=
+`packages/db` owns the schema (`src/schema.ts`) and the ordered, forward-only migrations in
+`migrations/`. Applied state is recorded in `drizzle.__drizzle_migrations`. Member tables include
+`users`, `teams`, `users_on_team`, `user_questions`, `inbox` (with extraction, judgments, intake
+lifecycle and accounting-delivery columns) and `workflow_jobs`. Bank and transaction tables are
+unused but still defined in the schema; `inbox` keeps the accepted document, its source reference and financial fields.
 
-# Nango
-NANGO_SECRET_KEY=
-
-# Trigger.dev
-TRIGGER_SECRET_KEY=
-```
-
-## Database Schema Changes (TBD)
-
-New tables:
-- `user_questions` — user-defined TypeSafe questions
-- `invoice_judgments` — results of questions per invoice
-- `delivery_log` — tracking auto-posts and webhook deliveries
-
-Modified tables:
-- `inbox` — add `judgments` JSONB column
-- Remove bank/transaction related tables
+A failed migration batch rolls back to the last committed migration set. Recovery is forward:
+resolve the conflicting object or data, then re-run `bun db:migrate`. There is no automatic
+destructive reset and no fictional rollback for irreversible enum/schema changes; see
+`docs/development.md` for the documented procedure and the verification proof.
 
 ## Links
 

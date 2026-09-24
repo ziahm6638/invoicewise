@@ -13,6 +13,7 @@
   },
   "exports": {
     "./auth": "./src/auth.ts",
+    "./intake/http": "./src/intake/http.ts",
     "./trpc/routers/_app": "./src/trpc/routers/_app.ts"
   },
   "dependencies": {

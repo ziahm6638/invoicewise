@@ -12,8 +12,16 @@ import { ChatList } from "./chat-list";
 import { chatExamples } from "./examples";
 import { Footer } from "./footer";
 import { BotCard, SignUpCard, UserMessage } from "./messages";
+import type { AssistantMessage, SubmitMessage } from "./types";
 
-export function Chat({ messages, submitMessage, input, setInput }) {
+type Props = {
+  messages: AssistantMessage[];
+  submitMessage: SubmitMessage;
+  input: string;
+  setInput: (value: string) => void;
+};
+
+export function Chat({ messages, submitMessage, input, setInput }: Props) {
   const { formRef, onKeyDown } = useEnterSubmit();
   const [isVisible, setVisible] = useState(false);
 
@@ -47,14 +55,7 @@ export function Chat({ messages, submitMessage, input, setInput }) {
             {
               id: nanoid(),
               role: "assistant",
-              display: (
-                <BotCard
-                  content={
-                    chatExamples.find((example) => example.title === input)
-                      ?.content
-                  }
-                />
-              ),
+              display: <BotCard content={content} />,
             },
           ]),
         500,

@@ -4,6 +4,50 @@ import { fetchStatus } from "@/actions/fetch-status";
 import { cn } from "@invoicewise/ui/cn";
 import { useEffect, useState } from "react";
 
+type StatusLevel = {
+  label: string;
+  color: string;
+  color2: string;
+};
+
+const statusLevels: Record<string, StatusLevel> = {
+  operational: {
+    label: "Operational",
+    color: "bg-green-500",
+    color2: "bg-green-400",
+  },
+  degraded_performance: {
+    label: "Degraded Performance",
+    color: "bg-yellow-500",
+    color2: "bg-yellow-400",
+  },
+  partial_outage: {
+    label: "Partial Outage",
+    color: "bg-yellow-500",
+    color2: "bg-yellow-400",
+  },
+  major_outage: {
+    label: "Major Outage",
+    color: "bg-red-500",
+    color2: "bg-red-400",
+  },
+  unknown: {
+    label: "Unknown",
+    color: "bg-gray-500",
+    color2: "bg-gray-400",
+  },
+  incident: {
+    label: "Incident",
+    color: "bg-yellow-500",
+    color2: "bg-yellow-400",
+  },
+  under_maintenance: {
+    label: "Under Maintenance",
+    color: "bg-gray-500",
+    color2: "bg-gray-400",
+  },
+};
+
 export function StatusWidget() {
   const [status, setStatus] = useState("operational");
 
@@ -21,47 +65,7 @@ export function StatusWidget() {
     fetchData();
   }, []);
 
-  const getStatusLevel = (level) => {
-    return {
-      operational: {
-        label: "Operational",
-        color: "bg-green-500",
-        color2: "bg-green-400",
-      },
-      degraded_performance: {
-        label: "Degraded Performance",
-        color: "bg-yellow-500",
-        color2: "bg-yellow-400",
-      },
-      partial_outage: {
-        label: "Partial Outage",
-        color: "bg-yellow-500",
-        color2: "bg-yellow-400",
-      },
-      major_outage: {
-        label: "Major Outage",
-        color: "bg-red-500",
-        color2: "bg-red-400",
-      },
-      unknown: {
-        label: "Unknown",
-        color: "bg-gray-500",
-        color2: "bg-gray-400",
-      },
-      incident: {
-        label: "Incident",
-        color: "bg-yellow-500",
-        color2: "bg-yellow-400",
-      },
-      under_maintenance: {
-        label: "Under Maintenance",
-        color: "bg-gray-500",
-        color2: "bg-gray-400",
-      },
-    }[level];
-  };
-
-  const level = getStatusLevel(status);
+  const level: StatusLevel | undefined = statusLevels[status];
 
   if (!level) {
     return null;

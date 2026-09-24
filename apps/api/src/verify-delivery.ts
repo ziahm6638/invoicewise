@@ -4,7 +4,7 @@ import {
   updateInboxWithProcessedData,
   upsertApiKey,
 } from "@invoicewise/db/queries";
-import { teams, users } from "@invoicewise/db/schema";
+import { teams, users, usersOnTeam } from "@invoicewise/db/schema";
 import {
   emitWebhookEvent,
   verifyWebhookSignature,
@@ -20,15 +20,22 @@ let listener: ReturnType<typeof Bun.serve> | undefined;
 const waitFor = async <T>(
   read: () => Promise<T>,
   ready: (value: T) => boolean,
-  timeoutMs = 15_000,
+  timeoutMs = 30_000,
+  intervalMs = 500,
 ) => {
   const deadline = Date.now() + timeoutMs;
+  let last: T | undefined;
   while (Date.now() < deadline) {
     const value = await read();
+    last = value;
     if (ready(value)) return value;
-    await Bun.sleep(100);
+    // Protected REST endpoints allow 100 requests per 10 minutes per user, so
+    // the proof polls at a rate that cannot exhaust that budget.
+    await Bun.sleep(intervalMs);
   }
-  throw new Error("Timed out waiting for delivery proof");
+  throw new Error(
+    `Timed out waiting for delivery proof: ${JSON.stringify(last)}`,
+  );
 };
 
 const api = async <T>(
@@ -171,6 +178,13 @@ try {
   if (!userA || !userB) throw new Error("Unable to create proof users");
   userIds.push(userA.id, userB.id);
 
+  // Current authorization resolves the caller's workspace role from
+  // `users_on_team` on every request, so the proof users need real membership.
+  await db.insert(usersOnTeam).values([
+    { userId: userA.id, teamId: teamA.id, role: "owner" },
+    { userId: userB.id, teamId: teamB.id, role: "owner" },
+  ]);
+
   const [{ key: keyA }, { key: keyB }] = await Promise.all([
     upsertApiKey(db, {
       name: "Delivery proof key A",
@@ -307,16 +321,26 @@ try {
   });
   const failedAttempts = await waitFor(
     async () =>
-      api<{ data: Array<{ attempt: number; error: string | null }> }>(
-        `/webhooks/${failedEndpoint.body.id}/attempts`,
-        keyA,
-      ),
-    ({ body }) => body.data.length === 4,
+      api<{
+        data?: Array<{ attempt: number; error: string | null }>;
+        error?: string;
+      }>(`/webhooks/${failedEndpoint.body.id}/attempts`, keyA),
+    ({ body }) => Array.isArray(body.data) && body.data.length === 4,
   );
-  const deliveryStatus = await api<{ data: Array<{ status: string }> }>(
-    `/invoices/${invoice.id}/delivery-status`,
-    keyA,
-  );
+  if (!Array.isArray(failedAttempts.body.data)) {
+    throw new Error(
+      `Webhook attempts were not readable: status ${failedAttempts.response.status} body ${JSON.stringify(failedAttempts.body)}`,
+    );
+  }
+  const deliveryStatus = await api<{
+    data?: Array<{ status: string }>;
+    error?: string;
+  }>(`/invoices/${invoice.id}/delivery-status`, keyA);
+  if (!Array.isArray(deliveryStatus.body.data)) {
+    throw new Error(
+      `Delivery status was not readable: status ${deliveryStatus.response.status} body ${JSON.stringify(deliveryStatus.body)}`,
+    );
+  }
 
   const mcp = await runMcpJudgmentCall(keyA, invoice.id);
   console.log(
@@ -373,6 +397,7 @@ try {
 } finally {
   listener?.stop(true);
   if (teamIds.length > 0) {
+    await db.delete(usersOnTeam).where(inArray(usersOnTeam.teamId, teamIds));
     await db.delete(teams).where(inArray(teams.id, teamIds));
   }
   if (userIds.length > 0) {
