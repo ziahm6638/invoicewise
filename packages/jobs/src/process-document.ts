@@ -26,7 +26,7 @@ export async function processDocumentAttachment(
   const [previousInvoices, workspaceQuestions] = await Promise.all([
     getProcessedInvoiceHistory(db, {
       teamId: input.teamId,
-      excludeId: input.inboxId,
+      documentId: input.inboxId,
     }),
     getUserQuestions(db, input.teamId),
   ]);
@@ -90,7 +90,7 @@ export async function processDocumentAttachment(
   const { invoiceNumber, originalInvoiceNumber } = result.extraction;
   const sameNumber = await getInvoicesByDocumentNumber(db, {
     teamId: input.teamId,
-    excludeId: input.inboxId,
+    documentId: input.inboxId,
     numbers: [invoiceNumber, originalInvoiceNumber].filter(
       (number): number is string => Boolean(number),
     ),

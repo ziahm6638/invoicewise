@@ -1913,13 +1913,27 @@ export async function getInboxByFilePath(
 }
 
 /**
+ * The live documents in the workspace received strictly before the given
+ * one: a deleted, reserved or later document is never a duplicate or credit
+ * candidate, so reprocessing a document cannot flag it against its copies.
+ */
+const earlierLiveDocuments = (teamId: string, documentId: string) =>
+  and(
+    eq(inbox.teamId, teamId),
+    ne(inbox.status, "deleted"),
+    visibleIntakeState(),
+    isNotNull(inbox.extraction),
+    sql`${inbox.createdAt} < (select current.created_at from ${inbox} as current where current.id = ${documentId})`,
+  );
+
+/**
  * Earlier documents in the workspace with the given document numbers,
  * compared without spacing, punctuation or case: the candidates for a
  * duplicate or for the invoice a credit note credits, however far back.
  */
 export async function getInvoicesByDocumentNumber(
   db: Database,
-  params: { teamId: string; excludeId: string; numbers: string[] },
+  params: { teamId: string; documentId: string; numbers: string[] },
 ) {
   const keys = [
     ...new Set(
@@ -1934,11 +1948,7 @@ export async function getInvoicesByDocumentNumber(
     .from(inbox)
     .where(
       and(
-        eq(inbox.teamId, params.teamId),
-        ne(inbox.id, params.excludeId),
-        ne(inbox.status, "deleted"),
-        isNotNull(inbox.extraction),
-        visibleIntakeState(),
+        earlierLiveDocuments(params.teamId, params.documentId),
         inArray(
           sql<string>`upper(regexp_replace(${inbox.extraction} ->> 'invoiceNumber', '[^A-Za-z0-9]', '', 'g'))`,
           keys,
@@ -1951,17 +1961,15 @@ export async function getInvoicesByDocumentNumber(
 
 export async function getProcessedInvoiceHistory(
   db: Database,
-  params: { teamId: string; excludeId: string; limit?: number },
+  params: { teamId: string; documentId: string; limit?: number },
 ) {
   return db
     .select({ id: inbox.id, extraction: inbox.extraction })
     .from(inbox)
     .where(
       and(
-        eq(inbox.teamId, params.teamId),
-        ne(inbox.id, params.excludeId),
+        earlierLiveDocuments(params.teamId, params.documentId),
         eq(inbox.type, "invoice"),
-        isNotNull(inbox.extraction),
       ),
     )
     .orderBy(desc(inbox.createdAt))

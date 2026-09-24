@@ -7,6 +7,8 @@ import {
   deleteUserQuestion,
   getInboxByFilePath,
   getInboxIntakeBinding,
+  getInvoicesByDocumentNumber,
+  getProcessedInvoiceHistory,
   getUserQuestions,
   getWorkflowJob,
   recordInboxProcessingFailure,
@@ -15,7 +17,10 @@ import {
 } from "@invoicewise/db/queries";
 import { inbox, teams, users, workflowJobs } from "@invoicewise/db/schema";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
-import type { InvoiceExtraction } from "@invoicewise/documents";
+import {
+  type InvoiceExtraction,
+  validateInvoice,
+} from "@invoicewise/documents";
 import { eq } from "drizzle-orm";
 import { Effect, Logger } from "effect";
 import { enqueueWorkflow, workflowKey } from "./client";
@@ -570,6 +575,94 @@ async function verifyInternalFailureHidden(
   }
 }
 
+async function verifyDuplicateCandidates(
+  database: ReturnType<typeof createDatabaseClient>,
+  teamId: string,
+) {
+  const extraction: InvoiceExtraction = {
+    ...priorExtraction,
+    invoiceNumber: "CAND-100",
+  };
+  const insert = async (
+    label: string,
+    createdAt: string,
+    state: Partial<typeof inbox.$inferInsert> = {},
+  ) => {
+    const [row] = await database.db
+      .insert(inbox)
+      .values({
+        teamId,
+        createdAt,
+        displayName: label,
+        fileName: `${label}.pdf`,
+        contentType: "application/pdf",
+        type: "invoice",
+        status: "pending",
+        intakeState: "accepted",
+        extraction,
+        ...state,
+      })
+      .returning({ id: inbox.id });
+    if (!row) throw new Error(`Unable to create the ${label} copy`);
+    return row.id;
+  };
+  // Every copy of one invoice: only an earlier, live copy may make the
+  // current one a duplicate. A deleted, reserved or later copy never does.
+  const deleted = await insert("deleted", "2020-01-01T00:00:00Z", {
+    status: "deleted",
+    intakeState: "cancelled",
+  });
+  const earlier = await insert("earlier", "2020-01-02T00:00:00Z");
+  const reserved = await insert("reserved", "2020-01-03T00:00:00Z", {
+    intakeState: "reserved",
+  });
+  const current = await insert("current", "2020-01-04T00:00:00Z");
+  const later = await insert("later", "2020-01-05T00:00:00Z");
+
+  const candidatesOf = async (documentId: string) => {
+    const [sameNumber, history] = await Promise.all([
+      getInvoicesByDocumentNumber(database.db, {
+        teamId,
+        documentId,
+        numbers: ["CAND-100"],
+      }),
+      getProcessedInvoiceHistory(database.db, { teamId, documentId }),
+    ]);
+    const copies = new Set([deleted, earlier, reserved, current, later]);
+    const ids = (rows: { id: string }[]) =>
+      rows.map((row) => row.id).filter((id) => copies.has(id));
+    return {
+      sameNumber: ids(sameNumber),
+      history: ids(history),
+      duplicateOf: validateInvoice(extraction, [...sameNumber, ...history])
+        .identity.duplicateOf,
+    };
+  };
+  const forCurrent = await candidatesOf(current);
+  // Reprocessing the first live copy (a retried job) finds no earlier copy.
+  const forEarlier = await candidatesOf(earlier);
+  const expected = {
+    forCurrent: {
+      sameNumber: [earlier],
+      history: [earlier],
+      duplicateOf: earlier,
+    },
+    forEarlier: { sameNumber: [], history: [], duplicateOf: null },
+  };
+  if (!Bun.deepEquals({ forCurrent, forEarlier }, expected)) {
+    throw new Error(
+      `Duplicate candidates include a deleted, reserved or later copy: ${JSON.stringify(
+        {
+          forCurrent,
+          forEarlier,
+          copies: { deleted, earlier, reserved, current, later },
+        },
+      )}`,
+    );
+  }
+  return { duplicateOfEarlierOnly: true };
+}
+
 async function main() {
   process.env.WORKFLOW_RETRY_BASE_MS = "50";
   process.env.WORKFLOW_RETRY_MAX_MS = "50";
@@ -823,11 +916,16 @@ async function main() {
     }
 
     const inputMatrix = await verifyInputMatrix(database, storage, teamId);
+    const duplicateCandidates = await verifyDuplicateCandidates(
+      database,
+      teamId,
+    );
 
     console.log(
       JSON.stringify({
         event: "workflow_verification_succeeded",
         inputMatrix,
+        duplicateCandidates,
         workflowId: completed.id,
         attempts: completed.attempts,
         persistedInvoiceId: persisted.id,

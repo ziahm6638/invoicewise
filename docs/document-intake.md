@@ -428,8 +428,10 @@ it validates whether it prints its amounts negative or positive, and its
 canonical totals are stored negative. An invoice with a negative total is an
 error. A document's identity is `type:supplier:number`, where the supplier is
 its VAT number (else its normalised name) and the number ignores spacing,
-punctuation and case. An earlier document in the workspace with the same
-identity makes this one a duplicate (`identity.duplicateOf`); a credit note
+punctuation and case. An earlier live document in the workspace (received
+before this one, not deleted or still reserved) with the same identity makes
+this one a duplicate, so reprocessing a document never flags it against a
+later copy (`identity.duplicateOf`); a credit note
 and an invoice with the same number are different documents. A credit note
 naming an original invoice is linked to it (`identity.creditsInvoiceId`)
 when that invoice is in the workspace, otherwise flagged; the processing job
