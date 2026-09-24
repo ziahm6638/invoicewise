@@ -206,10 +206,10 @@ Observed on 2026-09-24:
 save-before-event:        revision=0, deliveries scheduled=0, processing job queued for retry
 crash after commit:       revision=1 after restart, 3/3 webhooks succeeded, accounting posted
 webhook remote success:   same delivery received twice with one logical event ID
-bill remote success:      2 provider requests, 1 bill, status already_posted
+bill remote success:      2 provider requests, 1 bill, same provider ID, status posted
 second destination fails: attempts=4, retryable, dashboard "failed"; retry re-drove only it -> "delivered"
 removed destinations:     disabled endpoint/disconnected accounting/deleted invoice cancelled, retry skipped them
-reconciliation:           9 accepted revisions, 17 distinct logical events, 1 deduplicable redelivery, 6 bills, 0 silent losses
+reconciliation:           9 accepted revisions, 18 distinct logical events, 1 deduplicable redelivery, 6 bills, 0 silent losses
 ```
 
 ## Local proof

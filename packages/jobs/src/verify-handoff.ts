@@ -156,27 +156,42 @@ async function main() {
     },
   });
 
-  // Nango stand-in: one bill per provider idempotency key, like the real
-  // provider; a repeated request returns the same bill as a duplicate.
+  // Nango stand-in: the connection lookup plus the Xero proxy. One bill per
+  // provider idempotency key, like Xero, which replays the original response
+  // for a repeated Idempotency-Key.
   const bills = new Map<string, string>();
   const billRequests = new Map<string, number>();
   const nango = Bun.serve({
     port: 0,
     async fetch(request) {
-      if (new URL(request.url).pathname !== "/action/trigger") {
-        return new Response("Not found", { status: 404 });
+      const url = new URL(request.url);
+      if (
+        request.method === "GET" &&
+        url.pathname === "/connection/xero-connection"
+      ) {
+        return Response.json({
+          connection_id: "xero-connection",
+          provider_config_key: "xero-invoicewise",
+          connection_config: { tenant_id: "xero-tenant" },
+        });
       }
-      const body = (await request.json()) as {
-        input: { idempotencyKey: string };
-      };
-      const key = body.input.idempotencyKey;
-      billRequests.set(key, (billRequests.get(key) ?? 0) + 1);
-      const existing = bills.get(key);
-      if (existing)
-        return Response.json({ providerId: existing, duplicate: true });
-      const providerId = `xero-bill-${bills.size + 1}`;
-      bills.set(key, providerId);
-      return Response.json({ providerId, duplicate: false });
+      if (
+        request.method === "POST" &&
+        url.pathname === "/proxy/api.xro/2.0/Invoices"
+      ) {
+        const key = request.headers.get("nango-proxy-idempotency-key") ?? "";
+        billRequests.set(key, (billRequests.get(key) ?? 0) + 1);
+        const providerId = bills.get(key) ?? `xero-bill-${bills.size + 1}`;
+        bills.set(key, providerId);
+        return Response.json({ Invoices: [{ InvoiceID: providerId }] });
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname.startsWith("/proxy/api.xro/2.0/Invoices/")
+      ) {
+        return Response.json({ Attachments: [{ AttachmentID: "attachment" }] });
+      }
+      return new Response("Not found", { status: 404 });
     },
   });
   const typeSafe = startTypeSafeStub();
@@ -275,12 +290,14 @@ async function main() {
    * blocked database session (so its open transaction rolls back, exactly as
    * a dead host's would), disarms the point and releases the lock.
    */
+  const openHolds = new Set<() => void>();
   const holdAt = async (point: string) => {
     let release!: () => void;
     let acquired!: () => void;
     const released = new Promise<void>((done) => {
       release = done;
     });
+    openHolds.add(release);
     const ready = new Promise<void>((done) => {
       acquired = done;
     });
@@ -308,6 +325,7 @@ async function main() {
           await db.execute(sql`select pg_terminate_backend(${pid})`);
         }
         await disarm(point);
+        openHolds.delete(release);
         release();
         await holding;
       },
@@ -427,6 +445,13 @@ async function main() {
     const processingInvoice = async (name: string, owner = teamId) => {
       const filePath = [owner, "inbox", `${name}.pdf`];
       filePaths.push(filePath);
+      // The bill post attaches the stored source document.
+      await storage.upload({
+        bucket: "vault",
+        path: filePath,
+        file: bytes,
+        contentType: "application/pdf",
+      });
       const created = await createInbox(db, {
         displayName: name,
         teamId: owner,
@@ -662,7 +687,7 @@ async function main() {
     check(
       billRequests.get(billKey) === 2 &&
         afterBill.accountingProviderId === bills.get(billKey) &&
-        afterBill.accountingPostStatus === "already_posted",
+        afterBill.accountingPostStatus === "posted",
       `a provider timeout after success must yield one bill: ${JSON.stringify({
         requests: billRequests.get(billKey),
         status: afterBill.accountingPostStatus,
@@ -1119,6 +1144,9 @@ async function main() {
     );
   } finally {
     for (const worker of [...workers]) await worker.kill();
+    // A failed check can leave a hold's transaction open; end it so the
+    // pool can close and the failure is reported instead of hanging.
+    for (const release of openHolds) release();
     await db.execute(sql.raw(FAULT_TEARDOWN)).catch(() => undefined);
     for (const path of filePaths) {
       await storage.remove({ bucket: "vault", path }).catch(() => undefined);
