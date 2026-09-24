@@ -1,0 +1,30 @@
+{
+  "fields": {
+    "documentType": 1,
+    "supplierName": 1,
+    "supplierAddress": 1,
+    "supplierVatNumber": 1,
+    "supplierCompanyNumber": 1,
+    "invoiceNumber": 1,
+    "originalInvoiceNumber": 1,
+    "invoiceDate": 1,
+    "dueDate": 1,
+    "currency": 1,
+    "netAmount": 1,
+    "discountAmount": 1,
+    "vatAmount": 1,
+    "taxRate": 1,
+    "grossAmount": 1,
+    "amountsIncludeTax": 1,
+    "description": 1,
+    "purchaseOrderReference": 1,
+    "paymentReference": 1,
+    "accountName": 1,
+    "accountNumber": 1,
+    "sortCode": 1,
+    "iban": 1,
+    "bic": 1
+  },
+  "lineItems": { "recall": 1, "precision": 1 },
+  "validation": 1
+}

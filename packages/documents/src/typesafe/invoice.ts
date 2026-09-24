@@ -19,6 +19,12 @@ import {
 } from "../layout";
 import type { GetDocumentRequest } from "../types";
 import {
+  type InvoiceValidation,
+  supplierKey,
+  validateInvoice,
+} from "../validation";
+import {
+  type AmountCandidate,
   type Candidate,
   accountNameCandidates,
   accountNumberCandidates,
@@ -26,15 +32,20 @@ import {
   amountCandidates,
   bicCandidates,
   candidateRow,
+  companyNumberCandidates,
   currencyCandidates,
   dateCandidates,
   descriptionCandidates,
+  documentTypeCandidates,
   ibanCandidates,
   ibanChecksumValid,
   invoiceNumberCandidates,
+  originalInvoiceCandidates,
+  paymentReferenceCandidates,
   purchaseOrderCandidates,
   sortCodeCandidates,
   supplierNameCandidates,
+  taxRateCandidates,
   vatNumberCandidates,
 } from "./candidates";
 import {
@@ -55,17 +66,88 @@ export type { InvoiceLineItem } from "./line-items";
 /** How the invoice text was obtained. */
 export type InvoiceTextSource = "text-layer" | "ocr" | "mixed" | "text";
 
+/** What the document says it is. A credit note refunds or reduces an invoice. */
+export type InvoiceDocumentType = "invoice" | "credit_note";
+
+/**
+ * Where a field's value came from, so every value can be traced to the
+ * printed row it was read from and how sure the selection was.
+ */
+export type FieldEvidence = {
+  /** 1-based page of the row, when known. */
+  page: number | null;
+  /** Index of the printed row (`L000` in the text TypeSafe read). */
+  line: number | null;
+  /** The printed row, narrowed to the value's column where possible. */
+  text: string | null;
+  /** The label printed beside or above the value. */
+  label: string | null;
+  /** TypeSafe's confidence in the selection (0-1); null for derived values. */
+  confidence: number | null;
+  /** How a value that is not printed as such was derived. */
+  derivedFrom?: string;
+  /** For an amount: the currency marker printed with it ("£", "USD", "$"). */
+  currencyMarker?: string | null;
+  /** For an amount: the ISO currency that marker names; null when none or ambiguous. */
+  currency?: string | null;
+};
+
+/** Extraction fields that carry evidence. */
+export type InvoiceEvidenceField =
+  | "documentType"
+  | "supplierName"
+  | "supplierAddress"
+  | "supplierVatNumber"
+  | "supplierCompanyNumber"
+  | "invoiceNumber"
+  | "originalInvoiceNumber"
+  | "invoiceDate"
+  | "dueDate"
+  | "currency"
+  | "netAmount"
+  | "discountAmount"
+  | "vatAmount"
+  | "taxRate"
+  | "grossAmount"
+  | "amountsIncludeTax"
+  | "accountName"
+  | "accountNumber"
+  | "sortCode"
+  | "iban"
+  | "bic"
+  | "description"
+  | "purchaseOrderReference"
+  | "paymentReference";
+
 export type InvoiceExtraction = {
+  /** Null when the document names neither; never assumed. */
+  documentType: InvoiceDocumentType | null;
   supplierName: string | null;
   supplierAddress: string | null;
   supplierVatNumber: string | null;
+  /** Companies House registration number, when printed. */
+  supplierCompanyNumber: string | null;
+  /** The document's own number: the invoice or credit note number. */
   invoiceNumber: string | null;
+  /** For a credit note: the number of the invoice it credits, when printed. */
+  originalInvoiceNumber: string | null;
   invoiceDate: string | null;
   dueDate: string | null;
+  /** ISO 4217 code, only when the document names it; never assumed. */
   currency: string | null;
+  /** Total before tax, after any document-level discount. Amounts are as printed. */
   netAmount: number | null;
+  /** A document-level discount, as a positive magnitude. */
+  discountAmount: number | null;
   vatAmount: number | null;
+  /** One VAT or tax rate (percent) applied to the whole document, when printed. */
+  taxRate: number | null;
   grossAmount: number | null;
+  /**
+   * Whether line amounts include tax: true or false when the table header or
+   * the document says so, null when it does not.
+   */
+  amountsIncludeTax: boolean | null;
   lineItems: InvoiceLineItem[];
   bankDetails: {
     accountName: string | null;
@@ -76,12 +158,20 @@ export type InvoiceExtraction = {
   };
   description: string | null;
   purchaseOrderReference: string | null;
+  /** The reference the supplier asks to be quoted with the payment. */
+  paymentReference: string | null;
   textSource: InvoiceTextSource;
   /**
    * How each page's text was read, in page order. Every page of the document
    * is listed; none is skipped. Empty when the input was already plain text.
    */
   pageSources: DocumentPageSource[];
+  /** Where each found value came from; a field with no value has no entry. */
+  evidence: {
+    fields: Partial<Record<InvoiceEvidenceField, FieldEvidence>>;
+    /** One entry per line item, in the same order. */
+    lineItems: FieldEvidence[];
+  };
 };
 
 export type InvoiceJudgmentQuestion =
@@ -163,6 +253,7 @@ export type PreviousInvoice = {
 
 export type ProcessedInvoice = {
   extraction: InvoiceExtraction;
+  validation: InvoiceValidation;
   judgments: InvoiceJudgment[];
 };
 
@@ -517,6 +608,86 @@ const pick = <C extends { id: string }>(
   return candidates.find((candidate) => candidate.id === answer.choice) ?? null;
 };
 
+const confidenceOf = (
+  answers: Record<string, TypeSafeAnswer>,
+  questionId: string,
+) => {
+  const answer = answers[questionId];
+  return answer?.type === "choice" ? answer.confidence : null;
+};
+
+const evidenceOf = (
+  lines: readonly DocumentLine[],
+  candidate: Candidate<unknown>,
+  confidence: number | null,
+): FieldEvidence => {
+  const line = lines[candidate.line];
+  const amount = candidate as Partial<AmountCandidate>;
+  return {
+    page: line?.page ?? null,
+    line: line ? candidate.line : null,
+    text: line ? candidateRow(lines, candidate).slice(0, 160) : null,
+    label: candidate.label ?? null,
+    confidence,
+    ...(amount.marker !== undefined
+      ? { currencyMarker: amount.marker, currency: amount.currency ?? null }
+      : {}),
+  };
+};
+
+const INCLUSIVE_TEXT =
+  /\b(?:(?:all\s+)?(?:prices?|amounts?|figures?)\s+(?:are\s+|shown\s+)?(?:inclusive\s+of|incl?\.?|including)\s+(?:vat|tax)|(?:vat|tax)\s+(?:is\s+)?included\s+in\s+(?:the\s+)?(?:prices?|total))\b/i;
+const EXCLUSIVE_TEXT =
+  /\b(?:all\s+)?(?:prices?|amounts?|figures?)\s+(?:are\s+|shown\s+)?(?:exclusive\s+of|excl?\.?|excluding|plus)\s+(?:vat|tax)\b/i;
+
+/**
+ * Whether line amounts include tax, from the table header of the confirmed
+ * rows or a printed statement ("All prices include VAT"); null otherwise.
+ */
+const amountsIncludeTax = (
+  lines: readonly DocumentLine[],
+  rows: readonly LineItemRow[],
+): { value: boolean | null; evidence?: FieldEvidence } => {
+  const stated = new Set(
+    rows.flatMap((row) => (row.includesTax === null ? [] : [row.includesTax])),
+  );
+  if (stated.size === 1) {
+    const row = rows.find((candidate) => candidate.includesTax !== null)!;
+    return {
+      value: [...stated][0]!,
+      evidence: {
+        page: lines[row.line]?.page ?? null,
+        line: null,
+        text: row.header,
+        label: "table header",
+        confidence: null,
+        derivedFrom: "The line-item table header names the tax basis.",
+      },
+    };
+  }
+  for (const [index, line] of lines.entries()) {
+    for (const [pattern, value] of [
+      [INCLUSIVE_TEXT, true],
+      [EXCLUSIVE_TEXT, false],
+    ] as const) {
+      if (pattern.test(line.text)) {
+        return {
+          value,
+          evidence: {
+            page: line.page,
+            line: index,
+            text: line.text.slice(0, 160),
+            label: null,
+            confidence: null,
+            derivedFrom: "The document states the tax basis of its prices.",
+          },
+        };
+      }
+    }
+  }
+  return { value: null };
+};
+
 const SUPPLIER_RULES = [
   "The supplier is the business that issued this invoice and is owed the money.",
   "The customer being billed (`recipientCompany`, usually under 'Bill to', 'Invoice to' or 'Customer') is never the supplier.",
@@ -612,12 +783,17 @@ export const extractInvoiceLines = (
     }
     const dates = dateCandidates(lines);
     const candidates = {
+      documentType: documentTypeCandidates(lines),
       supplier: supplierNameCandidates(lines),
       address: addressCandidates(lines),
       vatNumber: vatNumberCandidates(lines),
+      companyNumber: companyNumberCandidates(lines),
       invoiceNumber: invoiceNumberCandidates(lines),
-      currencies: currencyCandidates(plain),
+      originalInvoice: originalInvoiceCandidates(lines),
+      currencies: currencyCandidates(lines),
       amounts: amountCandidates(lines),
+      taxRates: taxRateCandidates(lines),
+      paymentReference: paymentReferenceCandidates(lines),
       accountName: accountNameCandidates(lines),
       accountNumber: accountNumberCandidates(lines),
       sortCode: sortCodeCandidates(lines),
@@ -639,6 +815,17 @@ export const extractInvoiceLines = (
     const add = (id: string, question: TypeSafeQuestion | undefined) => {
       if (question) questions[id] = question;
     };
+    add(
+      "document_type",
+      choiceQuestion(lines, candidates.documentType, {
+        question:
+          "Which candidate row names what this document is: an invoice (a request for payment) or a credit note (a refund or reduction of an earlier invoice)?",
+        rules: [
+          "A credit note often mentions the invoice it credits; that mention does not make it an invoice.",
+          "Choose absent when the document does not say which it is.",
+        ],
+      }),
+    );
     add(
       "supplier_name",
       choiceQuestion(lines, candidates.supplier, {
@@ -675,13 +862,42 @@ export const extractInvoiceLines = (
       }),
     );
     add(
+      "supplier_company_number",
+      choiceQuestion(lines, candidates.companyNumber, {
+        question:
+          "Which candidate is the supplier's own company registration number (Companies House number)?",
+        recipientCompany,
+        rules: [
+          "A registration number printed for the customer is not the supplier's.",
+          "A VAT number is not a company number.",
+        ],
+      }),
+    );
+    add(
       "invoice_number",
       choiceQuestion(
         lines,
         candidates.invoiceNumber,
-        "Which candidate is this invoice's own invoice number?",
+        "Which candidate is this document's own number (its invoice number, or its credit note number when it is a credit note)?",
       ),
     );
+    if (
+      candidates.documentType.some(
+        (candidate) => candidate.value === "credit_note",
+      )
+    ) {
+      add(
+        "original_invoice_number",
+        choiceQuestion(lines, candidates.originalInvoice, {
+          question:
+            "If this document is a credit note, which candidate is the number of the original invoice it credits?",
+          rules: [
+            "The credit note's own number is never the original invoice number.",
+            "Choose absent when the document is an invoice or does not name the original invoice.",
+          ],
+        }),
+      );
+    }
     add(
       "invoice_date",
       choiceQuestion(
@@ -700,18 +916,34 @@ export const extractInvoiceLines = (
     );
     add(
       "currency",
-      choiceQuestion(
-        lines,
-        candidates.currencies,
-        "Which ISO 4217 currency are this invoice's amounts in?",
-      ),
+      choiceQuestion(lines, candidates.currencies, {
+        question:
+          "Which ISO 4217 currency are this invoice's totals in (the currency of the amount due)?",
+        rules: [
+          "An equivalent printed in another currency for information is not the invoice currency.",
+        ],
+      }),
     );
+    const amountFacts = (candidate: Candidate<number>) => {
+      const amount = candidate as AmountCandidate;
+      return amount.marker ? { printedCurrency: amount.marker } : {};
+    };
     add(
       "net_amount",
       choiceQuestion(
         lines,
         candidates.amounts,
-        "Which candidate is the invoice's net total (the subtotal before VAT or tax)?",
+        "Which candidate is the invoice's net total (the total before VAT or tax, after any invoice-level discount)?",
+        amountFacts,
+      ),
+    );
+    add(
+      "discount_amount",
+      choiceQuestion(
+        lines,
+        candidates.amounts,
+        "Which candidate is a discount taken off the whole invoice before VAT (a money amount, not a percentage and not a single line's discount)?",
+        amountFacts,
       ),
     );
     add(
@@ -720,6 +952,15 @@ export const extractInvoiceLines = (
         lines,
         candidates.amounts,
         "Which candidate is the invoice's total VAT or tax amount (a money amount, not a percentage rate)?",
+        amountFacts,
+      ),
+    );
+    add(
+      "tax_rate",
+      choiceQuestion(
+        lines,
+        candidates.taxRates,
+        "Which candidate is the single VAT or tax rate applied to the whole invoice? Choose absent when several rates apply.",
       ),
     );
     add(
@@ -728,6 +969,7 @@ export const extractInvoiceLines = (
         lines,
         candidates.amounts,
         "Which candidate is the invoice's final total including VAT (the total or amount due)?",
+        amountFacts,
       ),
     );
     add(
@@ -789,6 +1031,14 @@ export const extractInvoiceLines = (
         "Which candidate is the customer's purchase-order number or order reference?",
       ),
     );
+    add(
+      "payment_reference",
+      choiceQuestion(
+        lines,
+        candidates.paymentReference,
+        "Which candidate is the reference the supplier asks the payer to quote when paying?",
+      ),
+    );
     const itemQuestions = Object.fromEntries(
       rows.map((row) => [row.id, lineItemQuestion(row)]),
     );
@@ -816,72 +1066,164 @@ export const extractInvoiceLines = (
       { concurrency: 2 },
     );
 
+    const fields: InvoiceExtraction["evidence"]["fields"] = {};
+    /** The selected candidate, with its evidence recorded under `field`. */
+    const choose = <C extends Candidate<unknown>>(
+      questionId: string,
+      field: InvoiceEvidenceField,
+      options: readonly C[],
+    ): C | null => {
+      const chosen = pick(fieldAnswers, questionId, options);
+      if (chosen) {
+        fields[field] = evidenceOf(
+          lines,
+          chosen,
+          confidenceOf(fieldAnswers, questionId),
+        );
+      }
+      return chosen;
+    };
+
     const supplierName =
-      pick(fieldAnswers, "supplier_name", candidates.supplier)?.value ?? null;
-    const address = pick(
-      fieldAnswers,
+      choose("supplier_name", "supplierName", candidates.supplier)?.value ??
+      null;
+    const address = choose(
       "supplier_address",
+      "supplierAddress",
       candidates.address,
     )?.value;
-    const invoiceDate = pick(fieldAnswers, "invoice_date", dates)?.iso ?? null;
-    let dueDate = pick(fieldAnswers, "due_date", dates)?.iso ?? null;
-    if (!dueDate && invoiceDate && DUE_ON_RECEIPT.test(plain)) {
+    const invoiceDate =
+      choose("invoice_date", "invoiceDate", dates)?.iso ?? null;
+    let dueDate = choose("due_date", "dueDate", dates)?.iso ?? null;
+    const derivedDue = (text: string, derivedFrom: string) => {
+      const index = lines.findIndex((line) => line.text.includes(text));
+      fields.dueDate = {
+        page: lines[index]?.page ?? null,
+        line: index >= 0 ? index : null,
+        text: index >= 0 ? lines[index]!.text.slice(0, 160) : text,
+        label: null,
+        confidence: null,
+        derivedFrom,
+      };
+    };
+    const onReceipt = DUE_ON_RECEIPT.exec(plain);
+    if (!dueDate && invoiceDate && onReceipt) {
       dueDate = invoiceDate;
+      derivedDue(onReceipt[0], "Payable on receipt: due on the invoice date.");
     }
     if (!dueDate && invoiceDate) {
       const terms = PAYMENT_TERMS.exec(plain);
       const days = Number(terms?.[1] ?? terms?.[2] ?? terms?.[3]);
-      if (Number.isInteger(days) && days > 0) {
+      if (terms && Number.isInteger(days) && days > 0) {
         dueDate = addDays(invoiceDate, days);
+        derivedDue(
+          terms[0],
+          `Payment terms of ${days} days from the invoice date.`,
+        );
       }
     }
+    const documentType =
+      choose("document_type", "documentType", candidates.documentType)?.value ??
+      null;
+    const confirmed = rows.filter((row) => {
+      const answer = itemAnswers[row.id];
+      return answer?.type === "noul" && answer.noul >= 0.5;
+    });
+    const taxBasis = amountsIncludeTax(lines, confirmed);
+    if (taxBasis.evidence) fields.amountsIncludeTax = taxBasis.evidence;
+    const vatNumber = choose(
+      "supplier_vat_number",
+      "supplierVatNumber",
+      candidates.vatNumber,
+    );
+    const discount = choose(
+      "discount_amount",
+      "discountAmount",
+      candidates.amounts,
+    );
 
     const extraction: InvoiceExtraction = {
+      documentType,
       supplierName: supplierName?.replace(/\.$/, "") ?? null,
       supplierAddress: address ? stripLeadingName(address, supplierName) : null,
-      supplierVatNumber:
-        pick(fieldAnswers, "supplier_vat_number", candidates.vatNumber)
-          ?.value ?? null,
+      supplierVatNumber: vatNumber?.value ?? null,
+      supplierCompanyNumber:
+        choose(
+          "supplier_company_number",
+          "supplierCompanyNumber",
+          candidates.companyNumber,
+        )?.value ?? null,
       invoiceNumber:
-        pick(fieldAnswers, "invoice_number", candidates.invoiceNumber)?.value ??
-        null,
+        choose("invoice_number", "invoiceNumber", candidates.invoiceNumber)
+          ?.value ?? null,
+      originalInvoiceNumber:
+        choose(
+          "original_invoice_number",
+          "originalInvoiceNumber",
+          candidates.originalInvoice,
+        )?.value ?? null,
       invoiceDate,
       dueDate,
       currency:
-        pick(fieldAnswers, "currency", candidates.currencies)?.value ?? null,
+        choose("currency", "currency", candidates.currencies)?.value ?? null,
       netAmount:
-        pick(fieldAnswers, "net_amount", candidates.amounts)?.value ?? null,
+        choose("net_amount", "netAmount", candidates.amounts)?.value ?? null,
+      discountAmount: discount ? Math.abs(discount.value) : null,
       vatAmount:
-        pick(fieldAnswers, "vat_amount", candidates.amounts)?.value ?? null,
+        choose("vat_amount", "vatAmount", candidates.amounts)?.value ?? null,
+      taxRate:
+        choose("tax_rate", "taxRate", candidates.taxRates)?.value ?? null,
       grossAmount:
-        pick(fieldAnswers, "gross_amount", candidates.amounts)?.value ?? null,
-      lineItems: rows
-        .filter((row) => {
-          const answer = itemAnswers[row.id];
-          return answer?.type === "noul" && answer.noul >= 0.5;
-        })
-        .map((row) => row.value),
+        choose("gross_amount", "grossAmount", candidates.amounts)?.value ??
+        null,
+      amountsIncludeTax: taxBasis.value,
+      lineItems: confirmed.map((row) => row.value),
       bankDetails: {
         accountName:
-          pick(fieldAnswers, "bank_account_name", candidates.accountName)
+          choose("bank_account_name", "accountName", candidates.accountName)
             ?.value ?? null,
         accountNumber:
-          pick(fieldAnswers, "bank_account_number", candidates.accountNumber)
-            ?.value ?? null,
+          choose(
+            "bank_account_number",
+            "accountNumber",
+            candidates.accountNumber,
+          )?.value ?? null,
         sortCode:
-          pick(fieldAnswers, "bank_sort_code", candidates.sortCode)?.value ??
+          choose("bank_sort_code", "sortCode", candidates.sortCode)?.value ??
           null,
-        iban: pick(fieldAnswers, "bank_iban", candidates.iban)?.value ?? null,
-        bic: pick(fieldAnswers, "bank_bic", candidates.bic)?.value ?? null,
+        iban: choose("bank_iban", "iban", candidates.iban)?.value ?? null,
+        bic: choose("bank_bic", "bic", candidates.bic)?.value ?? null,
       },
       description:
-        pick(fieldAnswers, "description", candidates.description)?.value ??
+        choose("description", "description", candidates.description)?.value ??
         null,
       purchaseOrderReference:
-        pick(fieldAnswers, "purchase_order_reference", candidates.purchaseOrder)
-          ?.value ?? null,
+        choose(
+          "purchase_order_reference",
+          "purchaseOrderReference",
+          candidates.purchaseOrder,
+        )?.value ?? null,
+      paymentReference:
+        choose(
+          "payment_reference",
+          "paymentReference",
+          candidates.paymentReference,
+        )?.value ?? null,
       textSource,
       pageSources: [...pageSources],
+      evidence: {
+        fields,
+        lineItems: confirmed.map((row) => {
+          const answer = itemAnswers[row.id];
+          return {
+            page: lines[row.line]?.page ?? null,
+            line: row.line,
+            text: row.source.slice(0, 400),
+            label: row.header,
+            confidence: answer?.type === "noul" ? answer.noul : null,
+          };
+        }),
+      },
     };
 
     if (!hasInvoiceContent(extraction)) {
@@ -1031,16 +1373,6 @@ const hasBankDetails = (extraction: unknown) =>
     (value) => typeof value === "string" && value.trim() !== "",
   );
 
-const supplierKey = (name: unknown) =>
-  typeof name === "string"
-    ? name
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]/gu, " ")
-        .replace(/\b(?:ltd|limited|plc|llp|inc|llc|co|company|the|uk)\b/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-    : "";
-
 /** A previous invoice plausibly from the same supplier: same name or VAT number. */
 const fromSameSupplier = (
   extraction: InvoiceExtraction,
@@ -1102,6 +1434,7 @@ export const judgeInvoice = (
   customQuestions: readonly InvoiceJudgmentQuestion[] = [],
   defaultQuestions: readonly InvoiceJudgmentQuestion[] = DEFAULT_INVOICE_JUDGMENTS,
   invoiceText?: string | null,
+  validation?: InvoiceValidation | null,
 ): Effect.Effect<InvoiceJudgment[], TypeSafeError, TypeSafe> =>
   Effect.gen(function* () {
     const typeSafe = yield* TypeSafe;
@@ -1132,6 +1465,19 @@ export const judgeInvoice = (
               invoiceText: invoiceText
                 ? invoiceText.slice(0, MAX_JUDGMENT_TEXT_CHARS)
                 : null,
+              // The deterministic checks, so a question can build on what
+              // code already verified (totals, duplicates, missing fields).
+              ...(validation
+                ? {
+                    currentInvoiceValidation: {
+                      status: validation.status,
+                      documentType: validation.documentType,
+                      checks: validation.checks,
+                      issues: validation.issues,
+                      identity: validation.identity,
+                    },
+                  }
+                : {}),
               previousInvoices,
             },
             questions: Object.fromEntries(asked),
@@ -1169,6 +1515,10 @@ export const processInvoice = (
       textSource,
       document.pageSources,
     );
+    const validation = validateInvoice(
+      extraction,
+      request.previousInvoices ?? [],
+    );
     const defaultQuestions =
       request.defaultJudgmentQuestions ?? DEFAULT_INVOICE_JUDGMENTS;
     const configuredQuestions = [
@@ -1181,6 +1531,7 @@ export const processInvoice = (
       request.judgmentQuestions ?? [],
       defaultQuestions,
       documentPlainText(document.lines),
+      validation,
     ).pipe(
       Effect.catchAll((error) =>
         Effect.succeed(
@@ -1194,5 +1545,5 @@ export const processInvoice = (
         ),
       ),
     );
-    return { extraction, judgments };
+    return { extraction, validation, judgments };
   });
