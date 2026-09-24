@@ -9,7 +9,8 @@ expected to reach the same decision for the same actor.
 | Capability | Owner | Admin | Member |
 | --- | --- | --- | --- |
 | Read workspace, invoices, inbox, judgments, exports, MCP | yes | yes | yes |
-| Upload, process, retry, annotate invoices (including re-driving failed deliveries to configured destinations) | yes | yes | yes |
+| Upload, process, retry, annotate invoices (including re-driving failed webhook deliveries) | yes | yes | yes |
+| Re-post an invoice to the accounting provider (`POST /accounting/invoices/:id/retry`, and the accounting part of `inbox.retryDelivery` and `POST /invoices/:id/delivery/retry`, which report `admin_required` to a member) | yes | yes | no |
 | Manage workspace settings (name, logo, currency, email) | yes | yes | no |
 | Invite, remove and re-role members | yes | yes, except owners | no |
 | List and revoke pending invitations | yes | yes | no |

@@ -159,10 +159,7 @@ export const DeliveryReconcilerLive = Layer.effect(
     return {
       intervalMs: Math.max(1000, intervalMs),
       run: queueAttempt(
-        () =>
-          reconcileDeliveries(db, {}, (deliveryId, teamId) =>
-            publishDeliveryFailureById(db, deliveryId, teamId),
-          ),
+        () => reconcileDeliveries(db, {}, publishDeliveryFailureById),
         "Unable to reconcile deliveries",
       ),
     };

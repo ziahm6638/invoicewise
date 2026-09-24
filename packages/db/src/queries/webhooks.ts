@@ -247,6 +247,8 @@ export async function getWebhookDelivery(
  * delivery (not per job run), so an explicitly retried delivery continues its
  * history. A settled delivery is never downgraded: a stale worker that lost
  * its lease cannot turn a succeeded or cancelled delivery back into a failure.
+ * `failed` is true only for the attempt that made the delivery a terminal
+ * failure.
  */
 export async function recordWebhookAttempt(
   db: Database,
@@ -263,7 +265,7 @@ export async function recordWebhookAttempt(
     retryable?: boolean;
   },
 ) {
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const [current] = await tx
       .select({
         attempts: webhookDeliveries.attempts,
@@ -318,6 +320,14 @@ export async function recordWebhookAttempt(
           eq(webhookDeliveries.teamId, input.teamId),
         ),
       );
+    return {
+      attempt,
+      failed:
+        !settled &&
+        current.status !== "failed" &&
+        !input.succeeded &&
+        input.final,
+    };
   });
 }
 
@@ -350,29 +360,49 @@ export async function cancelWebhookDelivery(
 
 /**
  * Records a terminal failure the delivery handler never saw, such as a job
- * whose lease expired after its final attempt.
+ * whose lease expired after its final attempt. The delivery row is locked
+ * first, so the job state is read after any concurrent explicit retry
+ * committed; a job that was restarted in the meantime is left alone.
  */
 export async function failWebhookDelivery(
   db: Database,
   input: { deliveryId: string; teamId: string; error: string },
 ) {
-  const [delivery] = await db
-    .update(webhookDeliveries)
-    .set({
-      status: "failed",
-      lastError: input.error,
-      retryable: true,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(
-      and(
-        eq(webhookDeliveries.id, input.deliveryId),
-        eq(webhookDeliveries.teamId, input.teamId),
-        inArray(webhookDeliveries.status, ["queued", "delivering"]),
-      ),
-    )
-    .returning({ id: webhookDeliveries.id });
-  return delivery;
+  return db.transaction(async (tx) => {
+    await tx
+      .select({ id: webhookDeliveries.id })
+      .from(webhookDeliveries)
+      .where(
+        and(
+          eq(webhookDeliveries.id, input.deliveryId),
+          eq(webhookDeliveries.teamId, input.teamId),
+        ),
+      )
+      .for("update");
+    const [delivery] = await tx
+      .update(webhookDeliveries)
+      .set({
+        status: "failed",
+        lastError: input.error,
+        retryable: true,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(webhookDeliveries.id, input.deliveryId),
+          eq(webhookDeliveries.teamId, input.teamId),
+          inArray(webhookDeliveries.status, ["queued", "delivering"]),
+          sql`exists (
+          select 1 from ${workflowJobs}
+          where ${workflowJobs.name} = 'deliver-webhook'
+            and ${workflowJobs.idempotencyKey} = ${webhookDeliveries.eventId}::text || ':' || ${webhookDeliveries.endpointId}::text
+            and ${workflowJobs.status} = 'failed'
+        )`,
+        ),
+      )
+      .returning({ id: webhookDeliveries.id });
+    return delivery;
+  });
 }
 
 /** Moves a failed or cancelled delivery back to queued for an explicit retry. */

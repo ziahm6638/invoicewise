@@ -50,7 +50,6 @@ const recordingRepository = (loaded: DeliveryRecord | null) => {
   const writes = {
     attempts: [] as Array<{ succeeded: boolean; retryable: boolean }>,
     cancelled: [] as string[],
-    failures: [] as string[],
   };
   const layer = Layer.succeed(WebhookDeliveryRepository, {
     load: () => Effect.succeed(loaded),
@@ -63,8 +62,6 @@ const recordingRepository = (loaded: DeliveryRecord | null) => {
       ).pipe(Effect.asVoid),
     cancel: (_delivery, reason) =>
       Effect.sync(() => writes.cancelled.push(reason)).pipe(Effect.asVoid),
-    deliveryFailed: (_delivery, error) =>
-      Effect.sync(() => writes.failures.push(error)).pipe(Effect.asVoid),
   });
   return { writes, layer };
 };
@@ -125,7 +122,6 @@ describe("webhook delivery", () => {
                   attempts.push({ succeeded: record.succeeded }),
                 ).pipe(Effect.asVoid),
               cancel: () => Effect.void,
-              deliveryFailed: () => Effect.void,
             }),
             Layer.succeed(WebhookTransport, {
               post: (_url, body, headers) =>
@@ -154,7 +150,6 @@ describe("webhook delivery", () => {
 
   test("records a bounded retry and a final failure", async () => {
     const attempts: Array<{ final: boolean; succeeded: boolean }> = [];
-    const failures: string[] = [];
 
     const layer = Layer.mergeAll(
       Layer.succeed(WebhookDeliveryRepository, {
@@ -167,8 +162,6 @@ describe("webhook delivery", () => {
             }),
           ).pipe(Effect.asVoid),
         cancel: () => Effect.void,
-        deliveryFailed: (_delivery, error) =>
-          Effect.sync(() => failures.push(error)).pipe(Effect.asVoid),
       }),
       Layer.succeed(WebhookTransport, {
         post: () => Effect.succeed({ status: 503 }),
@@ -190,35 +183,6 @@ describe("webhook delivery", () => {
       { final: false, succeeded: false },
       { final: true, succeeded: false },
     ]);
-    expect(failures).toEqual(["Webhook returned HTTP 503"]);
-  });
-
-  test("does not recursively emit when delivery.failed cannot be delivered", async () => {
-    const failures: string[] = [];
-    const failedDelivery = { ...delivery, event: "delivery.failed" as const };
-    const layer = Layer.mergeAll(
-      Layer.succeed(WebhookDeliveryRepository, {
-        load: () => Effect.succeed(failedDelivery),
-        recordAttempt: () => Effect.void,
-        cancel: () => Effect.void,
-        deliveryFailed: (_delivery, error) =>
-          Effect.sync(() => failures.push(error)).pipe(Effect.asVoid),
-      }),
-      Layer.succeed(WebhookTransport, {
-        post: () => Effect.succeed({ status: 503 }),
-      }),
-    );
-
-    await Effect.runPromise(
-      deliverWebhook({
-        deliveryId: failedDelivery.id,
-        teamId: failedDelivery.teamId,
-        attempt: 4,
-        maxAttempts: 4,
-      }).pipe(Effect.provide(layer), Effect.either),
-    );
-
-    expect(failures).toEqual([]);
   });
 
   test("a delivery settled before a worker restart is never sent again", async () => {
@@ -232,7 +196,7 @@ describe("webhook delivery", () => {
     }
   });
 
-  test("a recorded final failure only finishes its failure notification", async () => {
+  test("a recorded final failure is not sent again", async () => {
     const { writes, layer } = recordingRepository({
       ...delivery,
       status: "failed",
@@ -242,7 +206,7 @@ describe("webhook delivery", () => {
     const outcome = await run(layer, transport.layer);
     expect(outcome._tag).toBe("Left");
     expect(transport.sent).toHaveLength(0);
-    expect(writes.failures).toEqual(["Webhook returned HTTP 500"]);
+    expect(writes.attempts).toHaveLength(0);
   });
 
   test("queued work for a disabled endpoint or deleted invoice is cancelled", async () => {
@@ -282,7 +246,6 @@ describe("webhook delivery", () => {
     const outcome = await run(layer, transport);
     expect(outcome._tag).toBe("Left");
     expect(writes.attempts).toEqual([{ succeeded: false, retryable: false }]);
-    expect(writes.failures).toEqual(["Webhook URL is not allowed"]);
   });
 });
 

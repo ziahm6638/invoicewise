@@ -111,14 +111,16 @@ export const inboxRouter = createTRPCRouter({
 
   /**
    * Re-drives the failed or cancelled destinations of the invoice's current
-   * revision. Destinations that were disabled or disconnected are skipped.
+   * revision. Destinations that were disabled or disconnected are skipped,
+   * and the accounting re-post is left to an admin (`admin_required`).
    */
   retryDelivery: workspaceProcedure
     .input(retryInboxSchema)
-    .mutation(async ({ ctx: { db, teamId }, input }) => {
+    .mutation(async ({ ctx: { db, teamId, teamRole }, input }) => {
       const result = await retryInvoiceDelivery(db, {
         invoiceId: input.id,
         teamId: teamId!,
+        teamRole: teamRole ?? null,
       });
       if (!result) {
         throw new TRPCError({

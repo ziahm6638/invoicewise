@@ -1628,4 +1628,135 @@ suite("workspace permissions over real HTTP", () => {
     await switchTeam(admin.cookie, teamResult.data as string);
     expect((await exchange(admin.cookie, forPersonal)).status).toBe(403);
   }, 30_000);
+
+  test("delivery retry re-posts to accounting only for an admin", async () => {
+    const owner = await createUser("retry-owner");
+    const admin = await createUser("retry-admin");
+    const member = await createUser("retry-member");
+
+    const teamResult = await trpc(
+      owner.cookie,
+      "team.create",
+      { name: "Retry Team", baseCurrency: "GBP", switchTeam: true },
+      "mutation",
+    );
+    expect(teamResult.error).toBeNull();
+    const teamId = teamResult.data as string;
+    created.teamIds.push(teamId);
+
+    for (const [user, role] of [
+      [admin, "admin"],
+      [member, "member"],
+    ] as const) {
+      await trpc(
+        owner.cookie,
+        "team.invite",
+        [{ email: user.email, role }],
+        "mutation",
+      );
+      const pending = await trpc(user.cookie, "team.invitesByEmail", null);
+      const inviteId = (pending.data as { id: string }[])[0]!.id;
+      await trpc(
+        user.cookie,
+        "team.acceptInvite",
+        { id: inviteId },
+        "mutation",
+      );
+      expect((await switchTeam(user.cookie, teamId)).error).toBeNull();
+    }
+
+    await primaryDb.insert(schema.accountingConnections).values({
+      teamId,
+      provider: "xero",
+      integrationId: "xero-invoicewise",
+      connectionId: "xero-connection",
+    });
+
+    const failedPost = async () => {
+      const [invoice] = await primaryDb
+        .insert(schema.inbox)
+        .values({
+          teamId,
+          displayName: "retry.pdf",
+          fileName: "retry.pdf",
+          filePath: [teamId, "inbox", "retry.pdf"],
+          contentType: "application/pdf",
+          size: 42,
+          status: "done",
+          processingRevision: 1,
+          accountingRevision: 1,
+          accountingProvider: "xero",
+          accountingPostStatus: "failed",
+          accountingPostError: "Provider unavailable",
+          accountingPostRetryable: true,
+        })
+        .returning({ id: schema.inbox.id });
+      return invoice!.id;
+    };
+    const postStatus = async (invoiceId: string) =>
+      (
+        await primaryDb.query.inbox.findFirst({
+          where: orm.eq(schema.inbox.id, invoiceId),
+          columns: { accountingPostStatus: true },
+        })
+      )?.accountingPostStatus;
+
+    // Member: the accounting intent is left failed on both surfaces.
+    const memberTrpcInvoice = await failedPost();
+    const memberTrpc = await trpc(
+      member.cookie,
+      "inbox.retryDelivery",
+      { id: memberTrpcInvoice },
+      "mutation",
+    );
+    expect(memberTrpc.error).toBeNull();
+    expect((memberTrpc.data as { accounting: string }).accounting).toBe(
+      "admin_required",
+    );
+    expect(await postStatus(memberTrpcInvoice)).toBe("failed");
+
+    const memberRestInvoice = await failedPost();
+    const memberRest = await post(
+      `/invoices/${memberRestInvoice}/delivery/retry`,
+      {},
+      member.cookie,
+    );
+    expect(memberRest.status).toBe(200);
+    expect(
+      ((await memberRest.json()) as { accounting: string }).accounting,
+    ).toBe("admin_required");
+    expect(await postStatus(memberRestInvoice)).toBe("failed");
+
+    // The dedicated accounting retry stays admin-only.
+    const memberAccounting = await post(
+      `/accounting/invoices/${memberRestInvoice}/retry`,
+      {},
+      member.cookie,
+    );
+    expect(memberAccounting.status).toBe(403);
+
+    // Admin: the same failed intents are re-queued on both surfaces.
+    const adminTrpc = await trpc(
+      admin.cookie,
+      "inbox.retryDelivery",
+      { id: memberTrpcInvoice },
+      "mutation",
+    );
+    expect(adminTrpc.error).toBeNull();
+    expect((adminTrpc.data as { accounting: string }).accounting).toBe(
+      "requeued",
+    );
+    expect(await postStatus(memberTrpcInvoice)).toBe("queued");
+
+    const adminRest = await post(
+      `/invoices/${memberRestInvoice}/delivery/retry`,
+      {},
+      admin.cookie,
+    );
+    expect(adminRest.status).toBe(200);
+    expect(
+      ((await adminRest.json()) as { accounting: string }).accounting,
+    ).toBe("requeued");
+    expect(await postStatus(memberRestInvoice)).toBe("queued");
+  });
 });

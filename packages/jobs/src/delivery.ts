@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import type { Database } from "@invoicewise/db/client";
 import {
+  type TeamRole,
   type UpdateInboxWithProcessedDataParams,
   type WebhookEndpointForDelivery,
   type WebhookEvent,
   completeInboxProcessing,
   createWebhookDelivery,
   enqueueWorkflowJob,
+  failStalledAccountingPost,
   failWebhookDelivery,
   getActiveAccountingConnection,
   getInvoiceForDeliveryUpdate,
@@ -14,10 +16,10 @@ import {
   getWebhookEndpointsForEvent,
   listStalledAccountingPosts,
   listStalledWebhookDeliveries,
-  recordAccountingPostFailure,
   recordAccountingPostQueued,
   requeueFinishedWorkflowJob,
   requeueWebhookDelivery,
+  roleAtLeast,
 } from "@invoicewise/db/queries";
 import { workflowKey } from "./client";
 
@@ -203,12 +205,19 @@ export async function completeInvoiceProcessing(
  * Settles delivery intents whose job disappeared or failed without the
  * handler recording an outcome (for example a lease that expired after the
  * final attempt). A missing job is enqueued again under its original key; a
- * failed one becomes a visible, retryable delivery failure.
+ * failed one becomes a visible, retryable delivery failure. A failure is
+ * only recorded while its job is still failed, so an explicit retry that
+ * restarted the job in the meantime wins, and `onWebhookFailed` commits with
+ * the failure it announces.
  */
 export async function reconcileDeliveries(
   db: Database,
   input: { teamId?: string; invoiceId?: string; limit?: number } = {},
-  onWebhookFailed?: (deliveryId: string, teamId: string) => Promise<void>,
+  onWebhookFailed?: (
+    db: Database,
+    deliveryId: string,
+    teamId: string,
+  ) => Promise<void>,
 ) {
   const limit = input.limit ?? 100;
   const [webhooks, accounting] = await Promise.all([
@@ -220,17 +229,23 @@ export async function reconcileDeliveries(
 
   for (const delivery of webhooks) {
     if (delivery.jobStatus === "failed") {
-      const settled = await failWebhookDelivery(db, {
-        deliveryId: delivery.id,
-        teamId: delivery.teamId,
-        error: delivery.jobError ?? "Webhook delivery workflow failed",
-      });
-      if (settled) {
-        failed += 1;
-        if (onWebhookFailed && delivery.event !== "delivery.failed") {
-          await onWebhookFailed(delivery.id, delivery.teamId);
+      const settled = await db.transaction(async (tx) => {
+        const executor = asDatabase(tx);
+        const settled = await failWebhookDelivery(executor, {
+          deliveryId: delivery.id,
+          teamId: delivery.teamId,
+          error: delivery.jobError ?? "Webhook delivery workflow failed",
+        });
+        if (
+          settled &&
+          onWebhookFailed &&
+          delivery.event !== "delivery.failed"
+        ) {
+          await onWebhookFailed(executor, delivery.id, delivery.teamId);
         }
-      }
+        return settled;
+      });
+      if (settled) failed += 1;
       continue;
     }
     await enqueueWorkflowJob(db, {
@@ -248,14 +263,13 @@ export async function reconcileDeliveries(
 
   for (const post of accounting) {
     if (post.jobStatus === "failed") {
-      await recordAccountingPostFailure(db, {
+      const settled = await failStalledAccountingPost(db, {
         invoiceId: post.invoiceId,
         teamId: post.teamId,
+        revision: post.revision,
         error: post.jobError ?? "Accounting post workflow failed",
-        final: true,
-        retryable: true,
       });
-      failed += 1;
+      if (settled) failed += 1;
       continue;
     }
     await enqueueWorkflowJob(db, {
@@ -283,7 +297,8 @@ export type DeliveryRetryResult = {
     | "already_posted"
     | "in_progress"
     | "no_active_connection"
-    | "not_scheduled";
+    | "not_scheduled"
+    | "admin_required";
 };
 
 /**
@@ -291,11 +306,14 @@ export type DeliveryRetryResult = {
  * destinations of the invoice's current revision, honoring current
  * authorization: a disabled endpoint or a disconnected accounting connection
  * is skipped, never recreated, and destinations added after the revision
- * completed are not included. Returns null for an unknown or deleted invoice.
+ * completed are not included. Re-posting to the accounting provider keeps the
+ * admin role it requires everywhere else: for a lower role the accounting
+ * intent is left as it is and reported as `admin_required`. Returns null for
+ * an unknown or deleted invoice.
  */
 export async function retryInvoiceDelivery(
   db: Database,
-  input: { invoiceId: string; teamId: string },
+  input: { invoiceId: string; teamId: string; teamRole: TeamRole | null },
 ): Promise<DeliveryRetryResult | null> {
   return db.transaction(async (tx) => {
     const executor = asDatabase(tx);
@@ -360,6 +378,7 @@ export async function retryInvoiceDelivery(
         status: invoice.accountingPostStatus,
         providerId: invoice.accountingProviderId,
         revision: invoice.accountingRevision ?? revision,
+        permitted: roleAtLeast(input.teamRole, "admin"),
       }),
     };
   });
@@ -374,6 +393,8 @@ export async function requeueAccountingIntent(
     status: string | null;
     providerId: string | null;
     revision: number;
+    /** Whether the caller may re-post to the accounting provider. */
+    permitted: boolean;
   },
 ): Promise<DeliveryRetryResult["accounting"]> {
   if (
@@ -387,6 +408,7 @@ export async function requeueAccountingIntent(
   if (input.status !== "failed" && input.status !== "cancelled") {
     return "not_scheduled";
   }
+  if (!input.permitted) return "admin_required";
   const connection = await getActiveAccountingConnection(db, input.teamId);
   if (!connection) return "no_active_connection";
   await recordAccountingPostQueued(db, {

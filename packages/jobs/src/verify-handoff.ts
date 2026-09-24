@@ -769,10 +769,12 @@ async function main() {
     const partialRetry = await retryInvoiceDelivery(db, {
       invoiceId: partial,
       teamId,
+      teamRole: "owner",
     });
     const stalledRetry = await retryInvoiceDelivery(db, {
       invoiceId: stalled,
       teamId,
+      teamRole: "owner",
     });
     await waitSettled("the retried invoices", [partial, stalled]);
     for (const worker of concurrentWorkers) await worker.stop();
@@ -861,10 +863,12 @@ async function main() {
     const disabledRetry = await retryInvoiceDelivery(db, {
       invoiceId: disabledInvoice,
       teamId,
+      teamRole: "owner",
     });
     const deletedRetry = await retryInvoiceDelivery(db, {
       invoiceId: deletedInvoice,
       teamId,
+      teamRole: "owner",
     });
     await waitFor("the team's queue to drain", async () => {
       const [pending] = await rows<{ count: number }>(

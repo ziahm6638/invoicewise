@@ -92,9 +92,12 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
           result.accounting === "no_active_connection";
         toast({
           title: "Delivery retry queued",
-          description: skipped
-            ? "Destinations that were disabled or disconnected were skipped."
-            : undefined,
+          description:
+            result.accounting === "admin_required"
+              ? "Re-posting to your accounting software needs an admin."
+              : skipped
+                ? "Destinations that were disabled or disconnected were skipped."
+                : undefined,
         });
       },
       onError: (error) =>

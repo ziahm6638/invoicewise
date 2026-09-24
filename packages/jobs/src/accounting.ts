@@ -440,6 +440,7 @@ export async function retryAccountingPost(
       status: invoice.accountingPostStatus ?? "failed",
       providerId: invoice.accountingProviderId,
       revision: invoice.accountingRevision ?? invoice.processingRevision,
+      permitted: true,
     }),
   );
   return { status: outcome === "requeued" ? ("queued" as const) : outcome };

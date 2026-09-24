@@ -46,6 +46,10 @@ export class WebhookDeliveryRepository extends Context.Tag(
       deliveryId: string,
       teamId: string,
     ) => Effect.Effect<DeliveryRecord | null, WebhookDeliveryError>;
+    /**
+     * Records the attempt. The attempt that makes the delivery a terminal
+     * failure commits the `delivery.failed` notification with it.
+     */
     readonly recordAttempt: (input: {
       delivery: DeliveryRecord;
       statusCode?: number;
@@ -58,10 +62,6 @@ export class WebhookDeliveryRepository extends Context.Tag(
     readonly cancel: (
       delivery: DeliveryRecord,
       reason: string,
-    ) => Effect.Effect<void, WebhookDeliveryError>;
-    readonly deliveryFailed: (
-      delivery: DeliveryRecord,
-      error: string,
     ) => Effect.Effect<void, WebhookDeliveryError>;
   }
 >() {}
@@ -170,8 +170,8 @@ export function verifyWebhookSignature(
 /**
  * Delivers one durable webhook intent. The run is idempotent: a delivery that
  * already succeeded or was cancelled is not sent again (a worker that died
- * after recording the outcome), and one that already failed only finishes its
- * `delivery.failed` notification. Queued work for a disabled endpoint or a
+ * after recording the outcome), and one that already failed stays failed until
+ * an explicit retry. Queued work for a disabled endpoint or a
  * deleted invoice is cancelled without an HTTP call.
  */
 export const deliverWebhook = (input: {
@@ -195,12 +195,11 @@ export const deliverWebhook = (input: {
       return { deliveryId: delivery.id, status: delivery.status };
     }
     if (delivery.status === "failed") {
-      const error = delivery.lastError ?? "Webhook delivery failed";
-      if (delivery.event !== "delivery.failed") {
-        yield* repository.deliveryFailed(delivery, error);
-      }
       return yield* Effect.fail(
-        new WebhookDeliveryError({ reason: error, retryable: false }),
+        new WebhookDeliveryError({
+          reason: delivery.lastError ?? "Webhook delivery failed",
+          retryable: false,
+        }),
       );
     }
     const cancelReason = !delivery.endpointActive
@@ -259,9 +258,6 @@ export const deliverWebhook = (input: {
     });
 
     if (succeeded) return { deliveryId: delivery.id, statusCode };
-    if (final && delivery.event !== "delivery.failed") {
-      yield* repository.deliveryFailed(delivery, error!);
-    }
     return yield* Effect.fail(
       new WebhookDeliveryError({ reason: error!, retryable: !final }),
     );
@@ -304,16 +300,27 @@ export const makeWebhookDeliveryRepository = (
   recordAttempt: (input) =>
     deliveryAttempt(
       () =>
-        recordWebhookAttempt(db, {
-          deliveryId: input.delivery.id,
-          endpointId: input.delivery.endpointId,
-          teamId: input.delivery.teamId,
-          statusCode: input.statusCode,
-          error: input.error,
-          durationMs: input.durationMs,
-          final: input.final,
-          succeeded: input.succeeded,
-          retryable: input.retryable,
+        db.transaction(async (tx) => {
+          const executor = tx as unknown as Database;
+          const recorded = await recordWebhookAttempt(executor, {
+            deliveryId: input.delivery.id,
+            endpointId: input.delivery.endpointId,
+            teamId: input.delivery.teamId,
+            statusCode: input.statusCode,
+            error: input.error,
+            durationMs: input.durationMs,
+            final: input.final,
+            succeeded: input.succeeded,
+            retryable: input.retryable,
+          });
+          if (recorded.failed && input.delivery.event !== "delivery.failed") {
+            await publishDeliveryFailure(
+              executor,
+              input.delivery,
+              input.error ?? "Webhook delivery failed",
+              recorded.attempt,
+            );
+          }
         }),
       "Unable to record webhook attempt",
     ),
@@ -326,11 +333,6 @@ export const makeWebhookDeliveryRepository = (
           reason,
         }).then(() => undefined),
       "Unable to cancel webhook delivery",
-    ),
-  deliveryFailed: (delivery, error) =>
-    deliveryAttempt(
-      () => publishDeliveryFailure(db, delivery, error),
-      "Unable to publish delivery failure",
     ),
 });
 
@@ -356,9 +358,11 @@ export const WebhookTransportLive: Context.Tag.Service<WebhookTransport> = {
 };
 
 /**
- * Notifies the workspace's other endpoints that a delivery failed for good.
- * The event id derives from the failed delivery, so a crash and retry while
- * publishing it cannot notify twice.
+ * Schedules the notification to the workspace's other endpoints that a
+ * delivery failed for good. Runs in the transaction that records the failure.
+ * The event id derives from the failed delivery and its attempt count, so a
+ * replay of one failure cannot notify twice while a later failure after an
+ * explicit retry is a new event.
  */
 export async function publishDeliveryFailure(
   db: Database,
@@ -367,11 +371,12 @@ export async function publishDeliveryFailure(
     "id" | "teamId" | "endpointId" | "event" | "invoiceId" | "revision"
   >,
   error: string,
+  attempts: number,
 ) {
-  await emitWebhookEvent(
+  await scheduleWebhookEvent(
     db,
     {
-      id: logicalEventId(delivery.id, "delivery.failed"),
+      id: logicalEventId(delivery.id, "delivery.failed", attempts),
       type: "delivery.failed",
       createdAt: new Date().toISOString(),
       teamId: delivery.teamId,
@@ -388,7 +393,10 @@ export async function publishDeliveryFailure(
   );
 }
 
-/** Publishes a delivery failure found by reconciliation rather than the handler. */
+/**
+ * Publishes a delivery failure found by reconciliation rather than the
+ * handler, in the transaction that records it.
+ */
 export async function publishDeliveryFailureById(
   db: Database,
   deliveryId: string,
@@ -407,6 +415,7 @@ export async function publishDeliveryFailureById(
       revision: delivery.revision,
     },
     delivery.lastError ?? "Webhook delivery failed",
+    delivery.attempts,
   );
 }
 

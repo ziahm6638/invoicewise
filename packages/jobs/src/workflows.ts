@@ -410,8 +410,7 @@ const makeProcessAttachment = (
           reconcileDeliveries(
             db,
             { teamId: payload.teamId, invoiceId: binding.id },
-            (deliveryId, teamId) =>
-              publishDeliveryFailureById(db, deliveryId, teamId),
+            publishDeliveryFailureById,
           ),
         "Unable to resume invoice deliveries",
       );

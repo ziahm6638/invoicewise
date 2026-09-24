@@ -125,9 +125,12 @@ digest in constant time, and rejecting old timestamps. The repository helper
 Webhook HTTP calls run only in the Postgres-backed Effect workflow runner. A
 non-2xx response, redirect, or network error is retried four times with bounded
 exponential backoff. Each HTTP attempt is stored before the job is retried. A
-terminal failure marks the delivery failed and emits `delivery.failed` to other
-subscribed endpoints; failures of that notification are not emitted again, so
-failure events cannot recurse. Slow or unavailable customer endpoints therefore
+terminal failure marks the delivery failed and schedules `delivery.failed` for
+other subscribed endpoints in the same transaction, so the notification cannot
+be lost to a crash. Its event ID derives from the failed delivery and its
+attempt count: replays of one failure deduplicate, and a delivery that fails
+again after an explicit retry is a new event. Failures of that notification are
+not emitted again, so failure events cannot recurse. Slow or unavailable customer endpoints therefore
 do not block invoice processing.
 
 ## Processing-to-delivery handoff
@@ -152,7 +155,9 @@ configured when it completed, or ends in a visible terminal state.
   deliveries instead of returning early, and the runner reconciles every
   `WORKFLOW_RECONCILE_MS` (default 60s): an intent whose job is missing is
   enqueued again under its original key, and one whose job failed without
-  recording an outcome becomes a visible, retryable failure.
+  recording an outcome becomes a visible, retryable failure. That failure is
+  recorded only while the job is still failed, so it never overrides an
+  explicit retry that restarted the job in the meantime.
 - **Removed destinations.** Work queued before an endpoint was disabled, the
   accounting connection was disconnected or the invoice was deleted is
   cancelled with the reason and is never sent. Deleting a workspace removes its
@@ -168,9 +173,12 @@ configured when it completed, or ends in a visible terminal state.
   `inbox.retryDelivery`, and `POST /invoices/:id/delivery/retry` re-drive the
   failed or cancelled destinations of the current revision on the same
   delivery rows and event IDs, skipping endpoints that are disabled and
-  accounting when no connection is active. Retrying an invoice is open to
-  every workspace role (see [permissions](permissions.md)); it cannot change
-  which destinations exist.
+  accounting when no connection is active. Re-driving webhooks is open to
+  every workspace role; re-posting to the accounting provider needs the admin
+  role, as `POST /accounting/invoices/:id/retry` does, and for a member the
+  accounting intent is left unchanged and reported as `admin_required` (see
+  [permissions](permissions.md)). A retry cannot change which destinations
+  exist.
 - **Delivered state.** The dashboard shows *Delivering*, *Delivered* or
   *Delivery failed* from the current revision's destination outcomes: any
   failure is *Delivery failed*, any queued work is *Delivering*, and

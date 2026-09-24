@@ -203,6 +203,49 @@ export async function recordAccountingPostFailure(
 }
 
 /**
+ * Records a terminal failure the accounting handler never saw, such as a job
+ * whose lease expired after its final attempt. The invoice row is locked
+ * first, so the job state is read after any concurrent explicit retry
+ * committed; an intent that moved on or whose job was restarted is left alone.
+ */
+export async function failStalledAccountingPost(
+  db: Database,
+  input: { invoiceId: string; teamId: string; revision: number; error: string },
+) {
+  return db.transaction(async (tx) => {
+    await tx
+      .select({ id: inbox.id })
+      .from(inbox)
+      .where(and(eq(inbox.id, input.invoiceId), eq(inbox.teamId, input.teamId)))
+      .for("update");
+    const [invoice] = await tx
+      .update(inbox)
+      .set({
+        accountingPostStatus: "failed",
+        accountingPostError: input.error,
+        accountingPostRetryable: true,
+      })
+      .where(
+        and(
+          eq(inbox.id, input.invoiceId),
+          eq(inbox.teamId, input.teamId),
+          eq(inbox.accountingPostStatus, "queued"),
+          eq(inbox.accountingRevision, input.revision),
+          isNull(inbox.accountingProviderId),
+          sql`exists (
+            select 1 from ${workflowJobs}
+            where ${workflowJobs.name} = 'post-accounting-draft'
+              and ${workflowJobs.idempotencyKey} = ${inbox.teamId}::text || ':' || ${inbox.id}::text || ':r' || ${inbox.accountingRevision}::text
+              and ${workflowJobs.status} = 'failed'
+          )`,
+        ),
+      )
+      .returning({ id: inbox.id });
+    return invoice;
+  });
+}
+
+/**
  * Durable accounting intent for one processing revision. Written in the same
  * transaction that enqueues its workflow job.
  */
