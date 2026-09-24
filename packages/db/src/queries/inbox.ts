@@ -179,6 +179,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       description: inbox.description,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      processingError: inbox.processingError,
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
         id: inboxAccounts.id,
@@ -259,6 +260,7 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       description: inbox.description,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      processingError: inbox.processingError,
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
         id: inboxAccounts.id,
@@ -830,6 +832,8 @@ export type UpdateInboxParams = {
     | "pending"
     | "analyzing"
     | "suggested_match";
+  /** Only ever cleared here, e.g. when a retry starts processing again. */
+  processingError?: null;
 };
 
 export async function updateInbox(
@@ -1982,6 +1986,7 @@ export type UpdateInboxWithProcessedDataParams = {
   description?: string | null;
   extraction?: Record<string, unknown> | null;
   judgments?: Record<string, unknown>[] | null;
+  processingError?: string | null;
   type?: "invoice" | "expense" | null;
   status?:
     | "pending"
@@ -2034,7 +2039,40 @@ export async function updateInboxWithProcessedData(
       type: inbox.type,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      processingError: inbox.processingError,
     });
+
+  return result;
+}
+
+/**
+ * Records a failed extraction on an accepted document. Every input format
+ * fails into the same shape: status `pending`, the reason in
+ * `processing_error`, and no extraction or judgments, so a failure can never
+ * be mistaken for a processed invoice. Only a document still `processing` is
+ * marked failed: a later failure never erases a saved extraction.
+ */
+export async function recordInboxProcessingFailure(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string; error: string },
+) {
+  const [result] = await db
+    .update(inbox)
+    .set({
+      status: "pending",
+      processingError: params.error,
+      extraction: null,
+      judgments: null,
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        eq(inbox.status, "processing"),
+        visibleIntakeState(),
+      ),
+    )
+    .returning({ id: inbox.id, processingError: inbox.processingError });
 
   return result;
 }

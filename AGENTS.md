@@ -56,7 +56,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Background jobs:** Postgres-backed Effect workflow queue (`packages/jobs`)
 - **Storage:** private local filesystem or S3-compatible (MinIO locally, R2 in production)
 - **Email:** transactional mail via Purelymail SMTP (nodemailer); **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)
-- **Extraction:** TypeSafe (text-only, selects among options, never generates): code mines candidates from laid-out text (PDF text layer, else tesseract OCR), TypeSafe picks; see `docs/document-intake.md#extraction`. PNG/JPEG invoices take the same OCR path
+- **Extraction:** TypeSafe (text-only, selects among options, never generates): code mines candidates from laid-out text (PDF text layer, else tesseract OCR), TypeSafe picks; see `docs/document-intake.md#extraction`. Text PDF, scanned PDF, PNG and JPEG share one pipeline and record shape; HEIC is refused. The input matrix and limits are in `docs/document-intake.md#supported-inputs`
 - **Integrations:** Nango (Xero/QuickBooks), Polar (billing), API/MCP/webhooks
 
 ## Commands

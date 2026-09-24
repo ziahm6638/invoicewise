@@ -114,6 +114,42 @@ export function sniffIntakeKind(bytes: Uint8Array): IntakeDocumentKind | null {
   return null;
 }
 
+const HEIF_BRANDS = new Set([
+  "heic",
+  "heix",
+  "heim",
+  "heis",
+  "hevc",
+  "hevx",
+  "hevm",
+  "hevs",
+  "mif1",
+  "msf1",
+]);
+
+/** HEIC/HEIF (the iPhone camera default): an ISO-BMFF `ftyp` box with a HEIF brand. */
+export function isHeifContent(bytes: Uint8Array): boolean {
+  if (bytes.byteLength < 12) return false;
+  const text = (start: number, end: number) =>
+    String.fromCharCode(...bytes.subarray(start, end));
+  return text(4, 8) === "ftyp" && HEIF_BRANDS.has(text(8, 12));
+}
+
+/**
+ * HEIC photos are refused rather than converted: no bounded HEIC decoder is
+ * available to the isolated OCR path. The message tells the sender how to
+ * send a supported copy instead.
+ */
+export const HEIC_UNSUPPORTED_MESSAGE =
+  "HEIC photos (the iPhone camera default) are not supported. Send the photo as a JPEG (on iPhone: Settings → Camera → Formats → Most Compatible, or share it as JPEG) or upload a PDF.";
+
+const HEIF_MIME_TYPES = new Set([
+  "image/heic",
+  "image/heif",
+  "image/heic-sequence",
+  "image/heif-sequence",
+]);
+
 const failure = (
   code: IntakeFailureCode,
   message: string,
@@ -334,6 +370,10 @@ export async function validateIntakeDocument(
   const declared = input.declaredMimeType?.split(";")[0]?.trim().toLowerCase();
   const declaredKind = declared ? DECLARED_MIME_KINDS[declared] : undefined;
 
+  if (declared && HEIF_MIME_TYPES.has(declared)) {
+    return failure("unsupported_type", HEIC_UNSUPPORTED_MESSAGE);
+  }
+
   if (declared && !declaredKind) {
     return failure(
       "unsupported_type",
@@ -346,7 +386,9 @@ export async function validateIntakeDocument(
   if (!kind) {
     return failure(
       "unsupported_type",
-      "Unsupported document content. Only PDF, JPEG and PNG invoices are accepted.",
+      isHeifContent(bytes)
+        ? HEIC_UNSUPPORTED_MESSAGE
+        : "Unsupported document content. Only PDF, JPEG and PNG invoices are accepted.",
     );
   }
 

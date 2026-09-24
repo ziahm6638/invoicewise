@@ -4,15 +4,13 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Effect, Layer } from "effect";
 import sharp from "sharp";
+import { validateIntakeDocument } from "../intake";
 import { renderPdfPageIsolated } from "../isolated";
 import { layoutRuns } from "../layout";
+import { type OracleRequest as Request, oracle } from "../test/oracle";
+import { TypeSafe, type TypeSafeAnswer, TypeSafeLive } from "./client";
 import {
-  TypeSafe,
-  type TypeSafeAnswer,
-  TypeSafeLive,
-  type TypeSafeQuestion,
-} from "./client";
-import {
+  INVOICE_EXTRACTION_LIMITS,
   type InvoiceExtraction,
   type InvoiceJudgmentQuestion,
   extractInvoiceLines,
@@ -40,45 +38,6 @@ Sort code: 12-34-56
 IBAN: GB12 ACME 1234 5678 9012 34
 BIC: ACMEGB2L
 `;
-
-type Request = { state: unknown; questions: Record<string, TypeSafeQuestion> };
-
-/**
- * A deterministic TypeSafe that answers like a correct model would: for each
- * field it selects the candidate whose value is the expected one (or absent
- * when none is), and confirms every table row. The assertions therefore test
- * everything code owns: reading, layout, candidate coverage, normalisation and
- * copying the selected values into the extraction.
- */
-const oracle = (expected: Record<string, unknown>, requests: Request[] = []) =>
-  Layer.succeed(TypeSafe, {
-    evaluate: (request) => {
-      requests.push(request);
-      const answers = Object.fromEntries(
-        Object.entries(request.questions).map(([id, question]) => {
-          if (question.type === "noul") {
-            return [id, { type: "noul", noul: 0.99 }];
-          }
-          const criteria = question.criteria as Record<string, any>;
-          const choice =
-            Object.entries(criteria).find(
-              ([, criterion]) =>
-                criterion?.value !== undefined &&
-                criterion.value === expected[id],
-            )?.[0] ?? "absent";
-          return [
-            id,
-            { type: "choice", choice, probabilities: {}, confidence: 0.99 },
-          ];
-        }),
-      ) as Record<string, TypeSafeAnswer>;
-      return Effect.succeed({
-        model: "test",
-        answers,
-        usage: { inputTokens: 0, outputTokens: 0 },
-      });
-    },
-  });
 
 const textExpectations = {
   supplier_name: "Acme Supplies Ltd",
@@ -126,7 +85,7 @@ const ukInvoiceSelections = {
 };
 
 const ukInvoiceExtraction = (
-  textSource: InvoiceExtraction["textSource"],
+  textSource: "text-layer" | "ocr",
 ): InvoiceExtraction => ({
   supplierName: "Northwind Joinery Ltd",
   supplierAddress: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
@@ -174,6 +133,7 @@ const ukInvoiceExtraction = (
   description: null,
   purchaseOrderReference: "PO-55120",
   textSource,
+  pageSources: [textSource],
 });
 
 const tesseractAvailable =
@@ -318,6 +278,7 @@ describe("invoice extraction from real PDFs", () => {
       description: null,
       purchaseOrderReference: null,
       textSource: "text-layer",
+      pageSources: ["text-layer"],
     });
   });
 
@@ -504,6 +465,7 @@ describe("TypeSafe invoice extraction", () => {
       description: "September consulting services",
       purchaseOrderReference: "PO-7788",
       textSource: "text",
+      pageSources: [],
     });
   });
 
@@ -783,6 +745,311 @@ describe("TypeSafe invoice judgments", () => {
     });
   });
 });
+
+const multipageSelections = {
+  supplier_name: "Northwind Joinery Ltd",
+  supplier_address: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
+  supplier_vat_number: "GB293445512",
+  invoice_number: "NJ-10458",
+  invoice_date: "15 September 2026",
+  due_date: "15-Oct-2026",
+  currency: "GBP",
+  net_amount: 5285.3,
+  vat_amount: 1057.06,
+  gross_amount: 6342.36,
+  bank_account_name: "Northwind Joinery Ltd",
+  bank_account_number: "71234598",
+  bank_sort_code: "40-11-62",
+  purchase_order_reference: "PO-55187",
+};
+
+const item = (
+  description: string,
+  quantity: number,
+  unitPrice: number,
+  total: number,
+) => ({ description, quantity, unitPrice, total });
+
+/** Both pages' rows, in page order: nothing dropped, nothing added. */
+const multipageLineItems = [
+  item("Oak skirting board supply and fit", 12, 45, 540),
+  item("Kitchen worktop installation", 1, 850, 850),
+  item("Bespoke shelving unit", 2, 325.5, 651),
+  item("Internal door hanging", 6, 95, 570),
+  item("Door ironmongery set", 6, 38.5, 231),
+  item("Architrave supply and fit", 18, 12.75, 229.5),
+  item("Staircase spindle replacement", 24, 14.2, 340.8),
+  item("Handrail refinishing", 1, 180, 180),
+  item("Window board replacement", 5, 42, 210),
+  item("Loft hatch installation", 1, 265, 265),
+  item("Wardrobe carcass assembly", 2, 410, 820),
+  item("Soft-close hinge upgrade", 20, 6.4, 128),
+  item("Site protection and cleaning", 1, 150, 150),
+  item("Site waste disposal", 3, 40, 120),
+];
+
+const multipageExtraction = {
+  supplierName: "Northwind Joinery Ltd",
+  supplierAddress: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
+  supplierVatNumber: "GB293445512",
+  invoiceNumber: "NJ-10458",
+  invoiceDate: "2026-09-15",
+  dueDate: "2026-10-15",
+  currency: "GBP",
+  netAmount: 5285.3,
+  vatAmount: 1057.06,
+  grossAmount: 6342.36,
+  lineItems: multipageLineItems,
+  bankDetails: {
+    accountName: "Northwind Joinery Ltd",
+    accountNumber: "71234598",
+    sortCode: "40-11-62",
+    iban: null,
+    bic: null,
+  },
+  description: null,
+  purchaseOrderReference: "PO-55187",
+};
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+};
+
+/** Runs a committed fixture through intake validation and then the pipeline. */
+const processFixture = async (
+  name: string,
+  selections: Record<string, unknown>,
+  companyName = "InvoiceWise Ltd",
+) => {
+  const bytes = await fixture(name);
+  const validation = await validateIntakeDocument({
+    bytes: new Uint8Array(bytes),
+    declaredMimeType: MIME_BY_EXTENSION[name.split(".").pop()!],
+  });
+  if (!validation.ok) throw new Error(`${name}: ${validation.message}`);
+  return Effect.runPromise(
+    Effect.either(
+      processInvoice({
+        documentUrl: dataUrl(bytes, validation.mimeType),
+        mimetype: validation.mimeType,
+        companyName,
+        previousInvoices: [],
+      }).pipe(Effect.provide(oracle(selections))),
+    ),
+  );
+};
+
+/** The type of every value, recursively: the shape downstream code sees. */
+const shapeOf = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(shapeOf)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(
+          Object.entries(value).map(([key, entry]) => [key, shapeOf(entry)]),
+        )
+      : value === null
+        ? "null"
+        : typeof value;
+
+describe("supported input matrix", () => {
+  ocrTest(
+    "the same invoice as text PDF, scanned PDF, PNG scan and JPEG photo yields the same data",
+    async () => {
+      const inputs = [
+        ["uk-invoice.pdf", ["text-layer"]],
+        ["uk-invoice-scanned.pdf", ["ocr"]],
+        ["uk-invoice-scan.png", ["ocr"]],
+        ["uk-invoice-photo.jpg", ["ocr"]],
+      ] as const;
+      const results = [];
+      for (const [name, pageSources] of inputs) {
+        const result = await processFixture(name, ukInvoiceSelections);
+        if (result._tag === "Left") {
+          throw new Error(`${name}: ${result.left.reason}`);
+        }
+        const {
+          textSource,
+          pageSources: read,
+          ...fields
+        } = result.right.extraction;
+        expect({ name, textSource, read }).toEqual({
+          name,
+          textSource: pageSources[0],
+          read: [...pageSources],
+        });
+        // Every source gives the same extracted values...
+        const {
+          textSource: _t,
+          pageSources: _p,
+          ...expected
+        } = ukInvoiceExtraction("text-layer");
+        expect(fields).toEqual(expected);
+        results.push(result.right);
+      }
+      // ...and the same downstream shape, judgments included.
+      const [first, ...rest] = results.map(shapeOf);
+      for (const shape of rest) expect(shape).toEqual(first);
+    },
+    180_000,
+  );
+
+  test("reads every page of a multi-page invoice and each table row once", async () => {
+    const result = await processFixture(
+      "uk-invoice-multipage.pdf",
+      multipageSelections,
+    );
+    if (result._tag === "Left") throw new Error(result.left.reason);
+    expect(result.right.extraction).toEqual({
+      ...multipageExtraction,
+      textSource: "text-layer",
+      pageSources: ["text-layer", "text-layer"],
+    });
+  });
+
+  ocrTest(
+    "reads a multi-page invoice whose second page is scanned",
+    async () => {
+      const result = await processFixture(
+        "uk-invoice-multipage-mixed.pdf",
+        multipageSelections,
+      );
+      if (result._tag === "Left") throw new Error(result.left.reason);
+      expect(result.right.extraction).toEqual({
+        ...multipageExtraction,
+        textSource: "mixed",
+        pageSources: ["text-layer", "ocr"],
+      });
+    },
+    60_000,
+  );
+
+  test("a non-invoice attachment fails with a clear reason, not an empty success", async () => {
+    const result = await processFixture("non-invoice-letter.pdf", {});
+    expect(result._tag).toBe("Left");
+    if (result._tag === "Left") {
+      expect(result.left.reason).toContain("No invoice details could be read");
+      expect(result.left.retryable).toBe(false);
+    }
+  });
+
+  test("a malformed file is refused at intake and never reaches extraction", async () => {
+    const bytes = await fixture("malformed-invoice.pdf");
+    expect(
+      await validateIntakeDocument({
+        bytes: new Uint8Array(bytes),
+        declaredMimeType: "application/pdf",
+      }),
+    ).toMatchObject({ ok: false, code: "malformed" });
+    // Even if it did, the pipeline fails permanently instead of retrying.
+    const error = await Effect.runPromise(
+      Effect.flip(
+        processInvoice({
+          documentUrl: dataUrl(bytes, "application/pdf"),
+          mimetype: "application/pdf",
+        }).pipe(Effect.provide(oracle({}))),
+      ),
+    );
+    expect(error.reason).toContain("PDF text extraction failed (malformed)");
+    expect(error.userMessage).toBe(
+      "The document is damaged or is not a valid PDF or image. Upload a fresh copy.",
+    );
+    expect(error.retryable).toBe(false);
+  });
+
+  test("an unsupported type is refused rather than read as a PDF", async () => {
+    const error = await Effect.runPromise(
+      Effect.flip(
+        processInvoice({
+          documentUrl: "data:image/heic;base64,AAAA",
+          mimetype: "image/heic",
+        }).pipe(Effect.provide(oracle({}))),
+      ),
+    );
+    expect(error.reason).toContain("Unsupported document type image/heic");
+    expect(error.userMessage).toBe(error.reason);
+    expect(error.retryable).toBe(false);
+  });
+});
+
+describe("extraction limits fail loudly instead of dropping content", () => {
+  test("more scanned pages than are OCR'd fails before any OCR work", async () => {
+    const pages = INVOICE_EXTRACTION_LIMITS.maxOcrPages + 1;
+    const error = await Effect.runPromise(
+      Effect.flip(
+        processInvoice({
+          documentUrl: dataUrl(Buffer.from(blankPdf(pages)), "application/pdf"),
+          mimetype: "application/pdf",
+        }).pipe(Effect.provide(oracle({}))),
+      ),
+    );
+    expect(error.reason).toContain(`This PDF has ${pages} scanned pages`);
+    expect(error.retryable).toBe(false);
+  });
+
+  test("a document longer than TypeSafe reads fails rather than keeping its first rows", async () => {
+    const rows = Array.from(
+      { length: INVOICE_EXTRACTION_LIMITS.maxLines + 1 },
+      (_, index) => `Statement entry ${index + 1}`,
+    );
+    const error = await Effect.runPromise(
+      Effect.flip(
+        extractInvoiceText(["Invoice number: INV-1", ...rows].join("\n")).pipe(
+          Effect.provide(oracle({})),
+        ),
+      ),
+    );
+    expect(error.reason).toContain(
+      `at most ${INVOICE_EXTRACTION_LIMITS.maxLines} are read per invoice`,
+    );
+  });
+
+  test("more table rows than are checked fails rather than dropping line items", async () => {
+    const rows = Array.from(
+      { length: INVOICE_EXTRACTION_LIMITS.maxLineItemRows + 1 },
+      (_, index) => `Part ${index + 1} | 1 | £1.00 | £1.00`,
+    );
+    const error = await Effect.runPromise(
+      Effect.flip(
+        extractInvoiceText(["Invoice number: INV-1", ...rows].join("\n")).pipe(
+          Effect.provide(oracle({})),
+        ),
+      ),
+    );
+    expect(error.reason).toContain(
+      `at most ${INVOICE_EXTRACTION_LIMITS.maxLineItemRows} line items are read per invoice`,
+    );
+  });
+});
+
+/** A PDF of blank pages: no text layer anywhere. */
+const blankPdf = (pageCount: number) => {
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>"];
+  const kids = Array.from(
+    { length: pageCount },
+    (_, index) => `${index + 3} 0 R`,
+  );
+  objects.push(
+    `<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${pageCount} >>`,
+  );
+  for (let index = 0; index < pageCount; index++) {
+    objects.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>");
+  }
+  let body = "%PDF-1.4\n";
+  const offsets = objects.map((object, index) => {
+    const offset = body.length;
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    return offset;
+  });
+  const xref = body.length;
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) {
+    body += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  }
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new TextEncoder().encode(body);
+};
 
 // One end-to-end check against the real TypeSafe API. It runs only when
 // explicitly requested with a key, e.g.

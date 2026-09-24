@@ -18,5 +18,16 @@ describe("invoice state", () => {
     expect(getInvoiceState({ status: "done", extraction: {} })).toBe(
       "delivered",
     );
+    expect(
+      getInvoiceState({
+        status: "pending",
+        extraction: null,
+        processingError: "No invoice details could be read from this document.",
+      }),
+    ).toBe("failed");
+    // A retry clears the reason while it runs again.
+    expect(
+      getInvoiceState({ status: "processing", processingError: null }),
+    ).toBe("processing");
   });
 });

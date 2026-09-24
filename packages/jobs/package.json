@@ -28,13 +28,11 @@
     "@invoicewise/inbox": "workspace:*",
     "@invoicewise/utils": "workspace:*",
     "effect": "^3.22.2",
-    "heic-convert": "1.2.4",
     "nanoid": "^5.1.5",
     "resend": "^4.6.0",
     "sharp": "0.34.1"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "@types/heic-convert": "2.1.0"
+    "@types/bun": "latest"
   }
 }

@@ -9,6 +9,7 @@ type InvoiceRecord = {
   status?: string | null;
   extraction?: Record<string, unknown> | null;
   judgments?: Record<string, unknown>[] | null;
+  processingError?: string | null;
 };
 
 export function getInvoiceState(invoice: InvoiceRecord): InvoiceState {
@@ -17,7 +18,7 @@ export function getInvoiceState(invoice: InvoiceRecord): InvoiceState {
   }
 
   if (invoice.status === "done") return "delivered";
-  if (!invoice.extraction) return "failed";
+  if (invoice.processingError || !invoice.extraction) return "failed";
   if (invoice.judgments?.length) return "judged";
   return "extracted";
 }

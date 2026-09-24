@@ -59,14 +59,14 @@ function ProcessingMessage() {
   );
 }
 
-function FailedMessage() {
+function FailedMessage({ reason }: { reason?: string | null }) {
   return (
     <Alert variant="destructive" className="mb-5">
       <AlertTriangle aria-hidden className="size-4" />
       <AlertTitle>Invoice extraction failed</AlertTitle>
       <AlertDescription>
-        InvoiceWise could not read this file reliably. Open the original
-        document and upload a clearer copy if needed.
+        {reason ??
+          "InvoiceWise could not read this file reliably. Open the original document and upload a clearer copy if needed."}
       </AlertDescription>
     </Alert>
   );
@@ -188,7 +188,9 @@ export function InboxDetails() {
         <ScrollArea className="min-h-0 xl:h-full">
           <div className="p-5">
             {state === "processing" && <ProcessingMessage />}
-            {state === "failed" && <FailedMessage />}
+            {state === "failed" && (
+              <FailedMessage reason={data.processingError} />
+            )}
 
             {extraction ? (
               <>

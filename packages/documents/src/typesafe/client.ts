@@ -45,6 +45,8 @@ export class TypeSafeError extends Schema.TaggedError<TypeSafeError>()(
     reason: Schema.String,
     status: Schema.optional(Schema.Number),
     retryable: Schema.Boolean,
+    /** The reason safe to show the customer; absent for internal failures. */
+    userMessage: Schema.optional(Schema.String),
   },
 ) {}
 

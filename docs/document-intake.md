@@ -159,6 +159,86 @@ Explicit retries serialize on the canonical inbox row (`SELECT … FOR UPDATE`)
 before they look for pending work, so concurrent retries share one processing
 job instead of creating duplicates.
 
+## Supported inputs
+
+Every supported format goes through the same pipeline: intake validation, text
+reading, TypeSafe extraction and judgments, and one persisted record shape.
+There is no per-format extraction path; the inherited Mistral receipt,
+classifier and loader path has been removed.
+
+| Input | How text is read | Limits | Result when it cannot be read |
+| --- | --- | --- | --- |
+| Text PDF | pdf.js text layer, laid out into rows | 5 MB, 50 pages, 10,000 px per page side, 100,000,000 px in total | Failed invoice with the reason |
+| Scanned / image-only PDF | Each page with fewer than 40 letters and digits is rendered (≤300 DPI, ≤5,000 px per side, ≤15,000,000 px) and OCR'd with tesseract; other pages keep their text layer | As text PDF, plus at most 10 scanned pages per document | More than 10 scanned pages fails before any OCR |
+| JPEG (photo or scan) | Turned upright from its EXIF orientation, then OCR'd as one page | 5 MB, 10,000 px per side, 25,000,000 pixels | Failed invoice with the reason |
+| PNG (scan or screenshot) | OCR'd as one page | As JPEG | Failed invoice with the reason |
+| HEIC / HEIF (iPhone camera default) | Not supported: no bounded HEIC decoder is available to the isolated OCR path | — | Refused at upload with a message to send a JPEG or PDF; not passed on from mail |
+| WebP, GIF, office documents, text | Not supported | — | Refused at intake (`unsupported_type`) |
+
+After reading, every format shares the extraction bounds in
+`INVOICE_EXTRACTION_LIMITS` (`packages/documents/src/typesafe/invoice.ts`):
+at most 400 printed rows, 40,000 characters of document text and 120 table
+rows per invoice. A document over any bound fails with the reason instead of
+being read in part, so an invoice whose later pages, rows or line items were
+never seen is not saved as complete.
+
+Channels: dashboard upload and the API accept PDF, JPEG and PNG. Forwarded
+mail (the inbox webhook) passes PDF, JPEG and PNG attachments on to intake,
+skipping images under 100 KB (logos, signatures, tracking pixels). Gmail sync
+currently fetches PDF attachments only.
+
+Documents without usable text never produce an empty success: a document with
+no readable text even after OCR, or one in which none of supplier, invoice
+number, date, amounts or line items is found (a letter, a remittance, a
+newsletter), is recorded as a failed invoice with its reason.
+
+### Pages, attachments and splitting
+
+- One stored file is one invoice record. Every page of a multi-page PDF is
+  read, in order, and `extraction.pageSources` lists how each page was read
+  (`text-layer` or `ocr`); `extraction.textSource` summarises them (`mixed`
+  when a document needs both). No page is skipped.
+- A document is never split: a PDF that holds several invoices is read as
+  one document. Send separate invoices as separate files.
+- Several attachments in one email are separate records, each with its own
+  provider reference, content hash and processing job.
+- Line items come only from printed table rows: a row found under a header
+  (a table continues onto a later page under a repeated header), or a row
+  whose quantity × unit price = total proves it. A row printed as one run of
+  text ("Continued on page 2", "Page 1 of 2") is never proposed, and TypeSafe
+  confirms each candidate row is a purchased item. Nothing is generated.
+
+### Persisted result
+
+Every input persists the same fields on its `inbox` record:
+
+- source identity: `file_name`, `content_type` (sniffed), `size`,
+  `content_hash`, `reference_id` for mail and `inbox_account_id` for synced
+  mailboxes;
+- on success: `extraction` (the typed `InvoiceExtraction`, including
+  `textSource` and `pageSources`), `judgments` (one per configured question,
+  answered, `not_applicable` with a reason, or `failed`), the derived amount,
+  currency, date and tax columns, status `pending`, and a null
+  `processing_error`;
+- on failure: status `pending`, the reason in `processing_error`, and no
+  extraction or judgments. Permanent reasons (unreadable, not an invoice, over
+  a limit, unsupported) fail at once; transient ones (provider or parser
+  capacity) are retried and recorded only after the last attempt. An explicit
+  retry clears the reason while it runs. REST/MCP reads return
+  `processingError` and the dashboard shows it on the failed invoice. Only
+  the document's own problems are recorded word for word; provider,
+  infrastructure and configuration failures are recorded as a generic
+  temporary processing problem, with the detail in the worker log
+  (`invoice_processing_failed`). A failure is recorded only on a document
+  still `processing`, so a later error never erases a saved extraction.
+
+Fixtures for each input live in `packages/documents/src/test/fixtures`
+(regenerate with `generate-uk-invoice.ts`): `uk-invoice.pdf` (text PDF),
+`uk-invoice-scanned.pdf` (scan), `uk-invoice-scan.png`,
+`uk-invoice-photo.jpg` (phone photo with EXIF rotation),
+`uk-invoice-multipage.pdf` and `uk-invoice-multipage-mixed.pdf` (two pages,
+the second scanned), `non-invoice-letter.pdf` and `malformed-invoice.pdf`.
+
 ## Limits
 
 Enforced before any provider work, in `packages/documents/src/intake.ts`:
@@ -168,7 +248,9 @@ Enforced before any provider work, in `packages/documents/src/intake.ts`:
   false or chunked `content-length` cannot smuggle a larger multipart payload
   past the limit; the reader is cancelled as soon as the bound is crossed.
 - Types: PDF, JPEG, PNG. The declared MIME type must match the sniffed content;
-  other image formats (WebP, HEIC, GIF) fail explicitly.
+  other image formats (WebP, HEIC, GIF) fail explicitly. HEIC is recognised
+  by its declared type or its `ftyp` brand and gets a message saying how to
+  send a JPEG instead.
 - Images: decoded with `sharp`, which rejects header-only, truncated and corrupt
   bodies. Dimensions and decoded pixels are checked first (at most 10,000 px per
   side and 25,000,000 pixels), then a downscaled decode forces the decoder to
@@ -210,7 +292,7 @@ Enforced before any provider work, in `packages/documents/src/intake.ts`:
   which runs under the same supervisor: minimal environment, wall-clock, RSS
   and output budgets, bounded admission. PNG and JPEG uploads are OCR'd
   directly after being turned upright from their EXIF orientation (tesseract
-  ignores it, so a sideways-stored phone photo would read rotated). At most 10 pages per document are OCR'd. The production image and
+  ignores it, so a sideways-stored phone photo would read rotated). At most 10 pages per document are OCR'd; a document with more scanned pages fails before any OCR instead of dropping the rest. The production image and
   CI install `tesseract-ocr`; locally, `brew install tesseract` (or
   `apt-get install tesseract-ocr`) is needed for the scanned-invoice test. Render geometry is checked against the
   **scaled** viewport, so `scale: 2` cannot turn a bounded page into an
@@ -262,7 +344,8 @@ therefore runs in three steps (`packages/documents/src/typesafe/`):
 
 An extraction with no readable text, or in which none of supplier, invoice
 number, date, amounts or line items was found, fails the job instead of being
-saved empty, so the invoice shows as failed. Judgments receive the document
+saved empty, and the reason is recorded in `processing_error`, so the invoice
+shows as failed with that reason. Judgments receive the document
 text alongside the extraction; default checks that compare against history,
 or need values the invoice does not have, are recorded as `not_applicable`
 with a reason rather than answered "No".
@@ -345,6 +428,13 @@ separate host, that origin must be reachable with CORS or the preview should use
   pixel, malformed and password-protected bounds, busy-process termination
   (with a ready handshake), memory-budget termination and the real-document
   timeout.
+- `packages/documents/src/typesafe/invoice.test.ts` — the supported input
+  matrix: the same invoice as text PDF, scanned PDF, PNG and JPEG photo
+  yields identical data and shape; multi-page (text and mixed) invoices keep
+  every page and table row; non-invoice, malformed and unsupported inputs
+  fail with a reason; each extraction limit fails instead of truncating.
+  TypeSafe is a deterministic local oracle; the one real-provider test runs
+  only with `TYPESAFE_LIVE_SMOKE=1` and a key.
 - `packages/documents/src/isolated.test.ts` — text extraction, no silent
   character/page truncation, first-page render, scaled-pixel bounds, typed busy
   admission, fail-closed RSS-sampler behavior, broken page trees classified as
@@ -369,4 +459,7 @@ separate host, that origin must be reachable with CORS or the preview should use
   objects surviving delete and cleanup, hidden reservations and the sync chain
   surviving an exhausted run.
 - `packages/jobs/src/verify-workflows.ts` — end-to-end pipeline verifier on the
-  new contract.
+  new contract, including the input matrix through real intake, queue,
+  worker and Postgres: the same invoice as text PDF, scan, PNG and JPEG
+  persists the same data shape with its own source identity, and a
+  non-invoice attachment persists its failure reason.

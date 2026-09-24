@@ -67,7 +67,7 @@ export async function processDocumentAttachment(
       } satisfies InvoiceJudgmentQuestion,
     };
   });
-  const result = await new DocumentClient().getInvoiceOrReceipt({
+  const result = await new DocumentClient().getInvoice({
     documentUrl: input.documentUrl,
     mimetype: input.mimetype,
     companyName: input.companyName,
@@ -93,9 +93,10 @@ export async function processDocumentAttachment(
     taxAmount: result.tax_amount,
     taxRate: result.tax_rate,
     taxType: result.tax_type,
-    type: result.type as "invoice" | "expense" | null | undefined,
+    type: result.type,
     extraction: result.extraction,
     judgments: result.judgments,
+    processingError: null,
     status: "pending",
   });
 

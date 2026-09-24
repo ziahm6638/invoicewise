@@ -56,13 +56,6 @@
       "range": "5.0.28",
       "mostCommonRange": "5.0.29",
       "reason": "patch-level difference in the extraction package's provider SDK"
-    },
-    {
-      "workspace": "@invoicewise/documents",
-      "dependency": "zod",
-      "range": "4.1.5",
-      "mostCommonRange": "3.25.64",
-      "reason": "zod v4 is required by the extraction schemas; forcing v3 would change validation behaviour"
     }
   ]
 }
