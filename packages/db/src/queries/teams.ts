@@ -27,6 +27,7 @@ import {
   isTeamRole,
   lockTeamRow,
 } from "./team-permissions";
+import { revokeInvitesSentBy } from "./user-invites";
 
 export const getTeamById = async (
   db: Database | PrimaryDatabase,
@@ -542,8 +543,9 @@ export async function recoverActiveWorkspace(
 /**
  * Revokes everything that could still act on behalf of a user in a workspace
  * once their membership ends: active team pointer, sessions pointed at the
- * workspace, API keys and OAuth tokens. The pointers move to another workspace
- * the user still belongs to, when there is one.
+ * workspace, API keys, OAuth tokens and the pending invitations they sent. The
+ * pointers move to another workspace the user still belongs to, when there is
+ * one.
  */
 async function revokeMembershipAccess(
   tx: ProvisioningTransaction,
@@ -566,6 +568,12 @@ async function revokeMembershipAccess(
         eq(oauthAccessTokens.revoked, false),
       ),
     );
+
+  await revokeInvitesSentBy(tx, {
+    teamId,
+    inviterUserId: userId,
+    remainingRole: null,
+  });
 }
 
 export async function leaveTeam(db: Database, params: LeaveTeamParams) {
@@ -834,6 +842,14 @@ export async function updateTeamMember(
           ),
         );
     }
+
+    // Pending invites this member sent for a role they can no longer grant
+    // are revoked with the demotion.
+    await revokeInvitesSentBy(tx, {
+      teamId,
+      inviterUserId: userId,
+      remainingRole: role,
+    });
 
     return updated;
   });

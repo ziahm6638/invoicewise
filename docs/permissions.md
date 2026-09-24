@@ -12,6 +12,7 @@ expected to reach the same decision for the same actor.
 | Upload, process, retry, annotate invoices | yes | yes | yes |
 | Manage workspace settings (name, logo, currency, email) | yes | yes | no |
 | Invite, remove and re-role members | yes | yes, except owners | no |
+| List and revoke pending invitations | yes | yes | no |
 | Grant the `owner` role | yes | no | no |
 | Manage custom questions | yes | yes | no |
 | Manage integrations: API keys, OAuth apps, accounting, webhooks, mailboxes | yes | yes | no |
@@ -39,7 +40,8 @@ Removing a member (or the member leaving, or the workspace being deleted) moves
 their active-team pointer and every session pointed at the workspace to another
 workspace they still belong to, or clears them when none is left; removal, and
 demotion to `member`, also deletes their API keys for it and revokes their
-OAuth tokens.
+OAuth tokens. Removal and demotion also revoke the pending invitations they can
+no longer grant (see **Invitations**).
 
 **tRPC.** `protectedProcedure` resolves the caller's role from the primary
 database on every request (`apps/api/src/trpc/middleware/team-permission.ts`).
@@ -95,6 +97,21 @@ and expiry are checked under the team lock at acceptance time, and the invite
 row is deleted in the same transaction so it cannot be replayed. Invitations
 are visible to a recipient only while they are `pending` and unexpired.
 
+Invitations belong to the member who sent them, not to the workspace (#63).
+When the sender leaves or is removed, every pending invitation they sent is
+revoked; when the sender is demoted, their pending invitations for a role
+above what their new role can grant are revoked (an owner demoted to admin
+loses their owner invitations; anyone demoted to member loses all of them).
+Revocation deletes the invite rows inside the same locked transaction as the
+membership change (`revokeInvitesSentBy` in `user-invites.ts`), so a removed
+or demoted member keeps no path back in through an invite to an address they
+control. Acceptance independently re-checks, under the team lock, that the
+sender is still a member who may grant the stored role, and refuses the invite
+otherwise; revoked or cancelled invites cannot be accepted. Owners and admins
+see the workspace's pending invitations, with sender and expiry, under
+Settings → Members → Pending Invitations (`team.teamInvites`, admin and up) and
+can revoke any of them (`team.deleteInvite`).
+
 **Account deletion.** `deleteUser` takes the same team-row locks as every other
 membership mutation. A user who is the sole owner of any workspace cannot
 delete their account until ownership is transferred or the workspace is deleted
@@ -135,7 +152,8 @@ cannot escalate.
 
 `apps/api/src/trpc/routers/team.permissions.integration.test.ts` runs the
 two-workspace, three-role matrix, member escalation attempts, native Better
-Auth bypass attempts, removal and demotion revocation, key deletion,
+Auth bypass attempts, removal and demotion revocation (including the
+inviter-bound invitation rules and acceptance after revocation), key deletion,
 cross-tenant key updates and concurrent owner changes against a disposable
 Postgres database:
 
