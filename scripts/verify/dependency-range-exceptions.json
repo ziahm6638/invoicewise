@@ -31,13 +31,6 @@
     },
     {
       "workspace": "@invoicewise/website",
-      "dependency": "@team-plain/typescript-sdk",
-      "range": "5.9.0",
-      "mostCommonRange": "^5.9.0",
-      "reason": "exact pin versus caret for the same installed version"
-    },
-    {
-      "workspace": "@invoicewise/website",
       "dependency": "framer-motion",
       "range": "^12.15.0",
       "mostCommonRange": "^12.18.1",
