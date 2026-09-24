@@ -138,7 +138,9 @@ can revoke any of them (`team.deleteInvite`).
 membership mutation. A user who is the sole owner of any workspace cannot
 delete their account until ownership is transferred or the workspace is deleted
 deliberately, and deleting an account never deletes a shared workspace.
-Resumable provider/storage cleanup is issue #35.
+Workspace deletion is owner-only and requires the workspace name typed back;
+both deletions queue a resumable cleanup of stored files and provider
+connections. See [offboarding](offboarding.md).
 
 Deletion locks the user row before it snapshots memberships, so a concurrent
 workspace creation or invitation acceptance waits on that lock and then either
@@ -215,8 +217,6 @@ never run against a development or production database by accident.
 
 ## Known limits
 
-- Safe offboarding and workspace deletion beyond the pointer recovery above are
-  owned by roadmap issue #35.
 - Workspace-scoped procedures require an active workspace: a session with no
   active workspace gets `403` for them, while account, team-list, invitation
   and workspace-creation procedures keep working so the user can recover.

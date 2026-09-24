@@ -168,6 +168,58 @@ describe("local storage", () => {
     ).toBe("invoice");
   });
 
+  test("removes a prefix and everything below it, and nothing beside it", async () => {
+    const put = (path: string[]) =>
+      storage.upload({ bucket: "vault", path, file: Buffer.from("x") });
+
+    await put(["team-a", "documents", "one", "invoice.pdf"]);
+    await put(["team-a", "assets", "logo", "two", "logo.png"]);
+    await put(["team-ab", "documents", "three", "invoice.pdf"]);
+    await put(["team-b", "documents", "four", "invoice.pdf"]);
+
+    await storage.removePrefix({ bucket: "vault", prefix: "team-a" });
+    // Removing an already removed prefix is a no-op, so cleanup can resume.
+    await storage.removePrefix({ bucket: "vault", prefix: ["team-a"] });
+
+    await expect(
+      storage.download({
+        bucket: "vault",
+        path: ["team-a", "documents", "one", "invoice.pdf"],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      storage.download({
+        bucket: "vault",
+        path: ["team-a", "assets", "logo", "two", "logo.png"],
+      }),
+    ).rejects.toThrow();
+    expect(
+      await (
+        await storage.download({
+          bucket: "vault",
+          path: ["team-ab", "documents", "three", "invoice.pdf"],
+        })
+      ).text(),
+    ).toBe("x");
+    expect(
+      await (
+        await storage.download({
+          bucket: "vault",
+          path: ["team-b", "documents", "four", "invoice.pdf"],
+        })
+      ).text(),
+    ).toBe("x");
+  });
+
+  test("refuses an empty or escaping prefix", async () => {
+    await expect(
+      storage.removePrefix({ bucket: "vault", prefix: "" }),
+    ).rejects.toThrow("Invalid storage path");
+    await expect(
+      storage.removePrefix({ bucket: "vault", prefix: ["team-a", ".."] }),
+    ).rejects.toThrow("Invalid storage path");
+  });
+
   test("rejects paths outside the storage root", async () => {
     await expect(
       storage.upload({

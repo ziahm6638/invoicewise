@@ -277,7 +277,12 @@ suite("workspace permissions (integration)", () => {
       await expect(
         member.team.invite([{ email: emails.invited, role: "admin" }]),
       ).rejects.toThrow();
-      await expect(member.team.delete({ teamId: ids.teamA })).rejects.toThrow();
+      await expect(
+        member.team.delete({
+          teamId: ids.teamA,
+          confirmName: "Permissions Team A",
+        }),
+      ).rejects.toThrow();
       await expect(member.team.update({ name: "Hijacked" })).rejects.toThrow();
       await expect(
         member.questions.create({
@@ -322,7 +327,12 @@ suite("workspace permissions (integration)", () => {
       expect(invited.sent).toBe(0);
       expect(invited.skippedInvites[0]?.reason).toBe("role_not_allowed");
 
-      await expect(admin.team.delete({ teamId: ids.teamA })).rejects.toThrow();
+      await expect(
+        admin.team.delete({
+          teamId: ids.teamA,
+          confirmName: "Permissions Team A",
+        }),
+      ).rejects.toThrow();
 
       await caller(ctx(ids.ownerA, ids.teamA)).team.updateMember({
         teamId: ids.teamA,
@@ -1007,7 +1017,9 @@ suite("workspace permissions (integration)", () => {
 
       const shared = await seedTeam("Shared workspace");
 
-      await expect(queries.deleteUser(db, shared.memberId)).resolves.toEqual({
+      await expect(
+        queries.deleteUser(db, shared.memberId),
+      ).resolves.toMatchObject({
         id: shared.memberId,
       });
 

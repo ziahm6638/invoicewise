@@ -65,6 +65,11 @@ export const PostAccountingDraftPayload = Schema.Struct({
 });
 export type PostAccountingDraftPayload = typeof PostAccountingDraftPayload.Type;
 
+export const PurgeDeletedDataPayload = Schema.Struct({
+  deletionId: Schema.String,
+});
+export type PurgeDeletedDataPayload = typeof PurgeDeletedDataPayload.Type;
+
 export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("process-attachment"),
@@ -93,6 +98,10 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("post-accounting-draft"),
     payload: PostAccountingDraftPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("purge-deleted-data"),
+    payload: PurgeDeletedDataPayload,
   }),
 );
 export type WorkflowRequest = typeof WorkflowRequest.Type;

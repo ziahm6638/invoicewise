@@ -324,7 +324,14 @@ suite("workspace permissions over real HTTP", () => {
     expect(memberRead.data).toHaveLength(3);
 
     expect(
-      (await trpc(member.cookie, "team.delete", { teamId }, "mutation")).status,
+      (
+        await trpc(
+          member.cookie,
+          "team.delete",
+          { teamId, confirmName: "HTTP Team" },
+          "mutation",
+        )
+      ).status,
     ).toBe(403);
     expect(
       (
@@ -1178,7 +1185,7 @@ suite("workspace permissions over real HTTP", () => {
       const deleted = await trpc(
         owner.cookie,
         "team.delete",
-        { teamId },
+        { teamId, confirmName: "deleted Shared" },
         "mutation",
       );
       expect(deleted.error).toBeNull();

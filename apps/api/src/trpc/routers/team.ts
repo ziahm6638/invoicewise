@@ -184,6 +184,7 @@ export const teamRouter = createTRPCRouter({
         data = await deleteTeam(db, {
           teamId: input.teamId,
           userId: session.user.id,
+          confirmName: input.confirmName,
         });
       } catch (error) {
         throw toTRPCError(error);

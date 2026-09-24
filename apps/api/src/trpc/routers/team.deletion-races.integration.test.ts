@@ -203,7 +203,7 @@ suite("account deletion races", () => {
       const deletionResult = await deletion;
       const creationResult = await creation;
 
-      expect(deletionResult).toEqual({
+      expect(deletionResult).toMatchObject({
         ok: true,
         value: { id: fixture.userId },
       });

@@ -70,6 +70,7 @@ bun dev:website             # marketing site
 bun db:migrate             # apply packages/db/migrations forward
 bun jobs:worker            # standalone Effect workflow runner
 bun jobs:status            # inspect queued/running/stuck jobs
+bun jobs:resume-deletions  # re-queue failed account/workspace deletion cleanup (docs/offboarding.md)
 # tesseract must be installed locally for the scanned-invoice OCR test (CI and the image install it)
 bun typecheck
 bun lint

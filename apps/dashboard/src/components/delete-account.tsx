@@ -23,6 +23,7 @@ import {
 } from "@invoicewise/ui/card";
 import { Input } from "@invoicewise/ui/input";
 import { Label } from "@invoicewise/ui/label";
+import { useToast } from "@invoicewise/ui/use-toast";
 import { useMutation } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -31,12 +32,22 @@ import { useState } from "react";
 export function DeleteAccount() {
   const trpc = useTRPC();
   const router = useRouter();
+  const { toast } = useToast();
 
   const deleteUserMutation = useMutation(
     trpc.user.delete.mutationOptions({
       onSuccess: async () => {
         await authClient.signOut();
         router.push("/");
+      },
+      // A sole owner is refused until they transfer ownership or delete the
+      // workspace; say so rather than failing silently.
+      onError: (error) => {
+        toast({
+          title: "Account was not deleted",
+          description: error.message,
+          variant: "destructive",
+        });
       },
     }),
   );
@@ -48,9 +59,10 @@ export function DeleteAccount() {
       <CardHeader>
         <CardTitle>Delete account</CardTitle>
         <CardDescription>
-          Permanently remove your Personal Account and all of its contents from
-          the InvoiceWise platform. This action is not reversible, so please
-          continue with caution.
+          Delete your sign-in, profile and memberships. Workspaces you share
+          with others, and their invoices, stay with the remaining members. If
+          you are the only owner of a workspace, transfer ownership or delete
+          that workspace first.
         </CardDescription>
       </CardHeader>
       <CardFooter className="flex justify-between">
@@ -69,8 +81,10 @@ export function DeleteAccount() {
             <AlertDialogHeader>
               <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
               <AlertDialogDescription>
-                This action cannot be undone. This will permanently delete your
-                account and remove your data from our servers.
+                This cannot be undone. You are signed out everywhere and your
+                account, API keys and memberships are removed from InvoiceWise
+                immediately. Backups taken before now keep a copy until they
+                expire, about two weeks later.
               </AlertDialogDescription>
             </AlertDialogHeader>
 
@@ -89,7 +103,7 @@ export function DeleteAccount() {
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={() => deleteUserMutation.mutate()}
-                disabled={value !== "DELETE"}
+                disabled={value !== "DELETE" || deleteUserMutation.isPending}
               >
                 {deleteUserMutation.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />

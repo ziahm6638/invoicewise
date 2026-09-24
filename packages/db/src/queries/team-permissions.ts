@@ -166,7 +166,11 @@ export const MEMBER_SCOPES: readonly ResourceScope[] = [
   "users.read",
 ];
 
-export type TeamPermissionErrorCode = "FORBIDDEN" | "CONFLICT" | "NOT_FOUND";
+export type TeamPermissionErrorCode =
+  | "BAD_REQUEST"
+  | "FORBIDDEN"
+  | "CONFLICT"
+  | "NOT_FOUND";
 
 /**
  * Raised by the DB-backed membership mutations so callers can map invariant
@@ -252,6 +256,28 @@ export async function getTeamRole(
 }
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/** Matches a Postgres error code, including when a driver wraps the cause. */
+export const isPostgresError = (error: unknown, code: string): boolean => {
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 5 && current; depth += 1) {
+    if (
+      typeof current === "object" &&
+      "code" in current &&
+      (current as { code?: unknown }).code === code
+    ) {
+      return true;
+    }
+
+    current =
+      typeof current === "object" && "cause" in current
+        ? (current as { cause?: unknown }).cause
+        : undefined;
+  }
+
+  return false;
+};
 
 /**
  * Serializes membership mutations for a workspace on the team row so the

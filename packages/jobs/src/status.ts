@@ -1,5 +1,8 @@
 import { BunRuntime } from "@effect/platform-bun";
-import { listWorkflowJobs } from "@invoicewise/db/queries";
+import {
+  listDeletionRequests,
+  listWorkflowJobs,
+} from "@invoicewise/db/queries";
 import { Effect } from "effect";
 import { WorkflowDatabase, WorkflowDatabaseLive } from "./workflows";
 
@@ -22,6 +25,30 @@ Effect.gen(function* () {
       error: job.lastError,
     })),
   );
+
+  // Unfinished deletions stay listed until cleanup completes; a `failed` one
+  // needs an operator (see docs/offboarding.md) and `bun jobs:resume-deletions`.
+  const deletions = yield* Effect.promise(() => listDeletionRequests(db));
+  const unfinished = deletions.filter(
+    (request) => request.status !== "completed",
+  );
+  console.log(
+    `deletion requests: ${unfinished.length} unfinished of ${deletions.length} recent`,
+  );
+  if (unfinished.length > 0) {
+    console.table(
+      unfinished.map((request) => ({
+        id: request.id,
+        subject: `${request.subject}:${request.subjectId}`,
+        status: request.status,
+        attempts: request.attempts,
+        connectionsRevoked: !!request.connectionsRevokedAt,
+        storagePurged: !!request.storagePurgedAt,
+        purgeAfter: request.quiesceUntil,
+        error: request.lastError,
+      })),
+    );
+  }
 }).pipe(
   Effect.provide(WorkflowDatabaseLive),
   Effect.scoped,

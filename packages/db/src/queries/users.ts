@@ -2,9 +2,14 @@ import type { Database, PrimaryDatabase } from "@db/client";
 import { teams, users, usersOnTeam } from "@db/schema";
 import { and, eq } from "drizzle-orm";
 import {
+  DELETION_QUIESCE_MS,
+  recordDeletionRequest,
+} from "./deletion-requests";
+import {
   TeamPermissionError,
   countTeamOwners,
   getTeamMemberRow,
+  isPostgresError,
   lockTeamRow,
 } from "./team-permissions";
 
@@ -117,7 +122,9 @@ export const getUserTeamId = async (db: Database, userId: string) => {
  * a workspace cannot delete their account until ownership is transferred or the
  * workspace is deleted deliberately. Shared workspaces are never deleted here —
  * removing one person must leave the workspace and its other members intact.
- * Resumable provider/storage cleanup is issue #35.
+ *
+ * The person's own private objects (their avatar) are purged afterwards by the
+ * resumable cleanup recorded in the same transaction.
  */
 export const deleteUser = async (db: Database, id: string) => {
   try {
@@ -177,7 +184,14 @@ export const deleteUser = async (db: Database, id: string) => {
       // Memberships, sessions, API keys and OAuth tokens cascade with the user.
       await tx.delete(users).where(eq(users.id, id));
 
-      return { id };
+      const request = await recordDeletionRequest(tx, {
+        subject: "account",
+        subjectId: id,
+        requestedBy: id,
+        quiesceUntil: new Date(Date.now() + DELETION_QUIESCE_MS),
+      });
+
+      return { id, deletionRequestId: request.id };
     });
   } catch (error) {
     // Other flows take the team lock first and the user lock second, so a
@@ -193,26 +207,4 @@ export const deleteUser = async (db: Database, id: string) => {
 
     throw error;
   }
-};
-
-/** Matches a Postgres error code, including when a driver wraps the cause. */
-const isPostgresError = (error: unknown, code: string): boolean => {
-  let current: unknown = error;
-
-  for (let depth = 0; depth < 5 && current; depth += 1) {
-    if (
-      typeof current === "object" &&
-      "code" in current &&
-      (current as { code?: unknown }).code === code
-    ) {
-      return true;
-    }
-
-    current =
-      typeof current === "object" && "cause" in current
-        ? (current as { cause?: unknown }).cause
-        : undefined;
-  }
-
-  return false;
 };

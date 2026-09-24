@@ -7,6 +7,7 @@ export * from "./bank-connections";
 export * from "./connector-state";
 export * from "./customers";
 export * from "./customer-analytics";
+export * from "./deletion-requests";
 export * from "./document-tag-assignments";
 export * from "./document-tag-embedings";
 export * from "./document-tags";

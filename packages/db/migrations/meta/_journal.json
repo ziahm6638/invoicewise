@@ -106,6 +106,13 @@
       "when": 1790360000000,
       "tag": "0014_intake_publication_lease",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790370000000,
+      "tag": "0015_deletion_requests",
+      "breakpoints": true
     }
   ]
 }
