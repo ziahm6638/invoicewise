@@ -1,7 +1,14 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  type DocumentLine,
+  type TextRun,
+  documentPlainText,
+  layoutRuns,
+  runsFromTesseractTsv,
+} from "./layout";
 
 /**
  * PDF work runs in a separate OS process that the parent can kill.
@@ -70,7 +77,19 @@ export type IsolatedPdfStructure = {
 };
 
 export type IsolatedPdfRender = { png: Uint8Array };
-export type IsolatedPdfText = { text: string };
+export type IsolatedPdfTextPage = {
+  width: number;
+  height: number;
+  lines: DocumentLine[];
+};
+export type IsolatedPdfText = { text: string; pages: IsolatedPdfTextPage[] };
+export type IsolatedOcrText = { lines: DocumentLine[] };
+
+type RawTextPage = {
+  width: number;
+  height: number;
+  runs: [number, number, number, number, string][];
+};
 
 type Task = "inspect" | "render" | "text" | "__spin" | "__memory";
 
@@ -113,8 +132,18 @@ const write = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n")
 
   const pdfjs = await import(urls.pdfjs);
   const bytes = new Uint8Array(readFileSync(0));
+  const assets = process.env.IW_PDFJS_ASSETS;
   const loadingTask = pdfjs.getDocument({
     data: bytes,
+    // Glyph data for the 14 standard fonts and CMaps for CID fonts. Without
+    // them standard-font text renders blank and some CID text extracts empty.
+    ...(assets
+      ? {
+          standardFontDataUrl: assets + "standard_fonts/",
+          cMapUrl: assets + "cmaps/",
+          cMapPacked: true,
+        }
+      : {}),
     isEvalSupported: false,
     disableFontFace: true,
     disableAutoFetch: true,
@@ -163,15 +192,28 @@ const write = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n")
         });
         return;
       }
-      let text = "";
+      // Positioned runs, not joined strings: rows, columns and table cells are
+      // rebuilt from geometry by the parent (see layout.ts). Joining items
+      // here loses every line break and column boundary.
+      const pages = [];
+      let chars = 0;
       for (let index = 1; index <= document.numPages; index++) {
         const page = await document.getPage(index);
+        const viewport = page.getViewport({ scale: 1 });
         const content = await page.getTextContent();
         page.cleanup();
-        text += content.items
-          .map((item) => (typeof item.str === "string" ? item.str : ""))
-          .join(" ");
-        if (text.length > options.maxChars) {
+        const runs = [];
+        for (const item of content.items) {
+          if (typeof item.str !== "string" || !item.str.trim()) continue;
+          const [a, b, , , e, f] = item.transform;
+          const height = item.height || Math.hypot(a, b);
+          // pdf.js reports the baseline in PDF user space (origin bottom-left).
+          const [x, baseline] = viewport.convertToViewportPoint(e, f);
+          runs.push([x, baseline - height, item.width, height, item.str]);
+          chars += item.str.length;
+        }
+        pages.push({ width: viewport.width, height: viewport.height, runs });
+        if (chars > options.maxChars) {
           write({
             ok: false,
             code: "limit",
@@ -180,7 +222,7 @@ const write = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n")
           return;
         }
       }
-      write({ ok: true, result: { text } });
+      write({ ok: true, result: { pages } });
       return;
     }
 
@@ -256,14 +298,23 @@ const write = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n")
  * that can see the dependencies, and a bare specifier is passed through so the
  * child can still resolve it.
  */
+const cwdRequire = () =>
+  createRequire(pathToFileURL(join(process.cwd(), "package.json")));
+
 const resolveModuleUrl = (id: string) => {
   try {
-    const require = createRequire(
-      pathToFileURL(join(process.cwd(), "package.json")),
-    );
-    return pathToFileURL(require.resolve(id)).href;
+    return pathToFileURL(cwdRequire().resolve(id)).href;
   } catch {
     return id;
+  }
+};
+
+/** Directory (with trailing slash) holding pdf.js `standard_fonts/` and `cmaps/`. */
+const resolvePdfjsAssets = () => {
+  try {
+    return `${dirname(cwdRequire().resolve("pdfjs-dist/package.json"))}/`;
+  } catch {
+    return "";
   }
 };
 
@@ -284,6 +335,8 @@ const CHILD_ENV_ALLOWLIST = [
   "FONTCONFIG_PATH",
   "FONTCONFIG_FILE",
   "SYSTEMROOT",
+  // Where tesseract finds its language data when it is not in the default place.
+  "TESSDATA_PREFIX",
 ] as const;
 
 const childBaseEnv = () => {
@@ -436,10 +489,49 @@ const parseChildOutput = <T>(stdout: string): ChildMessage<T> | null => {
   }
 };
 
+type ProcessSpec<T> = {
+  command: string;
+  args: string[];
+  env: Record<string, string | undefined>;
+  /** Turns the finished process's stdout into a result, or null when there is none. */
+  parse: (stdout: string, exitCode: number | null) => ChildMessage<T> | null;
+};
+
+const workerSpec = <T>(
+  task: Task,
+  options: Record<string, unknown>,
+): ProcessSpec<T> => ({
+  command: process.execPath,
+  args: [...childRuntimeArgs(), WORKER_SOURCE],
+  env: {
+    ...childBaseEnv(),
+    // Not a secret; also required by the Next.js ProcessEnv typing.
+    NODE_ENV: process.env.NODE_ENV,
+    IW_TASK: task,
+    IW_OPTIONS: JSON.stringify(options),
+    IW_PDFJS_URL: resolveModuleUrl("pdfjs-dist/legacy/build/pdf.mjs"),
+    IW_PDFJS_ASSETS: resolvePdfjsAssets(),
+    IW_CANVAS_URL: resolveModuleUrl("canvas"),
+  },
+  parse: (stdout) => parseChildOutput<T>(stdout),
+});
+
 async function spawnIsolatedTask<T>(
   task: Task,
   bytes: Uint8Array | undefined,
   options: Record<string, unknown>,
+  limits: IsolatedPdfLimits,
+): Promise<{ result: IsolatedPdfResult<T>; readySeen: boolean }> {
+  return superviseProcess(workerSpec<T>(task, options), bytes, limits);
+}
+
+/**
+ * Runs one untrusted-input process under the parent's wall-clock, RSS and
+ * output budgets, feeding it `bytes` on stdin, and kills it on any breach.
+ */
+async function superviseProcess<T>(
+  spec: ProcessSpec<T>,
+  bytes: Uint8Array | undefined,
   limits: IsolatedPdfLimits,
 ): Promise<{ result: IsolatedPdfResult<T>; readySeen: boolean }> {
   const rssBudget = limits.maxProcessRssBytes ?? DEFAULT_PROCESS_RSS_BYTES;
@@ -450,16 +542,8 @@ async function spawnIsolatedTask<T>(
   return await new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(process.execPath, [...childRuntimeArgs(), WORKER_SOURCE], {
-        env: {
-          ...childBaseEnv(),
-          // Not a secret; also required by the Next.js ProcessEnv typing.
-          NODE_ENV: process.env.NODE_ENV,
-          IW_TASK: task,
-          IW_OPTIONS: JSON.stringify(options),
-          IW_PDFJS_URL: resolveModuleUrl("pdfjs-dist/legacy/build/pdf.mjs"),
-          IW_CANVAS_URL: resolveModuleUrl("canvas"),
-        },
+      child = spawn(spec.command, spec.args, {
+        env: spec.env as NodeJS.ProcessEnv,
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
@@ -588,7 +672,7 @@ async function spawnIsolatedTask<T>(
         return;
       }
 
-      const parsed = parseChildOutput<T>(stdout);
+      const parsed = spec.parse(stdout, code);
       if (!parsed) {
         resolve({
           readySeen,
@@ -664,16 +748,99 @@ export function inspectPdfIsolated(
   );
 }
 
-export function extractPdfTextIsolated(
+/**
+ * Reads the PDF text layer page by page and rebuilds its rows and columns.
+ * A page with no text layer (a scan) comes back with no lines; callers decide
+ * whether to OCR it.
+ */
+export async function extractPdfTextIsolated(
   bytes: Uint8Array,
   limits: IsolatedPdfLimits,
 ): Promise<IsolatedPdfResult<IsolatedPdfText>> {
-  return runIsolatedTask<IsolatedPdfText>(
+  const result = await runIsolatedTask<{ pages: RawTextPage[] }>(
     "text",
     bytes,
     { maxPages: limits.maxPages, maxChars: limits.maxChars },
     limits,
   );
+  if (!result.ok) return result;
+  const pages = result.result.pages.map((page, index) => ({
+    width: page.width,
+    height: page.height,
+    lines: layoutRuns(
+      page.runs.map(
+        ([x, y, width, height, text]): TextRun => ({
+          x,
+          y,
+          width,
+          height,
+          text,
+        }),
+      ),
+      index + 1,
+    ),
+  }));
+  return {
+    ok: true,
+    terminated: result.terminated,
+    result: {
+      pages,
+      text: pages.map((page) => documentPlainText(page.lines)).join("\n"),
+    },
+  };
+}
+
+/**
+ * OCRs one PNG or JPEG image with tesseract under the same containment as
+ * the PDF worker: minimal environment, wall-clock, RSS and output budgets, and
+ * bounded admission. Word boxes come back as TSV and are laid out into rows.
+ */
+export async function ocrImageIsolated(
+  image: Uint8Array,
+  limits: IsolatedPdfLimits,
+  options: { page?: number } = {},
+): Promise<IsolatedPdfResult<IsolatedOcrText>> {
+  const admitted = await acquireAdmission(limits);
+  if (!admitted) {
+    return {
+      ok: false,
+      code: "busy",
+      message:
+        "Too many documents are being processed at once. Retry the upload.",
+      terminated: false,
+    };
+  }
+  try {
+    const { result } = await superviseProcess<string>(
+      {
+        command: process.env.IW_TESSERACT_COMMAND || "tesseract",
+        // Automatic page segmentation; rows are rebuilt from word boxes, so
+        // column blocks tesseract separates are joined back into table rows.
+        args: ["stdin", "stdout", "--psm", "3", "-l", "eng", "tsv"],
+        env: { ...childBaseEnv(), OMP_THREAD_LIMIT: "1" },
+        parse: (stdout, exitCode) =>
+          exitCode === 0
+            ? { ok: true, result: stdout }
+            : {
+                ok: false,
+                code: "task_failed",
+                message: `OCR exited with code ${exitCode}.`,
+              },
+      },
+      image,
+      limits,
+    );
+    if (!result.ok) return result;
+    return {
+      ok: true,
+      terminated: result.terminated,
+      result: {
+        lines: layoutRuns(runsFromTesseractTsv(result.result), options.page),
+      },
+    };
+  } finally {
+    releaseAdmission();
+  }
 }
 
 export function renderPdfPageIsolated(

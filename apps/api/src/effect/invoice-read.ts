@@ -371,6 +371,7 @@ export const invoicesToCsv = (rows: ExportRowsResult) => {
     "display_name",
     "file_name",
     "supplier_name",
+    "supplier_address",
     "invoice_number",
     "invoice_date",
     "due_date",
@@ -389,7 +390,11 @@ export const invoicesToCsv = (rows: ExportRowsResult) => {
           ? [
               [
                 judgment.questionId,
-                judgment.answer ?? judgment.error ?? "",
+                judgment.answer ??
+                  (judgment.status === "not_applicable"
+                    ? "not applicable"
+                    : judgment.error) ??
+                  "",
               ] as const,
             ]
           : [];
@@ -400,6 +405,7 @@ export const invoicesToCsv = (rows: ExportRowsResult) => {
       row.displayName,
       row.fileName,
       extraction.supplierName,
+      extraction.supplierAddress,
       extraction.invoiceNumber,
       extraction.invoiceDate,
       extraction.dueDate,

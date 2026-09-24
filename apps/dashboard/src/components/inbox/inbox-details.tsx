@@ -194,27 +194,29 @@ export function InboxDetails() {
               <>
                 <section>
                   <h3 className="text-sm font-semibold">Extracted fields</h3>
+                  {(extraction.textSource === "ocr" ||
+                    extraction.textSource === "mixed") && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Read from a scanned document with OCR. Check the values
+                      against the original.
+                    </p>
+                  )}
                   <dl className="mt-2 grid grid-cols-2 gap-x-5 divide-y sm:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
                     <Field label="Supplier">{extraction.supplierName}</Field>
+                    <Field label="Supplier address">
+                      {extraction.supplierAddress}
+                    </Field>
                     <Field label="Invoice number">
                       {extraction.invoiceNumber}
                     </Field>
                     <Field label="Invoice date">
                       {extraction.invoiceDate
-                        ? formatDate(
-                            extraction.invoiceDate,
-                            user?.dateFormat,
-                            false,
-                          )
+                        ? formatDate(extraction.invoiceDate, user?.dateFormat)
                         : null}
                     </Field>
                     <Field label="Due date">
                       {extraction.dueDate
-                        ? formatDate(
-                            extraction.dueDate,
-                            user?.dateFormat,
-                            false,
-                          )
+                        ? formatDate(extraction.dueDate, user?.dateFormat)
                         : null}
                     </Field>
                     <Field label="VAT number">
@@ -245,6 +247,23 @@ export function InboxDetails() {
                   {extraction.description && (
                     <p className="mt-3 text-sm leading-6 text-muted-foreground">
                       {extraction.description}
+                    </p>
+                  )}
+                </section>
+
+                <section className="mt-7">
+                  <h3 className="text-sm font-semibold">Payment details</h3>
+                  {bank && Object.values(bank).some(Boolean) ? (
+                    <dl className="mt-2 grid grid-cols-2 gap-x-5 divide-y">
+                      <Field label="Account name">{bank.accountName}</Field>
+                      <Field label="Account number">{bank.accountNumber}</Field>
+                      <Field label="Sort code">{bank.sortCode}</Field>
+                      <Field label="IBAN">{bank.iban}</Field>
+                      <Field label="BIC">{bank.bic}</Field>
+                    </dl>
+                  ) : (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      No bank details were found on this invoice.
                     </p>
                   )}
                 </section>
@@ -307,19 +326,6 @@ export function InboxDetails() {
                   <h3 className="text-sm font-semibold">Checks</h3>
                   <JudgmentResults judgments={data.judgments} />
                 </section>
-
-                {bank && Object.values(bank).some(Boolean) && (
-                  <section className="mt-7 border-t pt-5">
-                    <h3 className="text-sm font-semibold">Payment details</h3>
-                    <dl className="mt-2 grid grid-cols-2 gap-x-5 divide-y">
-                      <Field label="Account name">{bank.accountName}</Field>
-                      <Field label="Account number">{bank.accountNumber}</Field>
-                      <Field label="Sort code">{bank.sortCode}</Field>
-                      <Field label="IBAN">{bank.iban}</Field>
-                      <Field label="BIC">{bank.bic}</Field>
-                    </dl>
-                  </section>
-                )}
               </>
             ) : (
               state !== "processing" && (

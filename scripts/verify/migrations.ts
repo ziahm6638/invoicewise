@@ -24,7 +24,7 @@ import {
 } from "./lib";
 
 const PRIOR_SCHEMA_THROUGH = 6;
-const TOTAL_MIGRATIONS = 12;
+const TOTAL_MIGRATIONS = 13;
 
 const PRIOR_SCHEMA_BASELINE = join(
   ROOT,

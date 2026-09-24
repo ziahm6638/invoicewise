@@ -5,6 +5,7 @@ import { validateIntakeDocument } from "./intake";
 import {
   extractPdfTextIsolated,
   inspectPdfIsolated,
+  ocrImageIsolated,
   renderPdfPageIsolated,
   runBusyProcessForTest,
   runMemoryHogForTest,
@@ -64,6 +65,35 @@ describe("isolated PDF tasks", () => {
     if (result.ok) {
       expect(result.result.text).toContain("ACME");
       expect(result.result.text.length).toBeGreaterThan(50);
+    }
+  });
+
+  test("keeps rows and column gaps from the text layer", async () => {
+    const result = await extractPdfTextIsolated(fixture, limits);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // pdf.js items joined into one string once lost every line break
+      // (issue #71); each printed line must stay its own row.
+      expect(result.result.text.split("\n")).toContain(
+        "Invoice number: INV-2026-0042",
+      );
+      expect(result.result.pages[0]!.lines.length).toBeGreaterThan(15);
+    }
+  });
+
+  test("reports a missing OCR engine as a retryable operational failure", async () => {
+    const previous = process.env.IW_TESSERACT_COMMAND;
+    process.env.IW_TESSERACT_COMMAND = "/nonexistent/tesseract";
+    try {
+      const result = await ocrImageIsolated(new Uint8Array([1, 2, 3]), limits);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.code).toBe("task_failed");
+    } finally {
+      if (previous === undefined) {
+        Reflect.deleteProperty(process.env, "IW_TESSERACT_COMMAND");
+      } else {
+        process.env.IW_TESSERACT_COMMAND = previous;
+      }
     }
   });
 

@@ -3,7 +3,7 @@ import {
   differenceInDays,
   differenceInMonths,
   format,
-  isSameYear,
+  parseISO,
   startOfDay,
 } from "date-fns";
 
@@ -84,16 +84,38 @@ export function calculateAvgBurnRate(data: BurnRateData[] | null) {
   return data?.reduce((acc, curr) => acc + curr.value, 0) / data?.length;
 }
 
-export function formatDate(
-  date: string,
-  dateFormat?: string | null,
-  checkYear = true,
-) {
-  if (checkYear && isSameYear(new Date(), new Date(date))) {
-    return format(new Date(date), "MMM d");
-  }
+/** UK, day-first: the display format for anyone without their own preference. */
+export const DEFAULT_DATE_FORMAT = "dd/MM/yyyy";
 
-  return format(new Date(date), dateFormat ?? "P");
+/** The date formats a user may choose; none of them puts the month first. */
+export const DATE_FORMATS = [
+  DEFAULT_DATE_FORMAT,
+  "yyyy-MM-dd",
+  "dd.MM.yyyy",
+] as const;
+
+const DISPLAY_DATE_FORMATS = new Set<string>([...DATE_FORMATS, "d MMM yyyy"]);
+
+/**
+ * Formats a date for display in the user's chosen format, or UK day-first
+ * (24/09/2026) by default; never the US month-first order, so any other stored
+ * format falls back to the default. A date-only value
+ * such as an invoice date (`2026-09-24`) is a calendar day, so it is read in
+ * local time rather than as UTC midnight, which would shift it a day west of
+ * Greenwich.
+ */
+export function formatDate(date: string | Date, dateFormat?: string | null) {
+  const value =
+    typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? parseISO(date)
+      : new Date(date);
+  if (Number.isNaN(value.getTime())) return String(date);
+  return format(
+    value,
+    dateFormat && DISPLAY_DATE_FORMATS.has(dateFormat)
+      ? dateFormat
+      : DEFAULT_DATE_FORMAT,
+  );
 }
 
 export function getInitials(value: string) {
@@ -124,7 +146,7 @@ export function formatAccountName({
 export function formatDateRange(dates: TZDate[]): string {
   if (!dates.length) return "";
 
-  const formatFullDate = (date: TZDate) => format(date, "MMM d");
+  const formatFullDate = (date: TZDate) => format(date, "d MMM");
   const formatDay = (date: TZDate) => format(date, "d");
 
   const startDate = dates[0];
@@ -142,7 +164,7 @@ export function formatDateRange(dates: TZDate[]): string {
 
   if (startDate.getMonth() === endDate.getMonth()) {
     // Same month
-    return `${format(startDate, "MMM")} ${formatDay(startDate)} - ${formatDay(endDate)}`;
+    return `${formatDay(startDate)} - ${formatDay(endDate)} ${format(startDate, "MMM")}`;
   }
   // Different months
   return `${formatFullDate(startDate)} - ${formatFullDate(endDate)}`;

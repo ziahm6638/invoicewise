@@ -1879,7 +1879,8 @@ export const users = pgTable(
     timezone: text(),
     timezoneAutoSync: boolean("timezone_auto_sync").default(true),
     timeFormat: numericCasted("time_format").default(24),
-    dateFormat: text("date_format"),
+    // UK day-first for new accounts; the dashboard falls back to the same.
+    dateFormat: text("date_format").default("dd/MM/yyyy"),
   },
   (table) => [
     uniqueIndex("users_email_key").on(table.email),

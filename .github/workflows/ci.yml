@@ -42,6 +42,11 @@ jobs:
       - name: Start disposable Postgres 17, Redis and MinIO
         run: bash scripts/verify/ci-services.sh
 
+      # The production image ships tesseract for scanned-invoice OCR; the
+      # scanned-fixture regression test requires it in CI.
+      - name: Install tesseract OCR
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng
+
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 

@@ -1,11 +1,12 @@
 import type { InvoiceJudgment } from "@invoicewise/documents";
 import { Badge } from "@invoicewise/ui/badge";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, MinusCircle } from "lucide-react";
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 
 function answerFor(judgment: InvoiceJudgment) {
   if (judgment.status === "failed") return "Could not answer";
+  if (judgment.status === "not_applicable") return "Not applicable";
   if (judgment.type === "boolean") return judgment.answer ? "Yes" : "No";
   if (judgment.type === "score") {
     return judgment.levels[String(judgment.answer)] ?? String(judgment.answer);
@@ -14,7 +15,9 @@ function answerFor(judgment: InvoiceJudgment) {
 }
 
 function confidenceFor(judgment: InvoiceJudgment) {
-  if (judgment.status === "failed") return null;
+  if (judgment.status === "failed" || judgment.status === "not_applicable") {
+    return null;
+  }
   if (judgment.type === "boolean") {
     return judgment.answer ? judgment.probability : 1 - judgment.probability;
   }
@@ -52,6 +55,11 @@ export function JudgmentResults({
                       aria-hidden
                       className="size-4 text-destructive"
                     />
+                  ) : judgment.status === "not_applicable" ? (
+                    <MinusCircle
+                      aria-hidden
+                      className="size-4 text-muted-foreground"
+                    />
                   ) : (
                     <CheckCircle2
                       aria-hidden
@@ -74,7 +82,9 @@ export function JudgmentResults({
                   className={
                     judgment.status === "failed"
                       ? "text-sm font-medium text-destructive"
-                      : "text-sm font-semibold"
+                      : judgment.status === "not_applicable"
+                        ? "text-sm font-medium text-muted-foreground"
+                        : "text-sm font-semibold"
                   }
                 >
                   {answerFor(judgment)}
@@ -86,6 +96,11 @@ export function JudgmentResults({
                 )}
               </div>
             </div>
+            {judgment.status === "not_applicable" && (
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                {judgment.reason}
+              </p>
+            )}
             {judgment.status === "failed" && (
               <p className="mt-2 text-xs leading-5 text-destructive">
                 {judgment.error ||

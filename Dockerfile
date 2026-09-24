@@ -12,10 +12,12 @@ FROM oven/bun:${BUN_VERSION}-slim AS bun
 
 FROM node:${NODE_VERSION}-bookworm-slim AS base
 # Bun runs the API, installs and the migrator; Node runs `next build`/`next start`.
+# tesseract OCRs scanned invoices (pages without a usable PDF text layer).
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx \
   && apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates procps \
+     tesseract-ocr tesseract-ocr-eng \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
