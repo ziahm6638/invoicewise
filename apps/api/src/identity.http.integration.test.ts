@@ -539,6 +539,8 @@ suite("identity lifecycle over real HTTP", () => {
     expect(body?.session?.activeOrganizationId).toBe(memberships[0]!.teamId);
   });
 
+  // Many real signups, verifications and concurrent acceptances run over
+  // HTTP here; a cold first run can exceed bun's 5s default.
   test("invitation acceptance is atomic and rejects replay, revocation, expiry and the wrong recipient", async () => {
     const owner = await signUpAndVerify("invite-owner");
     const ownerTeams = await membershipRows(owner.userId);
@@ -723,7 +725,7 @@ suite("identity lifecycle over real HTTP", () => {
       1,
     );
     expect(await inviteRow(concurrentInvite)).toBeUndefined();
-  });
+  }, 30_000);
 
   test("generic profile writes cannot change the verified address", async () => {
     const account = await signUpAndVerify("profile-bypass");
