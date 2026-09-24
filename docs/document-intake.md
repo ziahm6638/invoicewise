@@ -81,11 +81,12 @@ restore a deleted invoice.
 
 Cleanup is resumable: a removal failure sets `object_removal_pending` on the
 record, and every later cleanup pass picks those rows up again even though they
-are already `cancelled`. Publication and discard share the canonical row lock,
-so a writer cannot start or finish a publication after a discard claim has
-tombstoned the row. A remote effect that arrives after a local abort is covered
-by the ambiguous-write reconciliation below rather than by an unproven
-compensation step.
+are already `cancelled`. A publication holds a short lease on the row
+(`intake_publishing_until`) and every discard claim skips a leased row, so
+cleanup cannot tombstone a reservation while a writer is still storing it. A
+write that lands after its record was cancelled anyway, and a remote effect that
+arrives after a local abort, are covered by the ambiguous-write reconciliation
+below rather than by an unproven compensation step.
 
 Removal intent is written **before** the effect, atomically with the state
 change: claiming a stale reservation, cancelling a record and deleting an
@@ -97,22 +98,26 @@ after the object is proven gone. Ambiguous publication tombstones do **not**
 clear automatically; they stay pending until explicit provider/operator
 settlement or verified accepted retry.
 
-Publication, acceptance and discard serialize on the canonical inbox row: the
-publisher takes a `SELECT … FOR UPDATE` lock, performs the immutable write and
-the hash read-back inside that lock with an abort signal and a bounded budget,
-then accepts and enqueues in the same transaction. A discard claim waits for
-that transaction, so nothing can publish after a tombstone is considered clean
-and the interleaving cannot occur. If the attempt fails after writing, the
-failure path records durable removal intent before the lock is released; if the
-transaction itself aborts (for example a database error while queueing), the
-row stays `reserved` and the intent is recorded immediately after the rollback.
+No database connection or transaction is held while bytes move to or from
+object storage (issue #68), so slow storage cannot exhaust the connection pool.
+The publisher first takes the publication lease in one short statement (the
+storage budget plus headroom), then performs the immutable write and the hash
+read-back with an abort signal and a bounded budget and no connection checked
+out, and finally accepts and enqueues in one short `SELECT … FOR UPDATE`
+transaction. If the row was cancelled while it was writing, that transaction
+records removal intent (with the ambiguity marker) for the bytes it published
+instead of accepting. If the write or read-back fails, the attempt records
+durable removal intent and leaves its lease to expire, because concurrent
+attempts for the same content share it; if the acceptance transaction itself
+aborts (for example a database error while queueing), the row stays
+`reserved` and the intent is recorded immediately after the rollback.
 
 Acceptance clears any earlier removal intent in the same conditional update that
 moves the row to `accepted`, so a successful retry cannot be deleted by a later
 pending-removal pass. Pending cleanup never removes a row by id alone: it
 re-claims the row with a state-conditional update, and only `reserved` or
-already-`cancelled` rows are eligible. A retry that wins the row lock therefore
-makes the cleanup claim a no-op, and an accepted row is repaired rather than
+already-`cancelled` rows without a live publication lease are eligible. A
+retry that is still publishing therefore makes the cleanup claim a no-op, and an accepted row is repaired rather than
 removed if it carries a stale tombstone.
 
 Aborted local filesystem calls are cooperative; a call that has already entered
@@ -262,8 +267,13 @@ Enforced before any provider work, in `packages/documents/src/intake.ts`:
   parent therefore kills and reaps a separate OS process. Enforcement is
   concrete: a wall-clock budget that stays armed until the process exits, an RSS
   budget sampled from the child (default 320 MB) that kills on breach, an output
-  byte budget, and bounded admission (two concurrent processes, eight queued;
-  beyond that the request fails with a typed `busy` outcome). The RSS budget is
+  byte budget, and bounded admission (beyond that the request fails with a
+  typed `busy` outcome). Admission has two independent pools: intake,
+  extraction and OCR use `IW_PDF_MAX_CONCURRENT` / `IW_PDF_MAX_QUEUED` (two
+  concurrent processes, eight queued), and dashboard previews use
+  `IW_PDF_PREVIEW_MAX_CONCURRENT` / `IW_PDF_PREVIEW_MAX_QUEUED` (one concurrent,
+  four queued), so preview traffic can never take the capacity invoice intake
+  depends on (issue #68). The RSS budget is
   a **sampled soft ceiling**, not a hard heap cap: a very fast allocation can
   overshoot between samples. The sampler is itself bounded, never overlaps, and
   fails closed: if `ps` or another configured sampler cannot be executed or
@@ -437,7 +447,8 @@ separate host, that origin must be reachable with CORS or the preview should use
   only with `TYPESAFE_LIVE_SMOKE=1` and a key.
 - `packages/documents/src/isolated.test.ts` — text extraction, no silent
   character/page truncation, first-page render, scaled-pixel bounds, typed busy
-  admission, fail-closed RSS-sampler behavior, broken page trees classified as
+  admission, saturated preview admission leaving intake admission free,
+  fail-closed RSS-sampler behavior, broken page trees classified as
   permanent `malformed` (not transient), and a child environment without the
   parent's secrets.
 - `packages/inbox/src/generate-id.test.ts` — backward-compatible Gmail
@@ -455,7 +466,8 @@ separate host, that origin must be reachable with CORS or the preview should use
   late-publication, ambiguous-publication-after-multiple-passes, explicit
   settlement, paginated full-pass cleanup, transient-readback,
   pending-cleanup-versus-retry, HTTP parser-capacity and mailbox-admission
-  cases, plus same-named Gmail attachments, update-cannot-delete, shared legacy
+  cases, uploads proceeding while every preview slot is taken, a slow-storage
+  stub proving no pool connection is held during storage I/O, plus same-named Gmail attachments, update-cannot-delete, shared legacy
   objects surviving delete and cleanup, hidden reservations and the sync chain
   surviving an exhausted run.
 - `packages/jobs/src/verify-workflows.ts` — end-to-end pipeline verifier on the

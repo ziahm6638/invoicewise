@@ -26,6 +26,9 @@ export async function getPdfImage(data: ArrayBuffer) {
       maxPageDimension: PREVIEW_MAX_DIMENSION,
       maxTotalPixels: PREVIEW_MAX_PIXELS,
       maxChars: 0,
+      // Previews have their own admission pool: preview traffic can never
+      // take the parser capacity invoice intake depends on.
+      admission: "preview",
     },
     {
       page: 1,

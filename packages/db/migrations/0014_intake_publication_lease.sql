@@ -1,0 +1,1 @@
+ALTER TABLE "inbox" ADD COLUMN "intake_publishing_until" timestamp with time zone;

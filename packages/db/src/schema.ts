@@ -2067,6 +2067,13 @@ export const inbox = pgTable(
     objectRemovalAmbiguous: boolean("object_removal_ambiguous")
       .default(false)
       .notNull(),
+    // Lease taken by an intake attempt while it writes and verifies the
+    // object outside any database transaction. Cleanup cannot claim the
+    // reservation until the lease has expired.
+    intakePublishingUntil: timestamp("intake_publishing_until", {
+      withTimezone: true,
+      mode: "string",
+    }),
   },
   (table) => [
     index("inbox_attachment_id_idx").using(

@@ -1374,6 +1374,49 @@ export async function reserveInboxIntake(
   return result;
 }
 
+/**
+ * True when no intake attempt holds a live publication lease on the row. A
+ * cleanup claim never takes a reservation whose object may still be being
+ * written and verified.
+ */
+const noLivePublicationLease = () =>
+  or(
+    isNull(inbox.intakePublishingUntil),
+    lt(inbox.intakePublishingUntil, sql`now()`),
+  )!;
+
+/**
+ * Takes (or extends) the publication lease on a reservation before its object
+ * is written. The write and read-back then run outside any transaction, so no
+ * database connection is held while bytes move to or from object storage;
+ * cleanup claims skip the row until the lease expires. Returns `undefined`
+ * when the row is no longer a live reservation.
+ */
+export async function beginInboxIntakePublication(
+  db: InboxQueryDatabase,
+  params: { id: string; teamId: string; leaseMs: number },
+): Promise<InboxIntakeBinding | undefined> {
+  const leaseUntil = sql`now() + ${Math.max(0, Math.ceil(params.leaseMs))} * interval '1 millisecond'`;
+  const [result] = await db
+    .update(inbox)
+    .set({
+      // Concurrent attempts for the same content share one lease; a shorter
+      // lease never cuts another attempt's lease short.
+      intakePublishingUntil: sql`greatest(coalesce(${inbox.intakePublishingUntil}, now()), ${leaseUntil})`,
+    })
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        eq(inbox.intakeState, "reserved"),
+        ne(inbox.status, "deleted"),
+      ),
+    )
+    .returning(intakeBindingColumns);
+
+  return result;
+}
+
 export type AcceptInboxIntakeParams = {
   id: string;
   teamId: string;
@@ -1400,6 +1443,7 @@ export async function acceptInboxIntake(
       // accepted bytes.
       objectRemovalPending: false,
       objectRemovalAmbiguous: false,
+      intakePublishingUntil: null,
       contentHash: params.contentHash,
       contentType: params.contentType,
       size: params.size,
@@ -1505,6 +1549,7 @@ export async function claimReservedIntakeForDiscard(
         eq(inbox.teamId, params.teamId),
         eq(inbox.intakeState, "reserved"),
         ne(inbox.status, "deleted"),
+        noLivePublicationLease(),
       ),
     )
     .returning({ id: inbox.id, filePath: inbox.filePath });
@@ -1537,10 +1582,11 @@ export async function claimAmbiguousObjectRemovalForDiscard(
         eq(inbox.teamId, params.teamId),
         eq(inbox.objectRemovalPending, true),
         eq(inbox.objectRemovalAmbiguous, true),
-        // Accepted content is never eligible for removal. A late writer is
-        // excluded by the same condition, because acceptance sets
-        // `accepted` before releasing the canonical row lock.
+        // Accepted content is never eligible for removal, and a retry that
+        // is still writing holds a publication lease that excludes the row
+        // until it has accepted (or the lease has expired).
         inArray(inbox.intakeState, ["reserved", "cancelled"]),
+        noLivePublicationLease(),
       ),
     )
     .returning({ id: inbox.id, filePath: inbox.filePath });
@@ -1573,6 +1619,7 @@ export async function claimSettledObjectRemovalForDiscard(
         eq(inbox.objectRemovalPending, true),
         eq(inbox.objectRemovalAmbiguous, false),
         inArray(inbox.intakeState, ["reserved", "cancelled"]),
+        noLivePublicationLease(),
       ),
     )
     .returning({ id: inbox.id, filePath: inbox.filePath });
@@ -1608,8 +1655,8 @@ export async function clearAcceptedObjectRemovalIntent(
 
 /**
  * Persists removal intent for an object that may exist at the record's path.
- * Called before releasing the row lock on a failed publication, so the intent
- * survives a crash and the next cleanup pass reclaims the bytes.
+ * Called when a publication fails, or when it wrote bytes for a record that
+ * was cancelled meanwhile, so the next cleanup pass reclaims them.
  */
 export async function recordInboxIntakeRemovalIntent(
   db: InboxQueryDatabase,
@@ -1624,15 +1671,16 @@ export async function recordInboxIntakeRemovalIntent(
       // complete after the local abort. Keep the reconciliation tombstone
       // until verified acceptance or explicit provider/operator settlement.
       objectRemovalAmbiguous: true,
+      // The publication lease is shared with any concurrent attempt for the
+      // same content, so it is left to expire rather than cleared here.
     })
     .where(
       and(
         eq(inbox.id, params.id),
         eq(inbox.teamId, params.teamId),
-        // A concurrent retry may have accepted the row after the failed
-        // transaction released its lock. Never re-attach removal intent to
-        // accepted content.
-        eq(inbox.intakeState, "reserved"),
+        // A concurrent retry may have accepted the row meanwhile. Never
+        // re-attach removal intent to accepted content.
+        inArray(inbox.intakeState, ["reserved", "cancelled"]),
       ),
     );
 }
