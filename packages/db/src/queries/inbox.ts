@@ -1671,10 +1671,8 @@ export async function recordInboxIntakeRemovalIntent(
       // complete after the local abort. Keep the reconciliation tombstone
       // until verified acceptance or explicit provider/operator settlement.
       objectRemovalAmbiguous: true,
-      // The attempt is over, so cleanup may reclaim the row right away. A
-      // concurrent attempt that is still writing then loses the row to
-      // cleanup and is superseded; its bytes stay covered by this tombstone.
-      intakePublishingUntil: null,
+      // The publication lease is shared with any concurrent attempt for the
+      // same content, so it is left to expire rather than cleared here.
     })
     .where(
       and(

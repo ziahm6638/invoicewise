@@ -314,6 +314,13 @@ suite("document intake ownership over real HTTP", () => {
       .from(schema.inbox)
       .where(orm.eq(schema.inbox.teamId, teamId));
 
+  /** Lets a failed attempt's publication lease lapse so cleanup may claim its rows. */
+  const expirePublicationLeases = async (teamId: string) =>
+    client.primaryDb
+      .update(schema.inbox)
+      .set({ intakePublishingUntil: new Date(Date.now() - 1000).toISOString() })
+      .where(orm.eq(schema.inbox.teamId, teamId));
+
   /** Runs worker batches until `done` holds, so unrelated queued jobs cannot starve a test. */
   const runWorker = async (done: () => Promise<boolean>, rounds = 8) => {
     for (let round = 0; round < rounds; round++) {
@@ -2026,6 +2033,7 @@ suite("document intake ownership over real HTTP", () => {
     const [reserved] = await inboxRowsFor(teamId);
     expect(reserved?.objectRemovalPending).toBe(true);
     expect(reserved?.objectRemovalAmbiguous).toBe(true);
+    await expirePublicationLeases(teamId);
 
     // Two immediate passes cannot establish settlement: the remote write may
     // still arrive later. Both passes must leave the ambiguous intent intact.
@@ -2111,6 +2119,7 @@ suite("document intake ownership over real HTTP", () => {
       },
     );
     expect(deleteAttempt.status).toBe("rejected");
+    await expirePublicationLeases(deleteTeamId);
     const [beforeDelete] = await inboxRowsFor(deleteTeamId);
     await queries.deleteInbox(client.primaryDb, {
       id: beforeDelete!.id,
@@ -2170,6 +2179,7 @@ suite("document intake ownership over real HTTP", () => {
       },
     );
     expect(cancelAttempt.status).toBe("rejected");
+    await expirePublicationLeases(cancelTeamId);
     const [beforeCancel] = await inboxRowsFor(cancelTeamId);
     await queries.cancelInboxIntake(client.primaryDb, {
       id: beforeCancel!.id,
@@ -2443,6 +2453,85 @@ suite("document intake ownership over real HTTP", () => {
     ).toBe(true);
   });
 
+  test("a failed attempt does not release the lease a concurrent attempt still holds", async () => {
+    const owner = await createUser("intake-shared-lease");
+    const teamId = owner.personalTeamId;
+
+    let release!: () => void;
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let path: string[] = [];
+
+    const writing = intake.acceptIntakeUpload(
+      client.primaryDb,
+      {
+        ...intakeStorage(),
+        uploadIfAbsent: async (input) => {
+          path = input.path as string[];
+          started();
+          await gate;
+          return storage.uploadIfAbsent(input);
+        },
+      },
+      {
+        teamId,
+        bytes: invoicePdf,
+        declaredMimeType: "application/pdf",
+        fileName: "invoice.pdf",
+      },
+    );
+    await startedPromise;
+
+    // A second attempt for the same content fails its write while the first
+    // is still writing, leaving an ambiguous removal intent on the shared row.
+    const failed = await intake.acceptIntakeUpload(
+      client.primaryDb,
+      {
+        ...intakeStorage(),
+        uploadIfAbsent: async () => {
+          throw new Error("synthetic storage timeout");
+        },
+      },
+      {
+        teamId,
+        bytes: invoicePdf,
+        declaredMimeType: "application/pdf",
+        fileName: "invoice.pdf",
+      },
+    );
+    expect(failed.status).toBe("rejected");
+    const [pending] = await inboxRowsFor(teamId);
+    expect(pending?.objectRemovalPending).toBe(true);
+    expect(pending?.objectRemovalAmbiguous).toBe(true);
+
+    // Cleanup must still treat the row as leased by the writing attempt.
+    const cleanup = await intake.discardStaleReservations(
+      client.primaryDb,
+      intakeStorage(),
+      { olderThanMs: -1, limit: 100 },
+    );
+    expect(cleanup.discarded).not.toContain(pending!.id);
+
+    release();
+    const result = await writing;
+    expect(result.status).toBe("accepted");
+    const [row] = await inboxRowsFor(teamId);
+    expect(row?.intakeState).toBe("accepted");
+    expect(row?.objectRemovalPending).toBe(false);
+    expect(row?.objectRemovalAmbiguous).toBe(false);
+    expect(
+      await storage
+        .download({ bucket: "vault", path })
+        .then(() => true)
+        .catch(() => false),
+    ).toBe(true);
+  });
+
   test("a publication that lands after its record was deleted is reclaimed", async () => {
     const owner = await createUser("intake-late-publication");
     const teamId = owner.personalTeamId;
@@ -2586,6 +2675,15 @@ suite("document intake ownership over real HTTP", () => {
     const [row] = await inboxRowsFor(teamId);
     expect(row?.objectRemovalPending).toBe(true);
     expect(row?.id).toBeTruthy();
+
+    // The failed attempt leaves its lease to expire rather than clearing it.
+    const leased = await intake.discardStaleReservations(
+      client.primaryDb,
+      intakeStorage(),
+      { olderThanMs: -1, limit: 100 },
+    );
+    expect(leased.discarded).not.toContain(row!.id);
+    await expirePublicationLeases(teamId);
 
     const cleanup = await intake.discardStaleReservations(
       client.primaryDb,

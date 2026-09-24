@@ -107,8 +107,9 @@ out, and finally accepts and enqueues in one short `SELECT … FOR UPDATE`
 transaction. If the row was cancelled while it was writing, that transaction
 records removal intent (with the ambiguity marker) for the bytes it published
 instead of accepting. If the write or read-back fails, the attempt records
-durable removal intent and releases its lease; if the acceptance transaction
-itself aborts (for example a database error while queueing), the row stays
+durable removal intent and leaves its lease to expire, because concurrent
+attempts for the same content share it; if the acceptance transaction itself
+aborts (for example a database error while queueing), the row stays
 `reserved` and the intent is recorded immediately after the rollback.
 
 Acceptance clears any earlier removal intent in the same conditional update that
