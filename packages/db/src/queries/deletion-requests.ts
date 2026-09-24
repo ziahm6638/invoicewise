@@ -108,7 +108,6 @@ export async function workspaceQuiesceUntil(
 type RecordDeletionRequestParams = {
   subject: DeletionRequest["subject"];
   subjectId: string;
-  subjectName?: string | null;
   requestedBy?: string | null;
   connections?: DeletionConnection[];
   quiesceUntil: Date;
@@ -127,7 +126,6 @@ export async function recordDeletionRequest(
     .values({
       subject: params.subject,
       subjectId: params.subjectId,
-      subjectName: params.subjectName ?? null,
       requestedBy: params.requestedBy ?? null,
       connections: params.connections ?? [],
       quiesceUntil: params.quiesceUntil.toISOString(),
@@ -240,7 +238,6 @@ export async function completeDeletionRequest(
     .set({
       status: "completed",
       completedAt: now,
-      subjectName: null,
       connections: [],
       lastError: null,
       updatedAt: now,

@@ -66,8 +66,8 @@ it:
    running for the workspace, so an in-flight writer cannot leave an object
    behind the purge. An early run schedules itself for that time instead of
    spending a retry.
-3. **Complete.** The request keeps only ids and timestamps; the workspace name
-   and connection references are cleared.
+3. **Complete.** The request keeps only ids and timestamps; connection
+   references are cleared. The request never stores the workspace name.
 
 A run that fails or is interrupted leaves the progress on the request, so the
 next run resumes where it stopped: a revoked connection is not revoked twice

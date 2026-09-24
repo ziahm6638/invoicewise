@@ -724,7 +724,6 @@ export async function deleteTeam(db: Database, params: DeleteTeamParams) {
       const request = await recordDeletionRequest(tx, {
         subject: "workspace",
         subjectId: params.teamId,
-        subjectName: team.name,
         requestedBy: params.userId,
         connections,
         quiesceUntil,

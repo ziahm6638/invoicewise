@@ -4,7 +4,6 @@ CREATE TABLE "deletion_requests" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"subject" "deletion_subject" NOT NULL,
 	"subject_id" uuid NOT NULL,
-	"subject_name" text,
 	"requested_by" uuid,
 	"status" "deletion_status" DEFAULT 'pending' NOT NULL,
 	"connections" jsonb DEFAULT '[]'::jsonb NOT NULL,

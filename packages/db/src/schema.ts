@@ -1548,7 +1548,6 @@ export const deletionRequests = pgTable(
     id: uuid().defaultRandom().primaryKey().notNull(),
     subject: deletionSubjectEnum().notNull(),
     subjectId: uuid("subject_id").notNull(),
-    subjectName: text("subject_name"),
     requestedBy: uuid("requested_by"),
     status: deletionStatusEnum().default("pending").notNull(),
     connections: jsonb()

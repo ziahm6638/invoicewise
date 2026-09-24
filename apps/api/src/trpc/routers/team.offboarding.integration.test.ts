@@ -419,7 +419,6 @@ suite("offboarding (integration)", () => {
       expect(request).toMatchObject({
         id: result.deletionRequestId,
         subject: "workspace",
-        subjectName: "Doomed workspace",
         requestedBy: owner.id,
         status: "pending",
       });
@@ -668,7 +667,6 @@ suite("offboarding (integration)", () => {
       state = await request();
       expect(state).toMatchObject({
         status: "failed",
-        subjectName: "Cleanup workspace",
         lastError: "Unable to revoke mailbox connection (outlook)",
       });
 
@@ -717,7 +715,6 @@ suite("offboarding (integration)", () => {
       state = await request();
       expect(state).toMatchObject({
         status: "completed",
-        subjectName: null,
         connections: [],
         lastError: null,
         attempts: 4,

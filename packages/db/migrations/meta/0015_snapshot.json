@@ -1738,12 +1738,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "subject_name": {
-          "name": "subject_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "requested_by": {
           "name": "requested_by",
           "type": "uuid",
