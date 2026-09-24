@@ -1,7 +1,7 @@
 "use client";
 
 import { useUserMutation, useUserQuery } from "@/hooks/use-user";
-import { DEFAULT_DATE_FORMAT } from "@/utils/format";
+import { DATE_FORMATS, DEFAULT_DATE_FORMAT } from "@/utils/format";
 import {
   Card,
   CardContent,
@@ -32,14 +32,13 @@ export function DateFormatSettings() {
 
       <CardContent>
         <Select
-          defaultValue={user?.dateFormat ?? DEFAULT_DATE_FORMAT}
+          defaultValue={
+            DATE_FORMATS.find((value) => value === user?.dateFormat) ??
+            DEFAULT_DATE_FORMAT
+          }
           onValueChange={(value) => {
             updateUserMutation.mutate({
-              dateFormat: value as
-                | "dd/MM/yyyy"
-                | "MM/dd/yyyy"
-                | "yyyy-MM-dd"
-                | "dd.MM.yyyy",
+              dateFormat: value as (typeof DATE_FORMATS)[number],
             });
           }}
         >
@@ -47,10 +46,11 @@ export function DateFormatSettings() {
             <SelectValue placeholder="Date format" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="dd/MM/yyyy">dd/MM/yyyy</SelectItem>
-            <SelectItem value="MM/dd/yyyy">MM/dd/yyyy</SelectItem>
-            <SelectItem value="yyyy-MM-dd">yyyy-MM-dd</SelectItem>
-            <SelectItem value="dd.MM.yyyy">dd.MM.yyyy</SelectItem>
+            {DATE_FORMATS.map((value) => (
+              <SelectItem key={value} value={value}>
+                {value}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </CardContent>

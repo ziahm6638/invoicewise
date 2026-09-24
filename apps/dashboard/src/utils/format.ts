@@ -87,9 +87,19 @@ export function calculateAvgBurnRate(data: BurnRateData[] | null) {
 /** UK, day-first: the display format for anyone without their own preference. */
 export const DEFAULT_DATE_FORMAT = "dd/MM/yyyy";
 
+/** The date formats a user may choose; none of them puts the month first. */
+export const DATE_FORMATS = [
+  DEFAULT_DATE_FORMAT,
+  "yyyy-MM-dd",
+  "dd.MM.yyyy",
+] as const;
+
+const DISPLAY_DATE_FORMATS = new Set<string>([...DATE_FORMATS, "d MMM yyyy"]);
+
 /**
  * Formats a date for display in the user's chosen format, or UK day-first
- * (24/09/2026) by default; never the US month-first order. A date-only value
+ * (24/09/2026) by default; never the US month-first order, so any other stored
+ * format falls back to the default. A date-only value
  * such as an invoice date (`2026-09-24`) is a calendar day, so it is read in
  * local time rather than as UTC midnight, which would shift it a day west of
  * Greenwich.
@@ -100,7 +110,12 @@ export function formatDate(date: string | Date, dateFormat?: string | null) {
       ? parseISO(date)
       : new Date(date);
   if (Number.isNaN(value.getTime())) return String(date);
-  return format(value, dateFormat || DEFAULT_DATE_FORMAT);
+  return format(
+    value,
+    dateFormat && DISPLAY_DATE_FORMATS.has(dateFormat)
+      ? dateFormat
+      : DEFAULT_DATE_FORMAT,
+  );
 }
 
 export function getInitials(value: string) {

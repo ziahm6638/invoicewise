@@ -56,15 +56,14 @@ export const updateUserSchema = z
       example: 24,
     }),
     dateFormat: z
-      .enum(["dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-dd", "dd.MM.yyyy"])
+      .enum(["dd/MM/yyyy", "yyyy-MM-dd", "dd.MM.yyyy"])
       .optional()
       .openapi({
         description:
-          "User's preferred date format. Available options: 'dd/MM/yyyy', 'MM/dd/yyyy', 'yyyy-MM-dd', 'dd.MM.yyyy'",
+          "User's preferred date format. Available options: 'dd/MM/yyyy', 'yyyy-MM-dd', 'dd.MM.yyyy'",
         example: "yyyy-MM-dd",
         "x-speakeasy-enums": [
           "ddSlashMMSlashyyyy",
-          "MMSlashddSlashyyyy",
           "yyyyDashMMDashdd",
           "ddDotMMDotyyyy",
         ],
@@ -113,15 +112,14 @@ export const userSchema = z.object({
     example: 24,
   }),
   dateFormat: z
-    .enum(["dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-dd", "dd.MM.yyyy"])
+    .enum(["dd/MM/yyyy", "yyyy-MM-dd", "dd.MM.yyyy"])
     .nullable()
     .openapi({
       description:
-        "User's preferred date format. Available options: 'dd/MM/yyyy', 'MM/dd/yyyy', 'yyyy-MM-dd', 'dd.MM.yyyy'",
+        "User's preferred date format. Available options: 'dd/MM/yyyy', 'yyyy-MM-dd', 'dd.MM.yyyy'",
       example: "yyyy-MM-dd",
       "x-speakeasy-enums": [
         "ddSlashMMSlashyyyy",
-        "MMSlashddSlashyyyy",
         "yyyyDashMMDashdd",
         "ddDotMMDotyyyy",
       ],

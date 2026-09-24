@@ -16,6 +16,12 @@ describe("formatDate", () => {
     expect(formatDate("2026-09-01", "d MMM yyyy")).toBe("1 Sep 2026");
   });
 
+  test("renders a saved US month-first format day-first", () => {
+    expect(formatDate("2026-09-01", "MM/dd/yyyy")).toBe("01/09/2026");
+    expect(formatDate("2026-09-24", "M/d/yy")).toBe("24/09/2026");
+    expect(formatDate("2026-09-24", "P")).toBe("24/09/2026");
+  });
+
   test("keeps a calendar date on its day in any timezone", () => {
     const previous = process.env.TZ;
     process.env.TZ = "America/Los_Angeles";

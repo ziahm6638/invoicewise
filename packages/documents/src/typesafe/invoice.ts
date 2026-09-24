@@ -1,4 +1,6 @@
 import { Effect } from "effect";
+import sharp from "sharp";
+import { INTAKE_LIMITS } from "../intake";
 import {
   type IsolatedPdfFailureCode,
   type IsolatedPdfLimits,
@@ -290,6 +292,23 @@ const ocrImage = (image: Uint8Array, page: number) =>
   );
 
 /**
+ * Turns an uploaded photo upright: tesseract ignores EXIF orientation, so a
+ * portrait phone photo stored sideways would otherwise be read rotated.
+ */
+const uprightImage = (image: Uint8Array) =>
+  Effect.tryPromise({
+    try: () =>
+      sharp(Buffer.from(image), {
+        limitInputPixels: INTAKE_LIMITS.maxImagePixels,
+      })
+        .rotate()
+        .png()
+        .toBuffer()
+        .then((buffer) => new Uint8Array(buffer)),
+    catch: () => readError("The image could not be decoded for OCR", false),
+  });
+
+/**
  * Reads the text of a PDF page by page: the text layer where a page has one,
  * OCR of the rendered page where it does not (a scan or an image-only export).
  */
@@ -357,7 +376,10 @@ const readDocument = (request: GetDocumentRequest) =>
     }
     const bytes = yield* fetchDocument(request.documentUrl);
     const document: DocumentText = IMAGE_MIME_TYPES.has(request.mimetype)
-      ? { lines: yield* ocrImage(bytes, 1), pageSources: ["ocr"] }
+      ? {
+          lines: yield* ocrImage(yield* uprightImage(bytes), 1),
+          pageSources: ["ocr"],
+        }
       : yield* readPdf(bytes);
     const sources = new Set(document.pageSources);
     const textSource: InvoiceTextSource =
@@ -442,7 +464,7 @@ const lineItemQuestion = (row: LineItemRow): TypeSafeQuestion => ({
 });
 
 const PAYMENT_TERMS =
-  /\b(?:(?:payment\s+)?terms?|due|payable|pay(?:ment)?\s+within)\b[^\n.]{0,40}?\b(\d{1,3})\s*days?\b|\bnet\s*(\d{1,3})\b/i;
+  /\b(?:(?:payment\s+)?terms?|due|payable|pay(?:ment)?\s+within)\b[^\n.]{0,40}?\b(\d{1,3})\s*days?\b|\bnet\s*(\d{1,3})\s*days?\b|\bterms?\s*:?\s*net\s*(\d{1,3})(?!\d|[.,]\d)/i;
 
 const DUE_ON_RECEIPT =
   /\b(?:due|payable)\s+(?:up)?on\s+(?:receipt|presentation)\b|\bdue\s+immediately\b/i;
@@ -714,7 +736,7 @@ export const extractInvoiceLines = (
     }
     if (!dueDate && invoiceDate) {
       const terms = PAYMENT_TERMS.exec(plain);
-      const days = Number(terms?.[1] ?? terms?.[2]);
+      const days = Number(terms?.[1] ?? terms?.[2] ?? terms?.[3]);
       if (Number.isInteger(days) && days > 0) {
         dueDate = addDays(invoiceDate, days);
       }

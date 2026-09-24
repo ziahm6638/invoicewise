@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Effect, Layer } from "effect";
+import sharp from "sharp";
+import { renderPdfPageIsolated } from "../isolated";
 import {
   TypeSafe,
   type TypeSafeAnswer,
@@ -222,6 +224,42 @@ describe("invoice extraction from real PDFs", () => {
     60_000,
   );
 
+  ocrTest(
+    "OCRs a phone photo stored sideways with an EXIF orientation",
+    async () => {
+      const rendered = await renderPdfPageIsolated(
+        new Uint8Array(await fixture("uk-invoice-scanned.pdf")),
+        {
+          timeoutMs: 30_000,
+          maxPages: 1,
+          maxPageDimension: 5_000,
+          maxTotalPixels: 15_000_000,
+          maxChars: 400_000,
+        },
+        { page: 1, scale: 300 / 72 },
+      );
+      if (!rendered.ok) throw new Error(rendered.message);
+      // Orientation 6: the pixels are stored a quarter-turn anticlockwise and
+      // a viewer turns them clockwise to show the page upright.
+      const photo = await sharp(Buffer.from(rendered.result.png))
+        .rotate(270)
+        .withMetadata({ orientation: 6 })
+        .jpeg({ quality: 95 })
+        .toBuffer();
+
+      const result = await Effect.runPromise(
+        processInvoice({
+          documentUrl: dataUrl(photo, "image/jpeg"),
+          mimetype: "image/jpeg",
+          companyName: "InvoiceWise Ltd",
+        }).pipe(Effect.provide(oracle(ukInvoiceSelections))),
+      );
+
+      expect(result.extraction).toEqual(ukInvoiceExtraction("ocr"));
+    },
+    60_000,
+  );
+
   test("reads a supplier named only in a wrapped footer, with a TO: customer block", async () => {
     const result = await Effect.runPromise(
       processInvoice({
@@ -373,6 +411,28 @@ describe("TypeSafe invoice extraction", () => {
     );
     expect(result.invoiceDate).toBe("2026-09-15");
     expect(result.dueDate).toBe("2026-10-15");
+  });
+
+  test.each([
+    ["Terms: Net 30", "2026-10-15"],
+    ["Net 14 days", "2026-09-29"],
+    ["Net 500.00", null],
+    ["Net 1,000.00", null],
+    ["Net total 500.00", null],
+  ])("reads %p as payment terms only when it is one", async (line, due) => {
+    const result = await Effect.runPromise(
+      extractInvoiceText(
+        `Acme Supplies Ltd\nInvoice date: 15/09/2026\n${line}`,
+      ).pipe(
+        Effect.provide(
+          oracle({
+            supplier_name: "Acme Supplies Ltd",
+            invoice_date: "15/09/2026",
+          }),
+        ),
+      ),
+    );
+    expect(result.dueDate).toBe(due);
   });
 });
 
