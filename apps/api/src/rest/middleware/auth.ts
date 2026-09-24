@@ -1,4 +1,5 @@
-import { getAuthSession } from "@api/utils/auth";
+import { resolveActiveWorkspace } from "@api/utils/active-workspace";
+import { type Session, getAuthSession } from "@api/utils/auth";
 import { expandScopes } from "@api/utils/scopes";
 import { isValidApiKeyFormat } from "@db/utils/api-keys";
 import { primaryDb } from "@invoicewise/db/client";
@@ -27,6 +28,27 @@ const resolveRole = async (teamId: string | null, userId: string) => {
   return getTeamRole(primaryDb, teamId, userId);
 };
 
+/**
+ * Continues as a signed-in session. A stale active-workspace pointer is
+ * recovered rather than refused; see `resolveActiveWorkspace`.
+ */
+const continueWithSession = async (
+  c: Parameters<MiddlewareHandler>[0],
+  next: Parameters<MiddlewareHandler>[1],
+  session: Session,
+) => {
+  const { teamId, teamRole } = await resolveActiveWorkspace(
+    session.user.id,
+    session.teamId,
+  );
+
+  c.set("session", { ...session, teamId, authType: "session" });
+  c.set("teamId", teamId);
+  c.set("teamRole", teamRole);
+  c.set("scopes", expandScopes(["apis.all"]));
+  await next();
+};
+
 export const withAuth: MiddlewareHandler = async (c, next) => {
   const authHeader = c.req.header("Authorization");
 
@@ -37,19 +59,7 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
       throw new HTTPException(401, { message: "Authentication required" });
     }
 
-    const role = await resolveRole(session.teamId, session.user.id);
-
-    if (session.teamId && !role) {
-      throw new HTTPException(403, {
-        message: "No permission to access this team",
-      });
-    }
-
-    c.set("session", { ...session, authType: "session" });
-    c.set("teamId", session.teamId);
-    c.set("teamRole", role);
-    c.set("scopes", expandScopes(["apis.all"]));
-    await next();
+    await continueWithSession(c, next, session);
     return;
   }
 
@@ -70,19 +80,7 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
       throw new HTTPException(401, { message: "Invalid session token" });
     }
 
-    const role = await resolveRole(session.teamId, session.user.id);
-
-    if (session.teamId && !role) {
-      throw new HTTPException(403, {
-        message: "No permission to access this team",
-      });
-    }
-
-    c.set("session", { ...session, authType: "session" });
-    c.set("teamId", session.teamId);
-    c.set("teamRole", role);
-    c.set("scopes", expandScopes(["apis.all"]));
-    await next();
+    await continueWithSession(c, next, session);
     return;
   }
 

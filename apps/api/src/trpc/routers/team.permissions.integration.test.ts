@@ -379,11 +379,18 @@ suite("workspace permissions (integration)", () => {
       expect(await roleOf(ids.teamB, ids.ownerB)).toBe("owner");
     });
 
-    test("a stale session for a workspace the user is not in is denied", async () => {
+    test("a stale session for a workspace the user is not in never reads it and recovers to their own", async () => {
       const stale = caller(ctx(ids.memberA, ids.teamB));
 
-      await expect(stale.team.members()).rejects.toThrow();
-      await expect(stale.team.current()).rejects.toThrow();
+      const members = (await stale.team.members()) as {
+        user: { id: string };
+      }[];
+      const memberIds = members.map((member) => member.user.id);
+      expect(memberIds).not.toContain(ids.ownerB);
+      expect(memberIds).toContain(ids.memberA);
+
+      const current = (await stale.team.current()) as { id: string } | null;
+      expect(current?.id).toBe(ids.teamA);
     });
   });
 

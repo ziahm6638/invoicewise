@@ -14,7 +14,7 @@ import {
   getTaxRateForCategory,
   getTaxTypeForCountry,
 } from "@invoicewise/categories";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import {
   TeamPermissionError,
   type TeamRole,
@@ -424,30 +424,133 @@ type LeaveTeamParams = {
   teamId: string;
 };
 
+/** Selects and locks the user row; null when the account no longer exists. */
+async function lockUserPointer(tx: ProvisioningTransaction, userId: string) {
+  const [user] = await tx
+    .select({ teamId: users.teamId })
+    .from(users)
+    .where(eq(users.id, userId))
+    .for("update")
+    .limit(1);
+
+  return user ?? null;
+}
+
 /**
- * Revokes everything that could still act on behalf of a user in a workspace
- * once their membership ends: active team pointer, sessions pointed at the
- * workspace, API keys and OAuth tokens.
+ * Moves a user's active-workspace pointers off a workspace they no longer
+ * belong to.
+ *
+ * The stored pointer (`users.team_id`) and every session pointed at the stale
+ * workspace land on the workspace the user last chose if they are still a
+ * member of it, otherwise their earliest remaining membership. With no
+ * membership left both are cleared, which sends the dashboard to the workspace
+ * chooser and on to workspace creation. Takes the user row lock, so callers
+ * that also lock a team row must take that lock first.
+ *
+ * Returns the workspace and role the user now points at, or null.
  */
-async function revokeMembershipAccess(
-  tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
-  teamId: string,
+async function repointActiveWorkspace(
+  tx: ProvisioningTransaction,
   userId: string,
-) {
-  await tx
-    .update(users)
-    .set({ teamId: null })
-    .where(and(eq(users.id, userId), eq(users.teamId, teamId)));
+  staleTeamId: string,
+): Promise<{ teamId: string; role: TeamRole } | null> {
+  const user = await lockUserPointer(tx, userId);
+
+  if (!user) {
+    return null;
+  }
+
+  const memberships = await tx
+    .select({ teamId: usersOnTeam.teamId, role: usersOnTeam.role })
+    .from(usersOnTeam)
+    .where(
+      and(eq(usersOnTeam.userId, userId), ne(usersOnTeam.teamId, staleTeamId)),
+    )
+    .orderBy(usersOnTeam.createdAt);
+
+  const eligible = memberships.flatMap((membership) =>
+    isTeamRole(membership.role)
+      ? [{ teamId: membership.teamId, role: membership.role }]
+      : [],
+  );
+  const target =
+    eligible.find((membership) => membership.teamId === user.teamId) ??
+    eligible[0] ??
+    null;
+  const targetTeamId = target?.teamId ?? null;
+
+  if (user.teamId !== targetTeamId) {
+    await tx
+      .update(users)
+      .set({ teamId: targetTeamId })
+      .where(eq(users.id, userId));
+  }
 
   await tx
     .update(authSessions)
-    .set({ activeOrganizationId: null })
+    .set({ activeOrganizationId: targetTeamId })
     .where(
       and(
         eq(authSessions.userId, userId),
-        eq(authSessions.activeOrganizationId, teamId),
+        eq(authSessions.activeOrganizationId, staleTeamId),
       ),
     );
+
+  return target;
+}
+
+type RecoverActiveWorkspaceParams = {
+  userId: string;
+  staleTeamId: string;
+};
+
+/**
+ * Recovers a session whose active-workspace pointer names a workspace the user
+ * no longer belongs to (removed, left or deleted while the pointer survived).
+ *
+ * Membership is re-read under the user row lock: if the user was re-added in
+ * the meantime the pointer stands, otherwise the pointers are repaired by
+ * `repointActiveWorkspace`. The stale workspace is only ever returned when
+ * membership was re-established, so recovery reads no data from it.
+ *
+ * Returns the workspace and role the request should continue with, or null
+ * when the user has no workspace left.
+ */
+export async function recoverActiveWorkspace(
+  db: Database | PrimaryDatabase,
+  params: RecoverActiveWorkspaceParams,
+): Promise<{ teamId: string; role: TeamRole } | null> {
+  return db.transaction(async (tx) => {
+    if (!(await lockUserPointer(tx, params.userId))) {
+      return null;
+    }
+
+    const current = await getTeamMemberRow(
+      tx,
+      params.staleTeamId,
+      params.userId,
+    );
+
+    if (current && isTeamRole(current.role)) {
+      return { teamId: params.staleTeamId, role: current.role };
+    }
+
+    return repointActiveWorkspace(tx, params.userId, params.staleTeamId);
+  });
+}
+
+/**
+ * Revokes everything that could still act on behalf of a user in a workspace
+ * once their membership ends: active team pointer, sessions pointed at the
+ * workspace, API keys and OAuth tokens. The pointers move to another workspace
+ * the user still belongs to, when there is one.
+ */
+async function revokeMembershipAccess(
+  tx: ProvisioningTransaction,
+  teamId: string,
+  userId: string,
+) {
+  await repointActiveWorkspace(tx, userId, teamId);
 
   await tx
     .delete(apiKeys)
@@ -526,6 +629,21 @@ export async function deleteTeam(db: Database, params: DeleteTeamParams) {
       );
     }
 
+    // Everyone whose stored or session pointer could name the workspace,
+    // collected before the membership rows cascade away.
+    const members = await tx
+      .select({ userId: usersOnTeam.userId })
+      .from(usersOnTeam)
+      .where(eq(usersOnTeam.teamId, params.teamId));
+    const pointedUsers = await tx
+      .select({ userId: users.id })
+      .from(users)
+      .where(eq(users.teamId, params.teamId));
+    const pointedSessions = await tx
+      .select({ userId: authSessions.userId })
+      .from(authSessions)
+      .where(eq(authSessions.activeOrganizationId, params.teamId));
+
     const [result] = await tx
       .delete(teams)
       .where(eq(teams.id, params.teamId))
@@ -534,16 +652,19 @@ export async function deleteTeam(db: Database, params: DeleteTeamParams) {
       });
 
     // Membership rows, API keys and OAuth tokens cascade with the team, but
-    // the active-team pointers on users and sessions do not.
-    await tx
-      .update(users)
-      .set({ teamId: null })
-      .where(eq(users.teamId, params.teamId));
+    // the active-team pointers on users and sessions do not. User rows are
+    // locked in id order so concurrent deletions cannot deadlock on them.
+    const affectedUserIds = [
+      ...new Set(
+        [...members, ...pointedUsers, ...pointedSessions].map(
+          (row) => row.userId,
+        ),
+      ),
+    ].sort();
 
-    await tx
-      .update(authSessions)
-      .set({ activeOrganizationId: null })
-      .where(eq(authSessions.activeOrganizationId, params.teamId));
+    for (const userId of affectedUserIds) {
+      await repointActiveWorkspace(tx, userId, params.teamId);
+    }
 
     return result;
   });

@@ -1,6 +1,6 @@
 import type { Database, PrimaryDatabase } from "@db/client";
 import { teams, users, usersOnTeam } from "@db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   TeamPermissionError,
   countTeamOwners,
@@ -8,6 +8,11 @@ import {
   lockTeamRow,
 } from "./team-permissions";
 
+/**
+ * The user's profile and stored active workspace. The workspace is only
+ * returned while the user is a member of it, so a stale pointer never exposes
+ * a workspace they were removed from.
+ */
 export const getUserById = async (
   db: Database | PrimaryDatabase,
   id: string,
@@ -24,7 +29,7 @@ export const getUserById = async (
       weekStartsOnMonday: users.weekStartsOnMonday,
       timezone: users.timezone,
       timezoneAutoSync: users.timezoneAutoSync,
-      teamId: users.teamId,
+      teamId: usersOnTeam.teamId,
       team: {
         id: teams.id,
         name: teams.name,
@@ -37,7 +42,14 @@ export const getUserById = async (
       },
     })
     .from(users)
-    .leftJoin(teams, eq(users.teamId, teams.id))
+    .leftJoin(
+      usersOnTeam,
+      and(
+        eq(usersOnTeam.userId, users.id),
+        eq(usersOnTeam.teamId, users.teamId),
+      ),
+    )
+    .leftJoin(teams, eq(usersOnTeam.teamId, teams.id))
     .where(eq(users.id, id));
 
   return result;

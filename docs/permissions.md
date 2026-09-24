@@ -35,9 +35,10 @@ malformed roles and scopes rank below `member` and receive nothing.
 transaction that takes `SELECT … FOR UPDATE` on the team row first. The actor's
 role, the target's role, the owner count and the write all happen under that
 lock, so concurrent owner changes can never leave a workspace without an owner.
-Removing or demoting a member also clears their active-team pointer, nulls
-sessions pointed at the workspace, deletes their API keys for it and revokes
-their OAuth tokens.
+Removing a member (or the member leaving, or the workspace being deleted) moves
+their active-team pointer and every session pointed at the workspace to another
+workspace they still belong to, or clears them when none is left; removal also
+deletes their API keys for it and revokes their OAuth tokens.
 
 **tRPC.** `protectedProcedure` resolves the caller's role from the primary
 database on every request (`apps/api/src/trpc/middleware/team-permission.ts`).
@@ -46,6 +47,17 @@ privileged routers: team settings, members, invitations, questions, API keys,
 OAuth applications, accounting and mailbox connections (admin) and billing
 (owner). `workspaceProcedure` additionally requires an active workspace, so a
 session with none cannot reach workspace-scoped handlers.
+
+**Stale active workspace.** A browser session whose active-workspace pointer
+names a workspace the user no longer belongs to is recovered on its next tRPC
+or REST request rather than refused (`apps/api/src/utils/active-workspace.ts`,
+`recoverActiveWorkspace` in `packages/db/src/queries/teams.ts`). Under the user
+row lock the pointers move to the workspace the user last chose if still a
+member, else their earliest membership, else none; with none the dashboard
+routes to the workspace chooser and on to workspace creation. The request
+continues in the recovered workspace, so nothing from the stale one is read,
+and `user.me` only reports a stored workspace the user is a member of. API keys
+and OAuth tokens stay bound to their workspace and are refused instead.
 
 **REST.** `apps/api/src/rest/middleware/auth.ts` reads API keys, users and
 membership from the primary database on every request, so deletion and
@@ -154,10 +166,8 @@ never run against a development or production database by accident.
 
 ## Known limits
 
-- A session still pointing at a workspace the user was removed from receives
-  `403` until the session is refreshed (signing out and back in re-derives the
-  active workspace from the account). Safe offboarding and workspace deletion
-  are owned by roadmap issue #35.
+- Safe offboarding and workspace deletion beyond the pointer recovery above are
+  owned by roadmap issue #35.
 - Workspace-scoped procedures require an active workspace: a session with no
   active workspace gets `403` for them, while account, team-list, invitation
   and workspace-creation procedures keep working so the user can recover.

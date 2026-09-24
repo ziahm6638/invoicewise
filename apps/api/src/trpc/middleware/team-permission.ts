@@ -1,7 +1,7 @@
+import { resolveActiveWorkspace } from "@api/utils/active-workspace";
 import type { Session } from "@api/utils/auth";
 import type { Database } from "@invoicewise/db/client";
-import { primaryDb } from "@invoicewise/db/client";
-import { type TeamRole, getTeamRole } from "@invoicewise/db/queries";
+import type { TeamRole } from "@invoicewise/db/queries";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -9,7 +9,8 @@ import { TRPCError } from "@trpc/server";
  *
  * This deliberately reads the primary database instead of a cache: membership
  * and role changes (removal, demotion) must take effect on the next request
- * without relying on cache invalidation across instances.
+ * without relying on cache invalidation across instances. A stale pointer is
+ * recovered rather than failing the request; see `resolveActiveWorkspace`.
  */
 export const withTeamPermission = async <TReturn>(opts: {
   ctx: {
@@ -29,31 +30,22 @@ export const withTeamPermission = async <TReturn>(opts: {
 
   const userId = ctx.session?.user?.id;
 
-  if (!userId) {
+  if (!ctx.session || !userId) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "No permission to access this team",
     });
   }
 
-  const teamId = ctx.session?.teamId ?? null;
-  let teamRole: TeamRole | null = null;
-
   // If teamId is null, user has no team assigned but this is now allowed
-  if (teamId !== null) {
-    teamRole = await getTeamRole(primaryDb, teamId, userId);
-
-    if (!teamRole) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "No permission to access this team",
-      });
-    }
-  }
+  const { teamId, teamRole } = await resolveActiveWorkspace(
+    userId,
+    ctx.session.teamId ?? null,
+  );
 
   return next({
     ctx: {
-      session: ctx.session,
+      session: { ...ctx.session, teamId },
       teamId,
       teamRole,
       db: ctx.db,
