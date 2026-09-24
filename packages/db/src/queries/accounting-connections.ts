@@ -1,6 +1,6 @@
 import type { Database } from "@db/client";
-import { accountingConnections, inbox } from "@db/schema";
-import { and, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { accountingConnections, accountingPostClaims, inbox } from "@db/schema";
+import { and, desc, eq, isNull } from "drizzle-orm";
 
 export type AccountingProvider = "xero" | "quickbooks";
 
@@ -119,27 +119,42 @@ export async function getAccountingPostInvoice(
 }
 
 /**
- * Another live copy with the same document identity that has already been
- * sent to accounting: this one must not create a second bill.
+ * Claims the right to post the bill for one invoice identity. The insert is
+ * its own committed statement, so of two copies posting at once exactly one
+ * wins; returns the document holding the claim (possibly this one, when it
+ * is retrying its own post), or undefined when it was released meanwhile.
  */
-export async function getDeliveredCopy(
+export async function claimAccountingPost(
   db: Database,
-  input: { invoiceId: string; teamId: string; identityKey: string },
+  input: { teamId: string; identityKey: string; invoiceId: string },
 ) {
-  const [copy] = await db
-    .select({ id: inbox.id })
-    .from(inbox)
+  await db.insert(accountingPostClaims).values(input).onConflictDoNothing();
+  const [claim] = await db
+    .select({ invoiceId: accountingPostClaims.invoiceId })
+    .from(accountingPostClaims)
     .where(
       and(
-        eq(inbox.teamId, input.teamId),
-        ne(inbox.id, input.invoiceId),
-        ne(inbox.status, "deleted"),
-        isNotNull(inbox.accountingProviderId),
-        sql`${inbox.validation} -> 'identity' ->> 'key' = ${input.identityKey}`,
+        eq(accountingPostClaims.teamId, input.teamId),
+        eq(accountingPostClaims.identityKey, input.identityKey),
       ),
     )
     .limit(1);
-  return copy;
+  return claim?.invoiceId;
+}
+
+export async function releaseAccountingPostClaim(
+  db: Database,
+  input: { teamId: string; identityKey: string; invoiceId: string },
+) {
+  await db
+    .delete(accountingPostClaims)
+    .where(
+      and(
+        eq(accountingPostClaims.teamId, input.teamId),
+        eq(accountingPostClaims.identityKey, input.identityKey),
+        eq(accountingPostClaims.invoiceId, input.invoiceId),
+      ),
+    );
 }
 
 export async function recordAccountingPostSuccess(

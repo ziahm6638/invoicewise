@@ -2284,6 +2284,37 @@ export const accountingConnections = pgTable(
   ],
 );
 
+// One claim per invoice identity: only the document holding it may post a
+// bill, so two copies of one invoice never both reach the provider. Kept
+// after a successful post; released only on a definitive provider failure.
+export const accountingPostClaims = pgTable(
+  "accounting_post_claims",
+  {
+    teamId: uuid("team_id").notNull(),
+    identityKey: text("identity_key").notNull(),
+    invoiceId: uuid("invoice_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.teamId, table.identityKey],
+      name: "accounting_post_claims_pkey",
+    }),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "accounting_post_claims_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [inbox.id],
+      name: "accounting_post_claims_invoice_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
 export const webhookEndpoints = pgTable(
   "webhook_endpoints",
   {

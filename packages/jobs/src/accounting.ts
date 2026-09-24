@@ -1,21 +1,24 @@
+import { createHash } from "node:crypto";
 import type { Database } from "@invoicewise/db/client";
 import {
   type AccountingProvider,
+  claimAccountingPost,
   disconnectAccountingConnectionRecord,
   enqueueWorkflowJob,
   getAccountingPostInvoice,
   getActiveAccountingConnection,
   getActiveAccountingConnectionByProvider,
-  getDeliveredCopy,
   getWorkflowJobByKey,
   isValidDocumentBinding,
   recordAccountingAlreadyPosted,
   recordAccountingPostFailure,
   recordAccountingPostSuccess,
+  releaseAccountingPostClaim,
   restartFailedWorkflowJob,
+  updateInboxValidation,
   upsertAccountingConnection,
 } from "@invoicewise/db/queries";
-import { accountingReadiness } from "@invoicewise/documents";
+import { accountingReadiness, validateInvoice } from "@invoicewise/documents";
 import { Effect, Schema } from "effect";
 import { BillRejectedError, postProviderBill } from "./accounting-providers";
 import { workflowKey } from "./client";
@@ -244,54 +247,55 @@ export const postAccountingDraft = (
       };
     }
 
+    // Provider-required fields that are missing or invalid, an inconsistent
+    // total, a duplicate or a credit note: the bill is not attempted, and the
+    // reasons are recorded as a failure a retry cannot fix until the invoice
+    // is corrected (see docs/document-intake.md#validation).
+    const readiness = accountingReadiness(
+      invoice.extraction,
+      invoice.validation,
+    );
+    const storedIdentity = asRecord(asRecord(invoice.validation).identity).key;
+    const identityKey =
+      typeof storedIdentity === "string"
+        ? storedIdentity
+        : validateInvoice(invoice.extraction).identity.key;
+    // Keyed by the invoice identity, not the document, so the provider
+    // replays one bill for any copy that reaches it.
     const idempotencyKey =
-      invoice.accountingIdempotencyKey ?? `invoicewise:${invoice.id}`;
+      invoice.accountingIdempotencyKey ??
+      `invoicewise:${
+        identityKey
+          ? createHash("sha256")
+              .update(`${input.teamId}:${identityKey}`)
+              .digest("hex")
+              .slice(0, 36)
+          : invoice.id
+      }`;
+    const claim = identityKey
+      ? { teamId: input.teamId, identityKey, invoiceId: invoice.id }
+      : null;
     const recordFailure = (error: AccountingPostError) =>
       Effect.tryPromise({
-        try: () =>
-          recordAccountingPostFailure(db, {
+        try: async () => {
+          if (claim && !error.retryable) {
+            await releaseAccountingPostClaim(db, claim);
+          }
+          await recordAccountingPostFailure(db, {
             ...input,
             provider: connection.provider,
             idempotencyKey,
             error: error.reason,
-          }),
+          });
+        },
         catch: () =>
           new AccountingPostError({
             reason: "Unable to record accounting post failure",
             retryable: true,
           }),
       }).pipe(Effect.zipRight(Effect.fail(error)));
-
-    // Provider-required fields that are missing or invalid, an inconsistent
-    // total, a duplicate, a copy already sent or a credit note: the bill is
-    // not attempted, and the reasons are recorded as a failure a retry cannot
-    // fix until the invoice is corrected (see docs/document-intake.md#validation).
-    const readiness = accountingReadiness(
-      invoice.extraction,
-      invoice.validation,
-    );
-    const identityKey = asRecord(asRecord(invoice.validation).identity).key;
-    const deliveredCopy =
-      readiness.ready && typeof identityKey === "string"
-        ? yield* Effect.tryPromise({
-            try: () => getDeliveredCopy(db, { ...input, identityKey }),
-            catch: () =>
-              new AccountingPostError({
-                reason: "Unable to check for a delivered copy",
-                retryable: true,
-              }),
-          })
-        : undefined;
-    const blockers = deliveredCopy
-      ? [
-          {
-            code: "duplicate_delivered",
-            message: `A copy of this invoice (${deliveredCopy.id}) has already been sent.`,
-          },
-        ]
-      : readiness.blockers;
-    if (blockers.length > 0) {
-      yield* Effect.tryPromise({
+    const block = (blockers: readonly { code: string; message: string }[]) =>
+      Effect.tryPromise({
         try: () =>
           recordAccountingPostFailure(db, {
             ...input,
@@ -306,12 +310,61 @@ export const postAccountingDraft = (
             reason: "Unable to record blocked accounting post",
             retryable: true,
           }),
+      }).pipe(
+        Effect.as({
+          invoiceId: invoice.id,
+          status: "blocked",
+          blockers: blockers.map((blocker) => blocker.code),
+        }),
+      );
+
+    if (!readiness.ready) return yield* block(readiness.blockers);
+
+    // Only the copy holding the invoice's claim posts. Another copy that
+    // loses it becomes a duplicate of the holder and is never sent.
+    if (claim) {
+      const holder = yield* Effect.tryPromise({
+        try: () => claimAccountingPost(db, claim),
+        catch: () =>
+          new AccountingPostError({
+            reason: "Unable to claim the accounting post",
+            retryable: true,
+          }),
       });
-      return {
-        invoiceId: invoice.id,
-        status: "blocked",
-        blockers: blockers.map((blocker) => blocker.code),
-      };
+      if (!holder) {
+        return yield* Effect.fail(
+          new AccountingPostError({
+            reason: "The accounting post claim was released; retrying",
+            retryable: true,
+          }),
+        );
+      }
+      if (holder !== invoice.id) {
+        const validation = yield* Effect.tryPromise({
+          try: async () => {
+            const original = await getAccountingPostInvoice(db, {
+              invoiceId: holder,
+              teamId: input.teamId,
+            });
+            const validation = validateInvoice(
+              invoice.extraction,
+              original ? [{ id: holder, extraction: original.extraction }] : [],
+            );
+            await updateInboxValidation(db, {
+              id: invoice.id,
+              teamId: input.teamId,
+              validation,
+            });
+            return validation;
+          },
+          catch: () =>
+            new AccountingPostError({
+              reason: "Unable to record the duplicate copy",
+              retryable: true,
+            }),
+        });
+        return yield* block(validation.accounting.blockers);
+      }
     }
 
     const config = yield* Effect.try({

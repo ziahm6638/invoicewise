@@ -56,16 +56,23 @@ which is not a duplicate. Otherwise nothing is sent and the invoice's
 accounting status is `failed` with `Not sent to Xero: <reasons>` (or
 QuickBooks); see [Validation](document-intake.md#validation).
 
+Before calling the provider a post claims the invoice's identity
+(`accounting_post_claims`, one row per workspace and identity, taken by a
+single committed insert): only the holder posts, even when copies post at the
+same time, and a copy that loses the claim is marked a duplicate of the
+holder and not sent. The claim is kept after a successful post and released
+only when the provider refuses the bill for good, so a retry can take it.
+
 - **Xero**: an `ACCPAY` invoice in `DRAFT` (a bill awaiting approval, never
   approved or paid), contact by supplier name, line items, amounts exclusive
   of tax. The request carries
-  `Idempotency-Key: invoicewise:<invoice UUID>`, so a retried post returns the
-  original bill. The source document is then uploaded to the bill's
+  `Idempotency-Key: invoicewise:<invoice identity hash>`, so a retried post, or
+  another copy of the same invoice, returns the original bill. The source document is then uploaded to the bill's
   attachments by file name (a repeat replaces it rather than duplicating it).
 - **QuickBooks Online**: QuickBooks has no draft bill, so an open, unpaid
   `Bill`. The vendor is found by display name or created; lines post to the
-  first expense account; `requestid=invoicewise:<invoice UUID>` makes the
-  create idempotent. The document is uploaded as an `Attachable` linked to the
+  first expense account; `requestid=invoicewise:<invoice identity hash>`
+  makes the create idempotent. The document is uploaded as an `Attachable` linked to the
   bill unless one already is.
 
 Both post the extracted line items only when every line has an amount and they

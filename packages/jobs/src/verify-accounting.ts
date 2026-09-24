@@ -50,6 +50,7 @@ async function main() {
   // attachments stored on each bill by file name.
   const providerIds = new Map<string, string>();
   const attachments = new Map<string, Map<string, number>>();
+  // Provider calls per invoice number, whatever idempotency key they used.
   const billAttempts = new Map<string, number>();
   let workspaceId = "";
   let connected = true;
@@ -144,7 +145,10 @@ async function main() {
         };
         const [bill] = body.Invoices;
         const key = request.headers.get("nango-proxy-idempotency-key") ?? "";
-        billAttempts.set(key, (billAttempts.get(key) ?? 0) + 1);
+        const number = String(bill?.InvoiceNumber);
+        billAttempts.set(number, (billAttempts.get(number) ?? 0) + 1);
+        // Hold concurrent posts open together, as a slow provider would.
+        if (number === "CONCURRENT") await Bun.sleep(100);
         const contact = bill?.Contact as Record<string, unknown> | undefined;
         const lines = bill?.LineItems as Record<string, unknown>[] | undefined;
         if (
@@ -281,8 +285,9 @@ async function main() {
     const createInvoice = async (
       invoiceNumber: string,
       amounts?: { netAmount: number; vatAmount: number; grossAmount: number },
+      fileName = invoiceNumber,
     ) => {
-      const created = await createDocument(invoiceNumber);
+      const created = await createDocument(fileName);
       return updateInboxWithProcessedData(database.db, {
         id: created.id,
         displayName: "Acme Supplies Ltd",
@@ -312,8 +317,15 @@ async function main() {
         teamId: teamId!,
       });
     };
-    const billsFor = (...ids: string[]) =>
-      ids.map((id) => billAttempts.get(`invoicewise:${id}`) ?? 0);
+    const callsFor = (invoiceNumber: string) =>
+      billAttempts.get(invoiceNumber) ?? 0;
+    const statusOf = async (id: string) =>
+      (
+        await getInvoiceAccountingStatus(database.db, {
+          invoiceId: id,
+          teamId: teamId!,
+        })
+      )?.status;
     const duplicateOfFor = async (id: string) => {
       const [row] = await database.db
         .select({ validation: inbox.validation })
@@ -337,9 +349,7 @@ async function main() {
       invoiceId: postedInvoice.id,
       teamId,
     });
-    const callsBeforeDuplicate = billAttempts.get(
-      `invoicewise:${postedInvoice.id}`,
-    );
+    const callsBeforeDuplicate = callsFor("POST-ONCE");
     const duplicate = await Effect.runPromise(
       postAccountingDraft(
         database.db,
@@ -348,9 +358,7 @@ async function main() {
         process.env,
       ),
     );
-    const duplicateRefused =
-      callsBeforeDuplicate ===
-      billAttempts.get(`invoicewise:${postedInvoice.id}`);
+    const duplicateRefused = callsBeforeDuplicate === callsFor("POST-ONCE");
 
     const retryInvoice = await createInvoice("FAIL-RETRY");
     if (!retryInvoice) throw new Error("Unable to persist retry invoice");
@@ -403,8 +411,7 @@ async function main() {
       id: blockedJob.job.id,
       teamId,
     });
-    const blockedCalls =
-      billAttempts.get(`invoicewise:${blockedInvoice.id}`) ?? 0;
+    const blockedCalls = callsFor("BLOCKED-TOTAL");
 
     // Two copies of one invoice processed out of arrival order: the later
     // copy is extracted first, then the original. The original is the one
@@ -415,7 +422,8 @@ async function main() {
     await processCopy(original.id, "OUT-OF-ORDER");
     await runBatch();
     const outOfOrder = {
-      bills: billsFor(original.id, laterCopy.id),
+      calls: callsFor("OUT-OF-ORDER"),
+      status: [await statusOf(original.id), await statusOf(laterCopy.id)],
       duplicateOf: [
         await duplicateOfFor(original.id),
         await duplicateOfFor(laterCopy.id),
@@ -430,13 +438,43 @@ async function main() {
     await processCopy(lateOriginal.id, "SENT-FIRST");
     await runBatch();
     const sentFirst = {
-      bills: billsFor(lateOriginal.id, sentCopy.id),
-      originalStatus: (
-        await getInvoiceAccountingStatus(database.db, {
-          invoiceId: lateOriginal.id,
-          teamId,
-        })
-      )?.status,
+      calls: callsFor("SENT-FIRST"),
+      status: [await statusOf(lateOriginal.id), await statusOf(sentCopy.id)],
+    };
+    // Two copies, each valid on its own record, posting at the same time:
+    // exactly one wins the invoice's claim and reaches the provider; the
+    // other becomes its duplicate without a provider call.
+    const concurrentCopies = [
+      await createInvoice("CONCURRENT", undefined, "CONCURRENT-a"),
+      await createInvoice("CONCURRENT", undefined, "CONCURRENT-b"),
+    ].map((copy) => {
+      if (!copy) throw new Error("Unable to persist concurrent copy");
+      return copy.id;
+    });
+    await Promise.all(
+      concurrentCopies.map((invoiceId) =>
+        Effect.runPromise(
+          Effect.either(
+            postAccountingDraft(
+              database.db,
+              storage,
+              { invoiceId, teamId: teamId! },
+              process.env,
+            ),
+          ),
+        ),
+      ),
+    );
+    const concurrentStatus = await Promise.all(concurrentCopies.map(statusOf));
+    const winner = concurrentCopies[concurrentStatus.indexOf("posted")];
+    const loser = concurrentCopies.find((id) => id !== winner);
+    const concurrent = {
+      calls: callsFor("CONCURRENT"),
+      status: [...concurrentStatus].sort(),
+      loserDuplicateOfWinner:
+        winner !== undefined &&
+        loser !== undefined &&
+        (await duplicateOfFor(loser)) === winner,
     };
 
     const disconnected = await disconnectAccountingConnection(database.db, {
@@ -458,20 +496,26 @@ async function main() {
       blockedRun?.status !== "succeeded" ||
       blockedCalls !== 0 ||
       retriedStatus.providerId !==
-        providerIds.get(`invoicewise:${retryInvoice.id}`) ||
+        providerIds.get(retriedStatus.idempotencyKey ?? "") ||
       !Bun.deepEquals(outOfOrder, {
-        bills: [1, 0],
+        calls: 1,
+        status: ["posted", "failed"],
         duplicateOf: [null, original.id],
       }) ||
-      !Bun.deepEquals(sentFirst, { bills: [0, 1], originalStatus: "failed" }) ||
-      providerIds.size !== 4 ||
+      !Bun.deepEquals(sentFirst, { calls: 1, status: ["failed", "posted"] }) ||
+      !Bun.deepEquals(concurrent, {
+        calls: 1,
+        status: ["failed", "posted"],
+        loserDuplicateOfWinner: true,
+      }) ||
+      providerIds.size !== 5 ||
       [...attachments.values()].some((files) => files.size !== 1) ||
       connected ||
       !disconnected
     ) {
       throw new Error(
         `Accounting verification did not reach the expected state: ${JSON.stringify(
-          { outOfOrder, sentFirst, bills: providerIds.size },
+          { outOfOrder, sentFirst, concurrent, bills: providerIds.size },
         )}`,
       );
     }
@@ -497,7 +541,7 @@ async function main() {
             status: blockedStatus.status,
             reason: blockedStatus.lastError,
           },
-          outOfOrderCopies: { bills: outOfOrder.bills, sentFirst },
+          copies: { outOfOrder, sentFirst, concurrent },
           retry: {
             failedWith: failedStatus.lastError,
             attempts: retriedJob.attempts,

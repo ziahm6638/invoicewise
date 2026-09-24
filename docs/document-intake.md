@@ -437,9 +437,11 @@ to accounting. A credit note and an invoice with the same number are
 different documents. A credit note naming an original invoice is linked to
 it (`identity.creditsInvoiceId`) when that invoice is in the workspace,
 otherwise flagged; the processing job looks up same-numbered documents
-across the whole workspace, not only recent history. Accounting delivery
-also refuses a document when another copy with its identity has already
-been sent, so one invoice never becomes two bills.
+across the whole workspace, not only recent history. At delivery only the
+copy holding the invoice's posting claim reaches the provider, including
+when copies post at the same time, and the provider idempotency key is
+derived from the identity; see
+[Accounting integrations](accounting-integrations.md).
 
 **Outcome.** `issues` lists every finding with a `severity`: errors (a
 failed check, a missing required field, a due date before the invoice date,
