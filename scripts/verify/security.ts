@@ -2,9 +2,9 @@
  * Local equivalents of the CI dependency and secret checks.
  *
  * Dependencies: `bun audit` is compared against a recorded inventory of known
- * advisories. New high/critical advisories fail the run. The inventory is
- * outstanding security debt tracked by the release issue (#62), not a release
- * clearance.
+ * advisories. New high/critical advisories fail the run. The inventory records
+ * only advisories that ship knowingly, each with a written reason; it is not a
+ * release clearance.
  *
  * Secrets: every candidate file (tracked plus untracked, non-ignored locally) is
  * scanned for high-confidence credential shapes. Exceptions are declared as
