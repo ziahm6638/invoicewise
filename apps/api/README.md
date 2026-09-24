@@ -9,8 +9,8 @@ The API requires the following environment variables:
 # Local development (Docker):
 REDIS_URL=redis://localhost:6379
 
-# Production (Upstash Redis via Fly.io):
-# REDIS_URL=rediss://:password@fly-midday-redis.upstash.io:6379
+# Production (the Kamal `redis` accessory on the kamal Docker network):
+# REDIS_URL=redis://invoicewise-redis:6379
 ```
 
 #### Local Development Setup
@@ -32,8 +32,7 @@ REDIS_URL=redis://localhost:6379
 
 #### Database Configuration
 ```bash
-DATABASE_URL=postgresql://...
-DATABASE_READ_URL=postgresql://... # Optional: read replica URL
+DATABASE_PRIMARY_URL=postgresql://...
 ```
 
 ### Development
@@ -44,9 +43,8 @@ bun dev
 
 ### Production
 
-```bash
-bun start
-```
+Production runs as the Kamal `api` role (migrations, then this server and the
+workflow runner); see [`docs/deployment.md`](../../docs/deployment.md).
 
 ### Cache Implementation
 
@@ -63,16 +61,9 @@ demotion and revocation take effect on the next call. See
 
 The Redis client automatically configures itself based on the environment:
 
-**Production (Fly.io):**
-- Handles IPv6 connections
-- Longer connection timeouts (10s)
-- Higher retry attempts (10)
-- TLS support for Upstash Redis
-
-**Development (Local):**
-- IPv4 connections
-- Shorter timeouts (5s)
-- Fewer retries (3)
-- No idle timeout
+- The resolver picks the address family (IPv4 on the Kamal Docker network);
+  IPv6 is forced only on Fly (`FLY_APP_NAME`), whose private network is
+  IPv6-only.
+- Connection timeout: 15s in production, 5s elsewhere.
 
 This ensures cache consistency across multiple stateful servers and eliminates the "No procedure found" TRPC errors caused by cache misses.

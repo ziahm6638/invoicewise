@@ -25,6 +25,10 @@ servers:
     env:
       clear:
         PORT: 3003
+        TYPESAFE_BASE_URL: https://api.typesafe.ai
+      secret:
+        # Invoice extraction and judgments run only in the workflow runner.
+        - TYPESAFE_API_KEY
     proxy:
       host: api.invoicewise.uk
       app_port: 3003

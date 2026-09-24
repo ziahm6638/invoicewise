@@ -1,8 +1,9 @@
 # Deployment
 
 InvoiceWise runs on `hp-slice`, deployed with Kamal 2 from `config/deploy.yml`.
-The marketing site at `invoicewise.uk` is a separate Vercel project and is not
-deployed from this repository.
+This is the operator runbook: what runs where, where secrets live, and how to
+deploy, check migrations and roll back. The marketing site at `invoicewise.uk`
+is a separate Vercel project and is not deployed from this repository.
 
 ## Shape
 
@@ -21,16 +22,37 @@ kamal-proxy (shared, 127.0.0.1:3010, TLS terminates at Cloudflare)
 ```
 
 - Host: `hp-slice` (Tailscale `100.90.24.83`). Tailscale SSH as `root`.
-- One image, two roles. The image is built on hp-slice (`builder.remote`) and
-  moved through Kamal's local registry (`localhost:5555`, tunnelled over SSH),
-  so no external registry or registry token is involved.
+- One image (`Dockerfile`), two roles. The image is built on hp-slice
+  (`builder.remote`) and moved through Kamal's local registry
+  (`localhost:5555`, tunnelled over SSH), so no external registry or registry
+  token is involved.
+- `<version>` is the git commit Kamal deployed. Deploy from a clean checkout:
+  a dirty tree gets an `_uncommitted_…` version that matches no commit.
 - Document storage is local (`STORAGE_BACKEND=local`) in
-  `/mnt/ssd/invoicewise/storage`, mounted into both roles.
-- Migrations: `scripts/deploy/api.sh` runs `drizzle-kit migrate` before the API
-  starts. They are append-only and applied in one transaction; kamal-proxy only
-  routes to the new API container once `/health` passes. The dashboard and API
-  boot in that order (`web` first), so the dashboard of a release can briefly
-  run against the previous schema: keep migrations additive.
+  `/mnt/ssd/invoicewise/storage`, mounted into both roles at `/data/storage`.
+- `/health` on the API checks the database; `/login` on the dashboard renders
+  the sign-in page. kamal-proxy only switches traffic to a new container once
+  its health check passes.
+
+## Configuration and the startup preflight
+
+Each role's entrypoint (`scripts/deploy/web.sh`, `scripts/deploy/api.sh`) first
+runs `scripts/deploy/require-env.sh <role>`. It refuses to start the container
+when a required setting is missing or empty, when `NODE_ENV` is not
+`production`, or when `MIDDAY_ENCRYPTION_KEY` is not 64 hex characters. It
+prints only variable names, never values. Several of these settings would
+otherwise fail only on first use (extraction, signed document links, encrypted
+columns) or fall back to a development default (documents in the container's
+`/tmp`). The application itself also refuses to boot in production without
+`BETTER_AUTH_SECRET` or the SMTP settings (`SMTP_USER`, `SMTP_PASS`,
+`AUTH_EMAIL_FROM`).
+
+A refused container never passes its health check, so `kamal deploy` fails and
+the previous release keeps serving. The reason is in
+`kamal app logs -r <role>` as `invoicewise-<role> refusing to start: …`.
+
+`scripts/deploy/deploy-config.test.ts` (part of `bun run verify`) keeps
+`config/deploy.yml`, `.kamal/secrets` and the preflight in step.
 
 ## Secrets
 
@@ -38,22 +60,29 @@ Self-hosted Infisical at `infisical.zzapp.uk`, project `invoicewise`
 (`.infisical.json`), environment `prod`. `.kamal/secrets` holds no values; every
 line is `NAME=$NAME` from the environment `infisical run` injects.
 
-| Key | Purpose |
-| --- | --- |
-| `DATABASE_PRIMARY_URL` | `postgresql://invoicewise:…@invoicewise-db:5432/invoicewise` |
-| `POSTGRES_PASSWORD` | the database accessory's password (same as in the URL) |
-| `BETTER_AUTH_SECRET` | session and token signing |
-| `SMTP_PASS` | Purelymail password for `auth@invoicewise.uk` |
-| `STORAGE_SIGNING_SECRET` | signed document links |
-| `MIDDAY_ENCRYPTION_KEY` | 32-byte hex key for encrypted columns |
+| Key | Roles | Purpose |
+| --- | --- | --- |
+| `DATABASE_PRIMARY_URL` | web, api | `postgresql://invoicewise:…@invoicewise-db:5432/invoicewise` |
+| `POSTGRES_PASSWORD` | db accessory | the database password (same as in the URL) |
+| `BETTER_AUTH_SECRET` | web, api | session and token signing |
+| `SMTP_PASS` | web, api | Purelymail password for `auth@invoicewise.uk` |
+| `STORAGE_SIGNING_SECRET` | web, api | signed document links |
+| `MIDDAY_ENCRYPTION_KEY` | web, api | 32-byte hex key for encrypted columns |
+| `TYPESAFE_API_KEY` | api | invoice extraction and judgments (workflow runner) |
 
-`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` and `AUTH_EMAIL_FROM` are also stored in
-Infisical for reference and are set in clear in `config/deploy.yml`.
+Infisical also holds `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `AUTH_EMAIL_FROM` and
+`TYPESAFE_BASE_URL` for reference; `config/deploy.yml` sets them in clear. To
+list what Infisical holds without printing values:
 
-Not yet configured, so the matching features stay off: `TYPESAFE_API_KEY`
-(invoice extraction), Nango (accounting delivery), Gmail/Outlook OAuth
-(mailbox connections), Polar (billing). Add the key to Infisical and to
-`env.secret` in `config/deploy.yml` and `.kamal/secrets` to enable one.
+```bash
+infisical export --env prod --format json | jq -r '.[].key'
+```
+
+Not configured, so the matching features stay off: Nango (accounting
+delivery), Gmail/Outlook OAuth (mailbox connections), Polar (billing). To
+enable one, add its keys to Infisical, name them under `env.secret` in
+`config/deploy.yml` (on the role that uses them) and in `.kamal/secrets`, and
+add any that must never be empty to `scripts/deploy/require-env.sh`.
 
 ## Mail
 
@@ -64,26 +93,70 @@ Transactional mail goes through Purelymail SMTP (`smtp.purelymail.com:465`) as
 ## Deploying
 
 Prerequisites on the deploying machine: Docker running locally (for Kamal's
-local registry), Kamal 2, the Infisical CLI logged in to
+local registry), Kamal 2 (`gem install kamal`), the Infisical CLI logged in to
 `https://infisical.zzapp.uk/api`, and Tailscale access to hp-slice.
 
-From the repository root:
+Deploy the current `main`, from the repository root:
 
 ```bash
+git switch main && git pull --ff-only && git status --short   # must be clean
 infisical run --env prod -- kamal deploy
 ```
+
+`web` boots first, then `api`, which applies pending migrations before it
+serves. The dashboard of a release can therefore briefly run against the
+previous schema: keep migrations additive.
 
 First-time setup of a fresh host (accessories, proxy registration) is
 `infisical run --env prod -- kamal setup`.
 
-Useful:
+### After a deploy
+
+```bash
+infisical run --env prod -- kamal app version        # should print the main SHA
+curl -fsS https://api.invoicewise.uk/health          # {"status":"ok"}
+curl -fsS -o /dev/null -w '%{http_code}\n' https://app.invoicewise.uk/login   # 200
+```
+
+Then sign up with a fresh address and confirm the verification email arrives
+through Purelymail.
+
+## Migrations
+
+`scripts/deploy/api.sh` runs `drizzle-kit migrate` from `packages/db` on every
+API boot. Pending migrations from `packages/db/migrations` apply in one
+transaction and are recorded in `drizzle.__drizzle_migrations`; a failed batch
+rolls back, the API container exits before serving, and the previous release
+keeps traffic. Confirm the applied count matches the journal:
+
+```bash
+ssh root@100.90.24.83 docker exec invoicewise-db \
+  psql -U invoicewise -d invoicewise -Atc 'select count(*) from drizzle.__drizzle_migrations'
+jq '.entries | length' packages/db/migrations/meta/_journal.json
+infisical run --env prod -- kamal app logs -r api | grep -i migrat
+```
+
+Recovery from a failed migration is forward only (fix the conflicting object or
+data, then deploy again); see `docs/development.md`.
+
+## Rollback
+
+```bash
+infisical run --env prod -- kamal app containers     # lists deployed versions
+infisical run --env prod -- kamal rollback <version>
+```
+
+Rollback swaps the `web` and `api` containers back to an earlier image. It does
+not undo migrations: the earlier release runs against the newer schema, which
+is why migrations stay additive. Emergency stop:
+`infisical run --env prod -- kamal app stop`.
+
+## Logs
 
 ```bash
 infisical run --env prod -- kamal app logs -r api        # API and workflow logs
 infisical run --env prod -- kamal app logs -r web        # dashboard logs
 infisical run --env prod -- kamal accessory logs db
-infisical run --env prod -- kamal rollback <version>
-infisical run --env prod -- kamal app stop               # kill switch
 ```
 
 ## Tunnel and DNS
