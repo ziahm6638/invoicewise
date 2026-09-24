@@ -1,6 +1,7 @@
 import type { InvoiceJudgment } from "@invoicewise/documents";
 import { Badge } from "@invoicewise/ui/badge";
 import { AlertTriangle, CheckCircle2, MinusCircle } from "lucide-react";
+import { checkDescription } from "../built-in-checks";
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 
@@ -41,6 +42,12 @@ export function JudgmentResults({
     <div className="divide-y border-t">
       {(judgments as InvoiceJudgment[]).map((judgment) => {
         const confidence = confidenceFor(judgment);
+        const description = checkDescription({
+          isBuiltIn: judgment.source !== "custom",
+          key: judgment.questionId,
+          label: judgment.label,
+          question: judgment.question,
+        });
 
         return (
           <div
@@ -71,19 +78,11 @@ export function JudgmentResults({
                     <Badge variant="tag">Your question</Badge>
                   )}
                 </div>
-                {/*
-                 * Built-in checks carry internal TypeSafe wording (field
-                 * paths in backticks) in `question`, which must never reach
-                 * the customer: their `label` is the plain-English
-                 * description. Custom questions keep the wording the
-                 * customer wrote.
-                 */}
-                {judgment.source === "custom" &&
-                  judgment.question !== judgment.label && (
-                    <p className="mt-1.5 max-w-[65ch] text-xs leading-5 text-muted-foreground">
-                      {judgment.question}
-                    </p>
-                  )}
+                {description && (
+                  <p className="mt-1.5 max-w-[65ch] text-xs leading-5 text-muted-foreground">
+                    {description}
+                  </p>
+                )}
               </div>
               <div className="shrink-0 text-right">
                 <p

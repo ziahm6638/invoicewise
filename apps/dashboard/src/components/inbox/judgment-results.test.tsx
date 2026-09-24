@@ -1,13 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QuestionSummary } from "../question-summary";
 import { JudgmentResults } from "./judgment-results";
 
 /**
  * Built-in checks ship with internal TypeSafe wording in `question` (field
- * paths wrapped in backticks). The invoice detail page must only ever show the
- * customer-facing `label` for those checks; custom questions keep the wording
- * the customer wrote.
+ * paths wrapped in backticks). The invoice detail page and Settings must only
+ * show the customer-facing label and plain-English description for those
+ * checks; custom questions keep the wording the customer wrote.
  */
+const expectedDescriptions = {
+  likely_duplicate: "This invoice may duplicate one already received.",
+  vat_calculation_correct: "VAT adds up correctly for the net amount.",
+  known_supplier: "This supplier has sent invoices before.",
+  bank_details_consistent:
+    "Bank details match earlier invoices from this supplier.",
+};
+
+const expectNoInternalWording = (html: string) => {
+  expect(html).not.toContain("currentInvoice");
+  expect(html).not.toContain("previousInvoices");
+  expect(html).not.toContain("supplierName");
+  expect(html).not.toContain("bankDetails");
+  expect(html).not.toContain("`");
+};
+
 const builtInChecks = [
   {
     questionId: "likely_duplicate",
@@ -64,20 +81,40 @@ const customCheck = {
   probability: 0.8,
 };
 
-describe("judgment results rendered wording", () => {
-  test("built-in checks show their plain-English label, never internal wording", () => {
+const settingsQuestion = (check: {
+  questionId: string;
+  label: string;
+  question: string;
+  source: string;
+}) =>
+  ({
+    id: `row-${check.questionId}`,
+    questionKey: check.questionId,
+    label: check.label,
+    question: check.question,
+    context: null,
+    type: "boolean",
+    options: null,
+    enabled: true,
+    isDefault: check.source === "default",
+    version: 1,
+  }) as unknown as Parameters<typeof QuestionSummary>[0]["question"];
+
+describe("invoice page check wording", () => {
+  test("built-in checks show their label and plain-English description, never internal wording", () => {
     const html = renderToStaticMarkup(
       <JudgmentResults judgments={builtInChecks} />,
     );
 
     for (const check of builtInChecks) {
       expect(html).toContain(check.label);
+      expect(html).toContain(
+        expectedDescriptions[
+          check.questionId as keyof typeof expectedDescriptions
+        ],
+      );
     }
-    expect(html).not.toContain("currentInvoice");
-    expect(html).not.toContain("previousInvoices");
-    expect(html).not.toContain("supplierName");
-    expect(html).not.toContain("bankDetails");
-    expect(html).not.toContain("`");
+    expectNoInternalWording(html);
   });
 
   test("custom questions keep the wording the customer wrote", () => {
@@ -87,5 +124,37 @@ describe("judgment results rendered wording", () => {
 
     expect(html).toContain("Is this over our £500 approval threshold?");
     expect(html).toContain("Your question");
+  });
+});
+
+describe("settings question wording", () => {
+  test("built-in checks show their label and plain-English description, never internal wording", () => {
+    for (const check of builtInChecks) {
+      const html = renderToStaticMarkup(
+        <QuestionSummary question={settingsQuestion(check)} />,
+      );
+
+      expect(html).toContain(check.label);
+      expect(html).toContain(
+        expectedDescriptions[
+          check.questionId as keyof typeof expectedDescriptions
+        ],
+      );
+      expectNoInternalWording(html);
+    }
+  });
+
+  test("custom questions keep the wording the customer wrote", () => {
+    const html = renderToStaticMarkup(
+      <QuestionSummary
+        question={settingsQuestion({
+          ...customCheck,
+          label: "Over threshold",
+        })}
+      />,
+    );
+
+    expect(html).toContain("Over threshold");
+    expect(html).toContain("Is this over our £500 approval threshold?");
   });
 });
