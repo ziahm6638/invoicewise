@@ -27,6 +27,12 @@ const REF_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
 const ACCEPTED: LeadCreateResult = { status: "ok" };
 
+const RETRY_LATER: LeadCreateResult = {
+  status: "error",
+  code: "server_error",
+  message: "We couldn't add you right now. Please try again later.",
+};
+
 const SERVER_ERROR: LeadCreateResult = {
   status: "error",
   code: "server_error",
@@ -52,23 +58,14 @@ function newRefCode(): string {
   ).join("");
 }
 
-async function clientMeta(): Promise<{ ipHash: string; userAgent: string }> {
+async function clientMeta(): Promise<{ ip: string; userAgent: string }> {
   const headerList = await headers();
   const forwarded = headerList.get("x-forwarded-for");
   const ip =
     forwarded?.split(",")[0]?.trim() || headerList.get("x-real-ip") || "";
 
-  let ipHash = "";
-  if (ip) {
-    try {
-      ipHash = hashIp(ip);
-    } catch (error) {
-      console.error("lead ip hash failed", error);
-    }
-  }
-
   return {
-    ipHash,
+    ip,
     userAgent: normalizeText(
       headerList.get("user-agent"),
       MAX_USER_AGENT_LENGTH,
@@ -104,26 +101,27 @@ export async function createLead(
     };
   }
 
-  const { ipHash, userAgent } = await clientMeta();
+  const { ip, userAgent } = await clientMeta();
   const source = normalizeText(input.source, 200);
   const submittedAt = toPocketBaseDate(new Date());
   const token = newToken();
   const refCode = newRefCode();
 
-  if (ipHash) {
-    try {
-      const attempts = await countRecentIpAttempts(
-        ipHash,
-        SITE_PRODUCT,
-        RATE_LIMIT_WINDOW_MINUTES,
-      );
-      if (attempts >= RATE_LIMIT_MAX_PER_IP) {
-        return SERVER_ERROR;
-      }
-      await recordIpAttempt(ipHash, SITE_PRODUCT);
-    } catch (rateLimitError) {
-      console.error("lead rate-limit check failed", rateLimitError);
+  let ipHash: string;
+  try {
+    ipHash = hashIp(ip);
+    const attempts = await countRecentIpAttempts(
+      ipHash,
+      SITE_PRODUCT,
+      RATE_LIMIT_WINDOW_MINUTES,
+    );
+    if (attempts >= RATE_LIMIT_MAX_PER_IP) {
+      return SERVER_ERROR;
     }
+    await recordIpAttempt(ipHash, SITE_PRODUCT);
+  } catch (rateLimitError) {
+    console.error("lead rate-limit check failed", rateLimitError);
+    return RETRY_LATER;
   }
 
   let alreadySubscribed = false;
