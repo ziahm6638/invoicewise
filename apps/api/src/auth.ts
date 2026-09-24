@@ -214,9 +214,11 @@ async function bindVerificationToken(
 }
 
 /**
- * Resolves the flow's callback URL with the same origin rule Better Auth's own
- * `originCheck` applies, so short-circuiting the endpoint cannot turn it into
- * an open redirect.
+ * Resolves the flow's callback URL against the trusted origins, because
+ * short-circuiting the endpoint skips Better Auth's own `originCheck`. Relative
+ * paths get no fast path: the URL parser reads `\` as `/` and drops tabs and
+ * newlines, so `/\evil.com` would resolve off-site. Such raw values are refused
+ * outright and every resolved URL must land on a trusted origin.
  */
 function resolveCallbackUrl(
   context: AuthHookContext,
@@ -228,6 +230,7 @@ function resolveCallbackUrl(
     return null;
   }
 
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are exactly what this guard rejects.
   if (/[\\\s\x00-\x1f\x7f]/.test(raw)) {
     return "untrusted";
   }
