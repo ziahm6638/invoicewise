@@ -14,11 +14,16 @@ import {
   recordAccountingPostFailure,
   recordAccountingPostSuccess,
   releaseAccountingPostClaim,
+  releaseAccountingPostForReview,
   restartFailedWorkflowJob,
   updateInboxValidation,
   upsertAccountingConnection,
 } from "@invoicewise/db/queries";
-import { accountingReadiness, validateInvoice } from "@invoicewise/documents";
+import {
+  accountingReadiness,
+  postingKeyOf,
+  validateInvoice,
+} from "@invoicewise/documents";
 import { Effect, Schema } from "effect";
 import { BillRejectedError, postProviderBill } from "./accounting-providers";
 import { workflowKey } from "./client";
@@ -255,25 +260,27 @@ export const postAccountingDraft = (
       invoice.extraction,
       invoice.validation,
     );
-    const storedIdentity = asRecord(asRecord(invoice.validation).identity).key;
-    const identityKey =
-      typeof storedIdentity === "string"
-        ? storedIdentity
-        : validateInvoice(invoice.extraction).identity.key;
-    // Keyed by the invoice identity, not the document, so the provider
-    // replays one bill for any copy that reaches it.
+    // Keyed by document type and number, not the document, so the provider
+    // replays one bill for any copy that reaches it. A post a user released
+    // from review is its own bill, under its own claim and key.
+    const postingKey = postingKeyOf(invoice.extraction);
+    const released = invoice.accountingPostReleased;
     const idempotencyKey =
-      invoice.accountingIdempotencyKey ??
+      (!released && invoice.accountingIdempotencyKey) ||
       `invoicewise:${
-        identityKey
+        postingKey && !released
           ? createHash("sha256")
-              .update(`${input.teamId}:${identityKey}`)
+              .update(`${input.teamId}:${postingKey}`)
               .digest("hex")
               .slice(0, 36)
           : invoice.id
       }`;
-    const claim = identityKey
-      ? { teamId: input.teamId, identityKey, invoiceId: invoice.id }
+    const claim = postingKey
+      ? {
+          teamId: input.teamId,
+          identityKey: released ? `${postingKey}:${invoice.id}` : postingKey,
+          invoiceId: invoice.id,
+        }
       : null;
     const recordFailure = (error: AccountingPostError) =>
       Effect.tryPromise({
@@ -294,6 +301,8 @@ export const postAccountingDraft = (
             retryable: true,
           }),
       }).pipe(Effect.zipRight(Effect.fail(error)));
+    const notSent = (reasons: string) =>
+      `Not sent to ${PROVIDER_NAME[connection.provider]}: ${reasons}`;
     const block = (blockers: readonly { code: string; message: string }[]) =>
       Effect.tryPromise({
         try: () =>
@@ -301,9 +310,9 @@ export const postAccountingDraft = (
             ...input,
             provider: connection.provider,
             idempotencyKey,
-            error: `Not sent to ${PROVIDER_NAME[connection.provider]}: ${blockers
-              .map((blocker) => blocker.message)
-              .join(" ")}`,
+            error: notSent(
+              blockers.map((blocker) => blocker.message).join(" "),
+            ),
           }),
         catch: () =>
           new AccountingPostError({
@@ -320,8 +329,9 @@ export const postAccountingDraft = (
 
     if (!readiness.ready) return yield* block(readiness.blockers);
 
-    // Only the copy holding the invoice's claim posts. Another copy that
-    // loses it becomes a duplicate of the holder and is never sent.
+    // Only the document holding the claim for its type and number posts.
+    // Another copy from the same supplier that loses it becomes a duplicate
+    // of the holder; a document from another supplier is held for review.
     if (claim) {
       const holder = yield* Effect.tryPromise({
         try: () => claimAccountingPost(db, claim),
@@ -363,7 +373,30 @@ export const postAccountingDraft = (
               retryable: true,
             }),
         });
-        return yield* block(validation.accounting.blockers);
+        if (validation.identity.duplicateOf) {
+          return yield* block(validation.accounting.blockers);
+        }
+        const reason = notSent(
+          `invoice number ${String(asRecord(invoice.extraction).invoiceNumber)} was already sent for a different supplier (document ${holder}). Check it is not a duplicate, then retry to send it as a separate bill.`,
+        );
+        yield* Effect.tryPromise({
+          try: () =>
+            recordAccountingPostFailure(db, {
+              ...input,
+              provider: connection.provider,
+              idempotencyKey,
+              error: reason,
+              status: "needs_review",
+            }),
+          catch: () =>
+            new AccountingPostError({
+              reason: "Unable to record the post held for review",
+              retryable: true,
+            }),
+        });
+        return yield* Effect.fail(
+          new AccountingPostError({ reason, retryable: false }),
+        );
       }
     }
 
@@ -517,6 +550,11 @@ export async function retryAccountingPost(
   }
   if (!(await getActiveAccountingConnection(db, input.teamId))) {
     throw new Error("No accounting connection is active");
+  }
+  // Retrying a post held for review is the user's decision that it is not a
+  // duplicate: it is sent as its own bill.
+  if (invoice.accountingPostStatus === "needs_review") {
+    await releaseAccountingPostForReview(db, input);
   }
   const idempotencyKey = workflowKey.accounting(input.teamId, input.invoiceId);
   const existing = await getWorkflowJobByKey(db, {

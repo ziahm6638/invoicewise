@@ -142,6 +142,7 @@ export const accountingPostStatusEnum = pgEnum("accounting_post_status", [
   "posted",
   "already_posted",
   "failed",
+  "needs_review",
 ]);
 export const invoiceDeliveryTypeEnum = pgEnum("invoice_delivery_type", [
   "create",
@@ -2112,6 +2113,11 @@ export const inbox = pgTable(
     accountingPostStatus: accountingPostStatusEnum("accounting_post_status"),
     accountingProviderId: text("accounting_provider_id"),
     accountingPostError: text("accounting_post_error"),
+    // Set when a user retries a post held for review (another supplier's
+    // bill already has its number): it then posts under its own key.
+    accountingPostReleased: boolean("accounting_post_released")
+      .default(false)
+      .notNull(),
     accountingPostedAt: timestamp("accounting_posted_at", {
       withTimezone: true,
       mode: "string",
@@ -2284,9 +2290,10 @@ export const accountingConnections = pgTable(
   ],
 );
 
-// One claim per invoice identity: only the document holding it may post a
-// bill, so two copies of one invoice never both reach the provider. Kept
-// after a successful post; released only on a definitive provider failure.
+// One claim per document type and number: only the document holding it may
+// post a bill, so two documents with one number are never both posted
+// automatically. Kept after a successful post; released only on a definitive
+// provider failure.
 export const accountingPostClaims = pgTable(
   "accounting_post_claims",
   {

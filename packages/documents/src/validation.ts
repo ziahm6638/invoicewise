@@ -199,6 +199,16 @@ const sameSupplier = (
   b: Pick<Identity, "vat" | "name">,
 ) => (a.vat && b.vat ? a.vat === b.vat : a.name !== "" && a.name === b.name);
 
+/**
+ * The key accounting delivery posts one bill under: the document type and
+ * number only, so copies whose supplier was read differently (a VAT number
+ * on one, only a name on another) still share it.
+ */
+export const postingKeyOf = (extraction: unknown) => {
+  const identity = identityOf(extraction);
+  return identity ? `${identity.type}:${identity.number}` : null;
+};
+
 const identityKey = (identity: Identity) =>
   `${identity.type}:${identity.vat || identity.name}:${identity.number}`;
 

@@ -1,3 +1,5 @@
+ALTER TYPE "public"."accounting_post_status" ADD VALUE 'needs_review';--> statement-breakpoint
+ALTER TABLE "inbox" ADD COLUMN "accounting_post_released" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 CREATE TABLE "accounting_post_claims" (
 	"team_id" uuid NOT NULL,
 	"identity_key" text NOT NULL,

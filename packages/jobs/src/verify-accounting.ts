@@ -16,6 +16,7 @@ import {
   disconnectAccountingConnection,
   enqueueAccountingPost,
   postAccountingDraft,
+  retryAccountingPost,
 } from "./accounting";
 import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
@@ -156,7 +157,9 @@ async function main() {
           !key.startsWith("invoicewise:") ||
           bill?.Type !== "ACCPAY" ||
           bill.Status !== "DRAFT" ||
-          contact?.Name !== "Acme Supplies Ltd" ||
+          !["Acme Supplies Ltd", "Northgate Timber Ltd"].includes(
+            String(contact?.Name),
+          ) ||
           bill.CurrencyCode !== "GBP" ||
           bill.LineAmountTypes !== "Exclusive" ||
           lines?.[0]?.UnitAmount !== 100
@@ -302,14 +305,21 @@ async function main() {
     };
     // Saves a copy as the processing job does (validated against every other
     // copy) and queues its accounting post.
-    const processCopy = async (id: string, invoiceNumber: string) => {
+    const processCopy = async (
+      id: string,
+      invoiceNumber: string,
+      supplier: Partial<ReturnType<typeof extractionOf>> = {},
+    ) => {
       await saveProcessedDocument(database.db, {
         id,
         teamId: teamId!,
         displayName: "Acme Supplies Ltd",
         type: "invoice",
         status: "pending",
-        extraction: extractionOf(invoiceNumber) as unknown as InvoiceExtraction,
+        extraction: {
+          ...extractionOf(invoiceNumber),
+          ...supplier,
+        } as unknown as InvoiceExtraction,
         judgments: [],
       });
       await enqueueAccountingPost(database.db, {
@@ -477,6 +487,51 @@ async function main() {
         (await duplicateOfFor(loser)) === winner,
     };
 
+    // One copy read with the supplier's VAT number is sent; a copy of the
+    // same invoice read with only the supplier's name, processed later, is
+    // its duplicate and is never sent.
+    const nameOnlyOriginal = await createDocument("VAT-NAME-original");
+    const vatCopy = await createDocument("VAT-NAME-copy");
+    await processCopy(vatCopy.id, "VAT-NAME");
+    await runBatch();
+    await processCopy(nameOnlyOriginal.id, "VAT-NAME", {
+      supplierVatNumber: null as unknown as string,
+    });
+    await runBatch();
+    const vatAndName = {
+      calls: callsFor("VAT-NAME"),
+      status: [await statusOf(nameOnlyOriginal.id), await statusOf(vatCopy.id)],
+      duplicateOf: await duplicateOfFor(nameOnlyOriginal.id),
+    };
+    // Another supplier's invoice with a number already sent is never posted
+    // automatically: it is held for review until a user retries it.
+    const acmeNumber = await createDocument("SAME-NUMBER-acme");
+    const otherNumber = await createDocument("SAME-NUMBER-other");
+    await processCopy(acmeNumber.id, "SAME-NUMBER");
+    await runBatch();
+    await processCopy(otherNumber.id, "SAME-NUMBER", {
+      supplierName: "Northgate Timber Ltd",
+      supplierVatNumber: "GB987654321",
+    });
+    await runBatch();
+    const held = {
+      calls: callsFor("SAME-NUMBER"),
+      status: await statusOf(otherNumber.id),
+      duplicateOf: await duplicateOfFor(otherNumber.id),
+    };
+    await retryAccountingPost(database.db, {
+      invoiceId: otherNumber.id,
+      teamId,
+    });
+    await runBatch();
+    const differentSupplier = {
+      held,
+      released: {
+        calls: callsFor("SAME-NUMBER"),
+        status: [await statusOf(acmeNumber.id), await statusOf(otherNumber.id)],
+      },
+    };
+
     const disconnected = await disconnectAccountingConnection(database.db, {
       teamId,
       provider: "xero",
@@ -508,14 +563,30 @@ async function main() {
         status: ["failed", "posted"],
         loserDuplicateOfWinner: true,
       }) ||
-      providerIds.size !== 5 ||
+      !Bun.deepEquals(vatAndName, {
+        calls: 1,
+        status: ["failed", "posted"],
+        duplicateOf: vatCopy.id,
+      }) ||
+      !Bun.deepEquals(differentSupplier, {
+        held: { calls: 1, status: "needs_review", duplicateOf: null },
+        released: { calls: 2, status: ["posted", "posted"] },
+      }) ||
+      providerIds.size !== 8 ||
       [...attachments.values()].some((files) => files.size !== 1) ||
       connected ||
       !disconnected
     ) {
       throw new Error(
         `Accounting verification did not reach the expected state: ${JSON.stringify(
-          { outOfOrder, sentFirst, concurrent, bills: providerIds.size },
+          {
+            outOfOrder,
+            sentFirst,
+            concurrent,
+            vatAndName,
+            differentSupplier,
+            bills: providerIds.size,
+          },
         )}`,
       );
     }
@@ -541,7 +612,13 @@ async function main() {
             status: blockedStatus.status,
             reason: blockedStatus.lastError,
           },
-          copies: { outOfOrder, sentFirst, concurrent },
+          copies: {
+            outOfOrder,
+            sentFirst,
+            concurrent,
+            vatAndName,
+            differentSupplier,
+          },
           retry: {
             failedWith: failedStatus.lastError,
             attempts: retriedJob.attempts,

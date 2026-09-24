@@ -362,6 +362,7 @@ export async function runMigrationVerification(
       ["inbox", "intake_publishing_until"],
       ["inbox", "validation"],
       ["accounting_post_claims", "identity_key"],
+      ["inbox", "accounting_post_released"],
     ];
     for (const [table, column] of expectedColumns) {
       if (!(await columnExists(FRESH_DATABASE, table, column))) {
