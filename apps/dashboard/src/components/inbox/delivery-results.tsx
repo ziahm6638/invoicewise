@@ -46,7 +46,9 @@ function Outcome({
         {error && (status === "failed" || status === "cancelled") && (
           <p className="mt-1 text-xs text-muted-foreground">
             {error}
+            {/* Failures recorded before retryability existed carry null. */}
             {status === "failed" &&
+              retryable !== null &&
               (retryable
                 ? " · Retry may succeed"
                 : " · Needs a configuration change")}

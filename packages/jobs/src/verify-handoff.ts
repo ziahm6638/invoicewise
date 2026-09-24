@@ -178,10 +178,10 @@ async function main() {
 
   const workerEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),
-    NODE_ENV: "development",
-    TYPESAFE_API_KEY: "verification-key",
+    NODE_ENV: "test",
+    TYPESAFE_API_KEY: "verify-stub",
     TYPESAFE_BASE_URL: `http://127.0.0.1:${typeSafe.port}`,
-    NANGO_SECRET_KEY: "nango-local-verification",
+    NANGO_SECRET_KEY: "verify-stub",
     NANGO_BASE_URL: `http://127.0.0.1:${nango.port}`,
     NANGO_XERO_INTEGRATION_ID: "xero-invoicewise",
     NANGO_XERO_DRAFT_BILL_ACTION: "create-draft-bill",
