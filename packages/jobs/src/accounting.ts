@@ -6,6 +6,7 @@ import {
   getAccountingPostInvoice,
   getActiveAccountingConnection,
   getActiveAccountingConnectionByProvider,
+  getDeliveredCopy,
   getWorkflowJobByKey,
   isValidDocumentBinding,
   recordAccountingAlreadyPosted,
@@ -262,21 +263,41 @@ export const postAccountingDraft = (
       }).pipe(Effect.zipRight(Effect.fail(error)));
 
     // Provider-required fields that are missing or invalid, an inconsistent
-    // total, a duplicate or a credit note: the bill is not attempted, and the
-    // reasons are recorded as a failure a retry cannot fix until the invoice
-    // is corrected (see docs/document-intake.md#validation).
+    // total, a duplicate, a copy already sent or a credit note: the bill is
+    // not attempted, and the reasons are recorded as a failure a retry cannot
+    // fix until the invoice is corrected (see docs/document-intake.md#validation).
     const readiness = accountingReadiness(
       invoice.extraction,
       invoice.validation,
     );
-    if (!readiness.ready) {
+    const identityKey = asRecord(asRecord(invoice.validation).identity).key;
+    const deliveredCopy =
+      readiness.ready && typeof identityKey === "string"
+        ? yield* Effect.tryPromise({
+            try: () => getDeliveredCopy(db, { ...input, identityKey }),
+            catch: () =>
+              new AccountingPostError({
+                reason: "Unable to check for a delivered copy",
+                retryable: true,
+              }),
+          })
+        : undefined;
+    const blockers = deliveredCopy
+      ? [
+          {
+            code: "duplicate_delivered",
+            message: `A copy of this invoice (${deliveredCopy.id}) has already been sent.`,
+          },
+        ]
+      : readiness.blockers;
+    if (blockers.length > 0) {
       yield* Effect.tryPromise({
         try: () =>
           recordAccountingPostFailure(db, {
             ...input,
             provider: connection.provider,
             idempotencyKey,
-            error: `Not sent to ${PROVIDER_NAME[connection.provider]}: ${readiness.blockers
+            error: `Not sent to ${PROVIDER_NAME[connection.provider]}: ${blockers
               .map((blocker) => blocker.message)
               .join(" ")}`,
           }),
@@ -289,7 +310,7 @@ export const postAccountingDraft = (
       return {
         invoiceId: invoice.id,
         status: "blocked",
-        blockers: readiness.blockers.map((blocker) => blocker.code),
+        blockers: blockers.map((blocker) => blocker.code),
       };
     }
 

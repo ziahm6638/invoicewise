@@ -1913,18 +1913,36 @@ export async function getInboxByFilePath(
 }
 
 /**
- * The live documents in the workspace received strictly before the given
- * one: a deleted, reserved or later document is never a duplicate or credit
- * candidate, so reprocessing a document cannot flag it against its copies.
+ * The live, processed documents in the workspace received before (or after)
+ * the given one, ordered by `created_at` then id: the earliest copy of an
+ * invoice is its original whatever order the copies were processed in, and a
+ * deleted or reserved document is never a duplicate or credit candidate.
  */
-const earlierLiveDocuments = (teamId: string, documentId: string) =>
+const liveDocumentsReceived = (
+  direction: "before" | "after",
+  teamId: string,
+  documentId: string,
+) =>
   and(
     eq(inbox.teamId, teamId),
     ne(inbox.status, "deleted"),
     visibleIntakeState(),
     isNotNull(inbox.extraction),
-    sql`${inbox.createdAt} < (select current.created_at from ${inbox} as current where current.id = ${documentId})`,
+    direction === "before"
+      ? sql`(${inbox.createdAt}, ${inbox.id}) < (select current.created_at, current.id from ${inbox} as current where current.id = ${documentId})`
+      : sql`(${inbox.createdAt}, ${inbox.id}) > (select current.created_at, current.id from ${inbox} as current where current.id = ${documentId})`,
   );
+
+const documentNumberKeys = (numbers: string[]) => [
+  ...new Set(
+    numbers
+      .map((number) => number.toUpperCase().replace(/[^A-Z0-9]/g, ""))
+      .filter(Boolean),
+  ),
+];
+
+const documentNumberOf = (field: "invoiceNumber" | "originalInvoiceNumber") =>
+  sql<string>`upper(regexp_replace(${inbox.extraction} ->> ${field}::text, '[^A-Za-z0-9]', '', 'g'))`;
 
 /**
  * Earlier documents in the workspace with the given document numbers,
@@ -1935,28 +1953,67 @@ export async function getInvoicesByDocumentNumber(
   db: Database,
   params: { teamId: string; documentId: string; numbers: string[] },
 ) {
-  const keys = [
-    ...new Set(
-      params.numbers
-        .map((number) => number.toUpperCase().replace(/[^A-Z0-9]/g, ""))
-        .filter(Boolean),
-    ),
-  ];
+  const keys = documentNumberKeys(params.numbers);
   if (keys.length === 0) return [];
   return db
     .select({ id: inbox.id, extraction: inbox.extraction })
     .from(inbox)
     .where(
       and(
-        earlierLiveDocuments(params.teamId, params.documentId),
-        inArray(
-          sql<string>`upper(regexp_replace(${inbox.extraction} ->> 'invoiceNumber', '[^A-Za-z0-9]', '', 'g'))`,
-          keys,
+        liveDocumentsReceived("before", params.teamId, params.documentId),
+        inArray(documentNumberOf("invoiceNumber"), keys),
+      ),
+    )
+    .orderBy(inbox.createdAt, inbox.id)
+    .limit(20);
+}
+
+/**
+ * Later documents, not yet sent to accounting, that carry the given number
+ * or credit it: the copies and credit notes whose validation depends on a
+ * document that was processed after them.
+ */
+export async function getLaterDocumentsByNumber(
+  db: Database,
+  params: { teamId: string; documentId: string; number: string },
+) {
+  const keys = documentNumberKeys([params.number]);
+  if (keys.length === 0) return [];
+  return db
+    .select({ id: inbox.id, extraction: inbox.extraction })
+    .from(inbox)
+    .where(
+      and(
+        liveDocumentsReceived("after", params.teamId, params.documentId),
+        isNull(inbox.accountingProviderId),
+        or(
+          inArray(documentNumberOf("invoiceNumber"), keys),
+          inArray(documentNumberOf("originalInvoiceNumber"), keys),
         ),
       ),
     )
-    .orderBy(inbox.createdAt)
+    .orderBy(inbox.createdAt, inbox.id)
     .limit(20);
+}
+
+/**
+ * Serialises validation of a workspace's documents until the transaction
+ * ends, so two copies saved at once still see each other.
+ */
+export async function lockDocumentIdentities(db: Database, teamId: string) {
+  await db.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${`inbox-identity:${teamId}`}))`,
+  );
+}
+
+export async function updateInboxValidation(
+  db: Database,
+  params: { id: string; teamId: string; validation: Record<string, unknown> },
+) {
+  await db
+    .update(inbox)
+    .set({ validation: params.validation })
+    .where(and(eq(inbox.id, params.id), eq(inbox.teamId, params.teamId)));
 }
 
 export async function getProcessedInvoiceHistory(
@@ -1968,7 +2025,7 @@ export async function getProcessedInvoiceHistory(
     .from(inbox)
     .where(
       and(
-        earlierLiveDocuments(params.teamId, params.documentId),
+        liveDocumentsReceived("before", params.teamId, params.documentId),
         eq(inbox.type, "invoice"),
       ),
     )

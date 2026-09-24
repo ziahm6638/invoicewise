@@ -428,15 +428,18 @@ it validates whether it prints its amounts negative or positive, and its
 canonical totals are stored negative. An invoice with a negative total is an
 error. A document's identity is `type:supplier:number`, where the supplier is
 its VAT number (else its normalised name) and the number ignores spacing,
-punctuation and case. An earlier live document in the workspace (received
-before this one, not deleted or still reserved) with the same identity makes
-this one a duplicate, so reprocessing a document never flags it against a
-later copy (`identity.duplicateOf`); a credit note
-and an invoice with the same number are different documents. A credit note
-naming an original invoice is linked to it (`identity.creditsInvoiceId`)
-when that invoice is in the workspace, otherwise flagged; the processing job
-looks up same-numbered documents across the whole workspace, not only
-recent history.
+punctuation and case. The first live copy received (by `created_at`, then
+id; deleted and still-reserved documents never count) is the original, and
+every later copy is its duplicate (`identity.duplicateOf`), whatever order
+the copies are processed in: saving a document validates again, in the same
+transaction, any later copy or credit note already processed and not yet sent
+to accounting. A credit note and an invoice with the same number are
+different documents. A credit note naming an original invoice is linked to
+it (`identity.creditsInvoiceId`) when that invoice is in the workspace,
+otherwise flagged; the processing job looks up same-numbered documents
+across the whole workspace, not only recent history. Accounting delivery
+also refuses a document when another copy with its identity has already
+been sent, so one invoice never becomes two bills.
 
 **Outcome.** `issues` lists every finding with a `severity`: errors (a
 failed check, a missing required field, a due date before the invoice date,

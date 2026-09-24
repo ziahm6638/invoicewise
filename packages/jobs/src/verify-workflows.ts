@@ -472,18 +472,23 @@ async function verifyInputMatrix(
   if (!shapes.every((shape) => Bun.deepEquals(shape, shapes[0]))) {
     throw new Error("The input formats persisted different data shapes");
   }
-  // One invoice is one identity whatever its format: a copy flagged as a
-  // duplicate points at another copy of the same invoice. (The copies are
-  // processed concurrently here, so which of them is flagged is not fixed.)
-  const copies = new Set(rows.map(({ row }) => row.id));
+  // One invoice is one identity whatever its format: the first copy received
+  // is the original, and every other copy is its duplicate, whatever order
+  // the concurrently processed copies finished in.
   const duplicates = rows.map(
     ({ row }) =>
       (row.validation as { identity?: { duplicateOf?: string | null } } | null)
         ?.identity?.duplicateOf ?? null,
   );
-  if (duplicates.some((id) => id !== null && !copies.has(id))) {
+  const originals = rows.filter((_, index) => duplicates[index] === null);
+  if (
+    originals.length !== 1 ||
+    duplicates
+      .filter((id) => id !== null)
+      .some((id) => id !== originals[0]!.row.id)
+  ) {
     throw new Error(
-      `A duplicate points outside the copies of this invoice: ${JSON.stringify(duplicates)}`,
+      `The copies of this invoice do not share one original: ${JSON.stringify(duplicates)}`,
     );
   }
 

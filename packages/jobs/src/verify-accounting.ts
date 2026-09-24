@@ -5,8 +5,9 @@ import {
   getWorkflowJob,
   updateInboxWithProcessedData,
 } from "@invoicewise/db/queries";
-import { teams } from "@invoicewise/db/schema";
+import { inbox, teams } from "@invoicewise/db/schema";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
+import type { InvoiceExtraction } from "@invoicewise/documents";
 import { eq } from "drizzle-orm";
 import { Effect, Logger } from "effect";
 import {
@@ -16,6 +17,7 @@ import {
   enqueueAccountingPost,
   postAccountingDraft,
 } from "./accounting";
+import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
 
 const required = (name: string) => {
@@ -230,15 +232,8 @@ async function main() {
     });
     if (!connection) throw new Error("Unable to store accounting connection");
 
-    const createInvoice = async (
-      invoiceNumber: string,
-      amounts: { netAmount: number; vatAmount: number; grossAmount: number } = {
-        netAmount: 100,
-        vatAmount: 20,
-        grossAmount: 120,
-      },
-    ) => {
-      const path = [teamId!, "inbox", `${invoiceNumber}.pdf`];
+    const createDocument = async (fileName: string) => {
+      const path = [teamId!, "inbox", `${fileName}.pdf`];
       paths.push(path);
       await storage.upload({
         bucket: "vault",
@@ -250,12 +245,44 @@ async function main() {
         teamId: teamId!,
         displayName: "Acme Supplies Ltd",
         filePath: path,
-        fileName: `${invoiceNumber}.pdf`,
+        fileName: `${fileName}.pdf`,
         contentType: "application/pdf",
         size: 42,
         status: "pending",
       });
       if (!created) throw new Error("Unable to create verification invoice");
+      return created;
+    };
+    const extractionOf = (
+      invoiceNumber: string,
+      amounts: { netAmount: number; vatAmount: number; grossAmount: number } = {
+        netAmount: 100,
+        vatAmount: 20,
+        grossAmount: 120,
+      },
+    ) => ({
+      documentType: "invoice" as const,
+      supplierName: "Acme Supplies Ltd",
+      supplierVatNumber: "GB123456789",
+      invoiceNumber,
+      invoiceDate: "2026-09-22",
+      dueDate: "2026-10-22",
+      currency: "GBP",
+      ...amounts,
+      lineItems: [
+        {
+          description: "Materials",
+          quantity: 1,
+          unitPrice: 100,
+          total: 100,
+        },
+      ],
+    });
+    const createInvoice = async (
+      invoiceNumber: string,
+      amounts?: { netAmount: number; vatAmount: number; grossAmount: number },
+    ) => {
+      const created = await createDocument(invoiceNumber);
       return updateInboxWithProcessedData(database.db, {
         id: created.id,
         displayName: "Acme Supplies Ltd",
@@ -264,26 +291,38 @@ async function main() {
         date: "2026-10-22",
         type: "invoice",
         status: "pending",
-        extraction: {
-          documentType: "invoice",
-          supplierName: "Acme Supplies Ltd",
-          supplierVatNumber: "GB123456789",
-          invoiceNumber,
-          invoiceDate: "2026-09-22",
-          dueDate: "2026-10-22",
-          currency: "GBP",
-          ...amounts,
-          lineItems: [
-            {
-              description: "Materials",
-              quantity: 1,
-              unitPrice: 100,
-              total: 100,
-            },
-          ],
-        },
+        extraction: extractionOf(invoiceNumber, amounts),
         judgments: [],
       });
+    };
+    // Saves a copy as the processing job does (validated against every other
+    // copy) and queues its accounting post.
+    const processCopy = async (id: string, invoiceNumber: string) => {
+      await saveProcessedDocument(database.db, {
+        id,
+        teamId: teamId!,
+        displayName: "Acme Supplies Ltd",
+        type: "invoice",
+        status: "pending",
+        extraction: extractionOf(invoiceNumber) as unknown as InvoiceExtraction,
+        judgments: [],
+      });
+      await enqueueAccountingPost(database.db, {
+        invoiceId: id,
+        teamId: teamId!,
+      });
+    };
+    const billsFor = (...ids: string[]) =>
+      ids.map((id) => billAttempts.get(`invoicewise:${id}`) ?? 0);
+    const duplicateOfFor = async (id: string) => {
+      const [row] = await database.db
+        .select({ validation: inbox.validation })
+        .from(inbox)
+        .where(eq(inbox.id, id));
+      return (
+        (row?.validation as { identity?: { duplicateOf?: string | null } })
+          ?.identity?.duplicateOf ?? null
+      );
     };
 
     const postedInvoice = await createInvoice("POST-ONCE");
@@ -367,6 +406,39 @@ async function main() {
     const blockedCalls =
       billAttempts.get(`invoicewise:${blockedInvoice.id}`) ?? 0;
 
+    // Two copies of one invoice processed out of arrival order: the later
+    // copy is extracted first, then the original. The original is the one
+    // delivered; the later copy becomes its duplicate before either post runs.
+    const original = await createDocument("OUT-OF-ORDER-original");
+    const laterCopy = await createDocument("OUT-OF-ORDER-copy");
+    await processCopy(laterCopy.id, "OUT-OF-ORDER");
+    await processCopy(original.id, "OUT-OF-ORDER");
+    await runBatch();
+    const outOfOrder = {
+      bills: billsFor(original.id, laterCopy.id),
+      duplicateOf: [
+        await duplicateOfFor(original.id),
+        await duplicateOfFor(laterCopy.id),
+      ],
+    };
+    // A later copy already sent before the original was read: the original
+    // is never sent as a second bill.
+    const lateOriginal = await createDocument("SENT-FIRST-original");
+    const sentCopy = await createDocument("SENT-FIRST-copy");
+    await processCopy(sentCopy.id, "SENT-FIRST");
+    await runBatch();
+    await processCopy(lateOriginal.id, "SENT-FIRST");
+    await runBatch();
+    const sentFirst = {
+      bills: billsFor(lateOriginal.id, sentCopy.id),
+      originalStatus: (
+        await getInvoiceAccountingStatus(database.db, {
+          invoiceId: lateOriginal.id,
+          teamId,
+        })
+      )?.status,
+    };
+
     const disconnected = await disconnectAccountingConnection(database.db, {
       teamId,
       provider: "xero",
@@ -387,13 +459,20 @@ async function main() {
       blockedCalls !== 0 ||
       retriedStatus.providerId !==
         providerIds.get(`invoicewise:${retryInvoice.id}`) ||
-      providerIds.size !== 2 ||
+      !Bun.deepEquals(outOfOrder, {
+        bills: [1, 0],
+        duplicateOf: [null, original.id],
+      }) ||
+      !Bun.deepEquals(sentFirst, { bills: [0, 1], originalStatus: "failed" }) ||
+      providerIds.size !== 4 ||
       [...attachments.values()].some((files) => files.size !== 1) ||
       connected ||
       !disconnected
     ) {
       throw new Error(
-        "Accounting verification did not reach the expected state",
+        `Accounting verification did not reach the expected state: ${JSON.stringify(
+          { outOfOrder, sentFirst, bills: providerIds.size },
+        )}`,
       );
     }
 
@@ -418,6 +497,7 @@ async function main() {
             status: blockedStatus.status,
             reason: blockedStatus.lastError,
           },
+          outOfOrderCopies: { bills: outOfOrder.bills, sentFirst },
           retry: {
             failedWith: failedStatus.lastError,
             attempts: retriedJob.attempts,

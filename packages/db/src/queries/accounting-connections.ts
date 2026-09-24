@@ -1,6 +1,6 @@
 import type { Database } from "@db/client";
 import { accountingConnections, inbox } from "@db/schema";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 
 export type AccountingProvider = "xero" | "quickbooks";
 
@@ -116,6 +116,30 @@ export async function getAccountingPostInvoice(
     .where(and(eq(inbox.id, input.invoiceId), eq(inbox.teamId, input.teamId)))
     .limit(1);
   return invoice;
+}
+
+/**
+ * Another live copy with the same document identity that has already been
+ * sent to accounting: this one must not create a second bill.
+ */
+export async function getDeliveredCopy(
+  db: Database,
+  input: { invoiceId: string; teamId: string; identityKey: string },
+) {
+  const [copy] = await db
+    .select({ id: inbox.id })
+    .from(inbox)
+    .where(
+      and(
+        eq(inbox.teamId, input.teamId),
+        ne(inbox.id, input.invoiceId),
+        ne(inbox.status, "deleted"),
+        isNotNull(inbox.accountingProviderId),
+        sql`${inbox.validation} -> 'identity' ->> 'key' = ${input.identityKey}`,
+      ),
+    )
+    .limit(1);
+  return copy;
 }
 
 export async function recordAccountingPostSuccess(
