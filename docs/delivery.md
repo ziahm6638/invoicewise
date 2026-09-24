@@ -130,8 +130,8 @@ other subscribed endpoints in the same transaction, so the notification cannot
 be lost to a crash. Its event ID derives from the failed delivery and its
 attempt count: replays of one failure deduplicate, and a delivery that fails
 again after an explicit retry is a new event. Failures of that notification are
-not emitted again, so failure events cannot recurse. Slow or unavailable customer endpoints therefore
-do not block invoice processing.
+not emitted again, so failure events cannot recurse. Slow or unavailable
+customer endpoints therefore do not block invoice processing.
 
 ## Processing-to-delivery handoff
 
