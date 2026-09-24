@@ -1,16 +1,33 @@
 /**
  * `checkout/success` redirects to a caller-supplied `redirectPath`, so it must
- * only ever land on a same-origin relative path.
+ * only ever land on a same-origin relative path, and on the public app origin
+ * rather than the internal origin the request reaches the container with.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { safeRedirectPath } from "@/utils/safe-redirect";
 import { NextRequest } from "next/server";
 import { GET } from "./route";
 
-const ORIGIN = "http://localhost:3000";
+// What the handler sees behind the production proxy, and where the browser is.
+const INTERNAL_ORIGIN = "https://localhost:3000";
+const ORIGIN = "https://app.invoicewise.uk";
+
+const configuredUrl = process.env.NEXT_PUBLIC_URL;
+
+beforeAll(() => {
+  process.env.NEXT_PUBLIC_URL = ORIGIN;
+});
+
+afterAll(() => {
+  if (configuredUrl === undefined) {
+    Reflect.deleteProperty(process.env, "NEXT_PUBLIC_URL");
+  } else {
+    process.env.NEXT_PUBLIC_URL = configuredUrl;
+  }
+});
 
 const redirectFor = async (redirectPath: string) => {
-  const url = new URL("/api/checkout/success", ORIGIN);
+  const url = new URL("/api/checkout/success", INTERNAL_ORIGIN);
   url.searchParams.set("redirectPath", redirectPath);
 
   const response = await GET(new NextRequest(url, { method: "GET" }));
@@ -33,7 +50,9 @@ describe("checkout/success redirect", () => {
 
   test("a missing redirectPath goes home", async () => {
     const response = await GET(
-      new NextRequest(`${ORIGIN}/api/checkout/success`, { method: "GET" }),
+      new NextRequest(`${INTERNAL_ORIGIN}/api/checkout/success`, {
+        method: "GET",
+      }),
     );
 
     expect(response.headers.get("location")).toBe(`${ORIGIN}/`);

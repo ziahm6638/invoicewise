@@ -1,4 +1,5 @@
 import { getSession } from "@/lib/auth";
+import { getPublicUrl } from "@/utils/environment";
 import { getDiscount, getPlans } from "@/utils/plans";
 import { api } from "@/utils/polar";
 import { safeRedirectPath } from "@/utils/safe-redirect";
@@ -52,7 +53,7 @@ export const GET = async (req: NextRequest) => {
 
   const discountId = getDiscount(planType);
 
-  const successUrl = new URL("/api/checkout/success", req.nextUrl.origin);
+  const successUrl = getPublicUrl("/api/checkout/success");
   successUrl.searchParams.set("redirectPath", redirectPath);
 
   const checkout = await api.checkouts.create({

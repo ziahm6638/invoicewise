@@ -108,6 +108,9 @@ project `invoicewise` (`prod`). Migrations apply when the API container boots. D
 `infisical run --env prod -- kamal deploy`; the full procedure is in `docs/deployment.md`.
 A new required production setting goes in Infisical, `config/deploy.yml`, `.kamal/secrets` and
 `scripts/deploy/require-env.sh` together; `scripts/deploy/deploy-config.test.ts` checks they agree.
+Behind the proxy a dashboard request's own origin is the internal `https://localhost:3000`, so
+absolute dashboard URLs (redirects, provider return URLs) come from `getPublicUrl`
+(`apps/dashboard/src/utils/environment.ts`), never `request.url`.
 Transactional mail is Purelymail SMTP as `auth@invoicewise.uk`, never Resend.
 Nango runs as the `nango`/`nango-db` Kamal accessories (never restarted by `kamal deploy`); the
 InvoiceWise and Nango databases are dumped nightly by `ops/backup` (see `docs/deployment.md`).

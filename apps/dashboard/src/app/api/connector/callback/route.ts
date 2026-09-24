@@ -1,4 +1,5 @@
 import { getQueryClient, trpc } from "@/trpc/server";
+import { getPublicUrl } from "@/utils/environment";
 import { db } from "@invoicewise/db/client";
 import { enqueueWorkflow, workflowKey } from "@invoicewise/jobs";
 import { NextResponse } from "next/server";
@@ -27,10 +28,9 @@ export async function GET(request: Request) {
     );
 
     if (!account) {
-      return NextResponse.redirect(
-        new URL("/invoices?connected=failed", request.url),
-        { status: 302 },
-      );
+      return NextResponse.redirect(getPublicUrl("/invoices?connected=failed"), {
+        status: 302,
+      });
     }
 
     await enqueueWorkflow(db, {
@@ -40,19 +40,15 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.redirect(
-      new URL(
-        `/invoices?connected=true&provider=${account.provider}`,
-        request.url,
-      ),
+      getPublicUrl(`/invoices?connected=true&provider=${account.provider}`),
       {
         status: 302,
       },
     );
   } catch (error) {
     console.error(error);
-    return NextResponse.redirect(
-      new URL("/invoices?connected=false", request.url),
-      { status: 302 },
-    );
+    return NextResponse.redirect(getPublicUrl("/invoices?connected=false"), {
+      status: 302,
+    });
   }
 }
