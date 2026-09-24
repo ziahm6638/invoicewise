@@ -187,7 +187,7 @@ the workspace rules around them instead of keeping a second copy.
 | --- | --- | --- |
 | Signup | `/api/auth/sign-up/email`, then the emailed verification link | Verification signs the account in and provisions one personal workspace; a failed provisioning attempt is retried on the link and on sign-in |
 | Email change | `/api/auth/change-email`, then the link sent to the new address | Requires a session signed in within the recent-auth window; completing the change ends every session, including the one the completion response would issue |
-| Password reset | `/api/auth/request-password-reset`, then `/api/auth/reset-password` | Every session ends and the account signs in again |
+| Password reset | `/api/auth/request-password-reset`, then `/api/auth/reset-password` | The link works once, within one hour of the request; every session ends and the account signs in again |
 | Password change | `/api/auth/change-password` | Every other session ends, whether or not `revokeOtherSessions` is sent; with it, the caller also receives one fresh session |
 | Invitations | dashboard `team.invite` / `team.acceptInvite` (tRPC), delivered by the `invite-team-members` queue job | Unaffected by identity changes |
 
