@@ -72,7 +72,7 @@ export function AccountingConnections() {
           host: session.apiUrl,
         });
         nango.openConnectUI({
-          baseURL: session.connectUrl ?? undefined,
+          baseURL: session.connectUrl,
           apiURL: session.apiUrl,
           onEvent: (event) => {
             if (event.type === "connect") {

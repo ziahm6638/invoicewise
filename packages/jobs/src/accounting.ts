@@ -77,8 +77,10 @@ export async function createAccountingConnectSession(
   if (typeof data.token !== "string" || typeof data.expires_at !== "string") {
     throw new Error("Nango returned an invalid connect session");
   }
-  const connectLink =
-    typeof data.connect_link === "string" ? data.connect_link : null;
+  if (typeof data.connect_link !== "string" || !data.connect_link) {
+    throw new Error("Nango returned a connect session without a connect link");
+  }
+  const connectLink = data.connect_link;
   return {
     token: data.token,
     connectLink,
@@ -87,7 +89,7 @@ export async function createAccountingConnectSession(
     // What the browser's Connect UI needs: the Nango API it talks to and
     // where the self-hosted Connect UI is served (the session link's base).
     apiUrl: config.publicUrl,
-    connectUrl: connectLink ? connectLink.replace(/[?#].*$/, "") : null,
+    connectUrl: connectLink.replace(/[?#].*$/, ""),
   };
 }
 

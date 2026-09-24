@@ -52,7 +52,10 @@ type Connection = { connectionId: string };
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
 
-/** Lines with an amount, else one line carrying the invoice's net total. */
+/**
+ * The extracted lines when every one has an amount and they add up to the
+ * net total, else one line carrying the invoice's net total.
+ */
 const billLines = (bill: DraftBill) => {
   const lines = bill.lineItems
     .map((item) => {
@@ -68,7 +71,14 @@ const billLines = (bill: DraftBill) => {
       };
     })
     .filter((line) => line !== null);
-  if (lines.length) return lines;
+  const linesTotal = lines.reduce((sum, line) => sum + line.total, 0);
+  if (
+    lines.length &&
+    lines.length === bill.lineItems.length &&
+    (bill.netAmount === null || Math.abs(linesTotal - bill.netAmount) <= 0.01)
+  ) {
+    return lines;
+  }
   const amount = bill.netAmount ?? bill.grossAmount;
   if (amount === null) {
     throw new BillRejectedError("The invoice has no amount to post");

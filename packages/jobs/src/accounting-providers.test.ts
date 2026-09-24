@@ -169,12 +169,6 @@ const bill: DraftBill = {
   lineItems: [
     { description: "Materials", quantity: 2, unitPrice: 50, total: 100 },
     { description: "Labour", quantity: null, unitPrice: null, total: 50 },
-    {
-      description: "Heading only",
-      quantity: null,
-      unitPrice: null,
-      total: null,
-    },
   ],
 };
 
@@ -378,6 +372,58 @@ describe("QuickBooks", () => {
         AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } },
       },
     ]);
+  });
+
+  const netTotalLine = [
+    {
+      DetailType: "AccountBasedExpenseLineDetail",
+      Amount: 150,
+      Description: "Invoice INV-42",
+      AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } },
+    },
+  ];
+
+  test("posts the net total as one line when an extracted line has no amount", async () => {
+    connectionConfig = { realmId: "9130" };
+    await postProviderBill(
+      "quickbooks",
+      config,
+      connection,
+      {
+        ...bill,
+        lineItems: [
+          { description: "Labour", quantity: null, unitPrice: null, total: 100 },
+          {
+            description: "Materials",
+            quantity: null,
+            unitPrice: null,
+            total: null,
+          },
+        ],
+      },
+      null,
+    );
+    const create = calls.find((call) => call.path === "/v3/company/9130/bill")!;
+    expect((create.json as { Line: unknown[] }).Line).toEqual(netTotalLine);
+  });
+
+  test("posts the net total as one line when the lines do not add up to it", async () => {
+    connectionConfig = { realmId: "9130" };
+    await postProviderBill(
+      "quickbooks",
+      config,
+      connection,
+      {
+        ...bill,
+        lineItems: [
+          { description: "Labour", quantity: null, unitPrice: null, total: 100 },
+          { description: "Materials", quantity: 1, unitPrice: 20, total: 20 },
+        ],
+      },
+      null,
+    );
+    const create = calls.find((call) => call.path === "/v3/company/9130/bill")!;
+    expect((create.json as { Line: unknown[] }).Line).toEqual(netTotalLine);
   });
 
   test("refuses a bill without a supplier or a company", async () => {
