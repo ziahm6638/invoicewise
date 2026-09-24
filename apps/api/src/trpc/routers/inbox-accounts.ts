@@ -11,6 +11,8 @@ import {
   workspaceProcedure,
 } from "@api/trpc/init";
 import {
+  consumeConnectorState,
+  createConnectorState,
   deleteInboxAccount,
   getInboxAccountById,
   getInboxAccounts,
@@ -30,11 +32,28 @@ export const inboxAccountsRouter = createTRPCRouter({
 
   connect: adminProcedure
     .input(connectInboxAccountSchema)
-    .mutation(async ({ ctx: { db }, input }) => {
+    .mutation(async ({ ctx: { db, session, teamId }, input }) => {
+      const sessionId = session.sessionId;
+
+      // The callback lands in the browser that started the connect, so the
+      // flow is only offered to a browser session.
+      if (!sessionId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Connecting a mailbox requires a signed-in browser session",
+        });
+      }
+
       try {
         const connector = new InboxConnector(input.provider, db);
+        const state = await createConnectorState(db, {
+          provider: input.provider,
+          userId: session.user.id,
+          teamId: teamId!,
+          sessionId,
+        });
 
-        return connector.connect();
+        return await connector.connect(state);
       } catch (error) {
         console.error(error);
         throw new TRPCError({
@@ -46,9 +65,31 @@ export const inboxAccountsRouter = createTRPCRouter({
 
   exchangeCodeForAccount: adminProcedure
     .input(exchangeCodeForAccountSchema)
-    .query(async ({ ctx: { db, teamId }, input }) => {
+    .query(async ({ ctx: { db, session, teamId }, input }) => {
+      // The state must be one this session issued for this workspace,
+      // unexpired and unused. It is consumed before the code is exchanged, so
+      // a replayed or forged callback never reaches the provider.
+      const issuedFor = session.sessionId
+        ? await consumeConnectorState(db, {
+            state: input.state,
+            userId: session.user.id,
+            teamId: teamId!,
+            sessionId: session.sessionId,
+          })
+        : null;
+
+      const provider =
+        connectInboxAccountSchema.shape.provider.safeParse(issuedFor);
+
+      if (!provider.success) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Invalid or expired connection request",
+        });
+      }
+
       try {
-        const connector = new InboxConnector(input.provider, db);
+        const connector = new InboxConnector(provider.data, db);
 
         const account = await connector.exchangeCodeForAccount({
           code: input.code,

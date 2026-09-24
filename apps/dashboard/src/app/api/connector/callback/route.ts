@@ -6,7 +6,9 @@ import { NextResponse } from "next/server";
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
-  const state = searchParams.get("state") as "gmail";
+  // An opaque, single-use value bound to the session that started the
+  // connect; the API refuses a replayed, expired or foreign one.
+  const state = searchParams.get("state");
   const queryClient = getQueryClient();
 
   if (!code || !state) {
@@ -20,7 +22,7 @@ export async function GET(request: Request) {
     const account = await queryClient.fetchQuery(
       trpc.inboxAccounts.exchangeCodeForAccount.queryOptions({
         code,
-        provider: state,
+        state,
       }),
     );
 
@@ -38,7 +40,10 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.redirect(
-      new URL(`/invoices?connected=true&provider=${state}`, request.url),
+      new URL(
+        `/invoices?connected=true&provider=${account.provider}`,
+        request.url,
+      ),
       {
         status: 302,
       },

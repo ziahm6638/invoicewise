@@ -30,7 +30,7 @@ export interface GetAttachmentsOptions {
 }
 
 export abstract class Connector {
-  abstract connect(): Promise<string>;
+  abstract connect(state: string): Promise<string>;
   abstract exchangeCodeForAccount(
     params: ExchangeCodeForAccountParams,
   ): Promise<Account | null>;
@@ -69,8 +69,9 @@ export type OAuthProvider = "gmail";
 export interface OAuthProviderInterface {
   /**
    * Generates the authorization URL for the user to grant permission.
+   * @param state - The single-use, session-bound value the callback must return.
    */
-  getAuthUrl(): Promise<string>;
+  getAuthUrl(state: string): Promise<string>;
 
   /**
    * Exchanges the authorization code received from the callback for access and refresh tokens.

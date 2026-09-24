@@ -9,9 +9,11 @@ import {
 } from "./team-permissions";
 
 /**
- * The user's profile and stored active workspace. The workspace is only
+ * The account profile and stored active workspace. The workspace is only
  * returned while the user is a member of it, so a stale pointer never exposes
- * a workspace they were removed from.
+ * a workspace they were removed from. It deliberately carries no workspace
+ * credential (such as the team's inbound-mail address): workspace details come
+ * from the workspace-scoped reads, which apply the caller's live role.
  */
 export const getUserById = async (
   db: Database | PrimaryDatabase,
@@ -35,7 +37,6 @@ export const getUserById = async (
         name: teams.name,
         logoUrl: teams.logoUrl,
         plan: teams.plan,
-        inboxId: teams.inboxId,
         createdAt: teams.createdAt,
         countryCode: teams.countryCode,
         canceledAt: teams.canceledAt,

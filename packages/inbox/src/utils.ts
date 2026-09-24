@@ -40,8 +40,6 @@ export function isAuthenticationError(errorMessage: string): boolean {
 
   // HTTP status codes indicating authentication issues
   const httpAuthErrors = [
-    "401", // Unauthorized
-    "403", // Forbidden
     "unauthorized", // Text version of 401
     "forbidden", // Text version of 403
     "unauthenticated", // gRPC equivalent of 401
@@ -71,5 +69,10 @@ export function isAuthenticationError(errorMessage: string): boolean {
     ...googleSpecificErrors,
   ];
 
-  return allAuthPatterns.some((pattern) => message.includes(pattern));
+  // Status codes only as whole numbers, so ids or paths quoted in the
+  // message (a UUID containing "401") are not mistaken for a 401/403.
+  return (
+    /\b40[13]\b/.test(message) ||
+    allAuthPatterns.some((pattern) => message.includes(pattern))
+  );
 }

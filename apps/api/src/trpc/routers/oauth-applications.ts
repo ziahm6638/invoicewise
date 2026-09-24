@@ -18,6 +18,7 @@ import {
 } from "@api/trpc/init";
 import { primaryDb } from "@invoicewise/db/client";
 import {
+  canManageIntegrations,
   clampScopesForRole,
   createAuthorizationCode,
   createOAuthApplication,
@@ -38,6 +39,7 @@ import { isScope, scopesWithinApplication } from "@invoicewise/db/utils/scopes";
 import { AppInstalledEmail } from "@invoicewise/email/emails/app-installed";
 import { AppReviewRequestEmail } from "@invoicewise/email/emails/app-review-request";
 import { render } from "@invoicewise/email/render";
+import { TRPCError } from "@trpc/server";
 
 export const oauthApplicationsRouter = createTRPCRouter({
   list: workspaceProcedure.query(async ({ ctx }) => {
@@ -144,6 +146,16 @@ export const oauthApplicationsRouter = createTRPCRouter({
 
       if (!role) {
         throw new Error("User is not a member of the specified team");
+      }
+
+      // Granting an app API access manages the workspace's integrations, which
+      // the permission matrix reserves for owners and admins.
+      if (!canManageIntegrations(role)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only a workspace owner or admin can grant an application API access",
+        });
       }
 
       // A granted token can never carry scopes above the authorizing actor's

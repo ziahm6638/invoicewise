@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/auth";
 import { getDiscount, getPlans } from "@/utils/plans";
 import { api } from "@/utils/polar";
+import { safeRedirectPath } from "@/utils/safe-redirect";
 import { db } from "@invoicewise/db/client";
 import { canManageBilling, getTeamById } from "@invoicewise/db/queries";
 import { type NextRequest, NextResponse } from "next/server";
@@ -25,7 +26,9 @@ export const GET = async (req: NextRequest) => {
   }
 
   const plan = req.nextUrl.searchParams.get("plan");
-  const redirectPath = req.nextUrl.searchParams.get("redirectPath") ?? "/";
+  const redirectPath = safeRedirectPath(
+    req.nextUrl.searchParams.get("redirectPath"),
+  );
   const teamId = req.nextUrl.searchParams.get("teamId");
   const planType = req.nextUrl.searchParams.get("planType");
 

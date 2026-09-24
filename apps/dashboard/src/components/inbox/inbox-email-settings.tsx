@@ -1,7 +1,7 @@
 "use client";
 
 import { CopyInput } from "@/components/copy-input";
-import { useUserQuery } from "@/hooks/use-user";
+import { useTeamQuery } from "@/hooks/use-team";
 import { getInboxEmail } from "@invoicewise/inbox";
 import {
   Card,
@@ -11,8 +11,8 @@ import {
 } from "@invoicewise/ui/card";
 
 export function InboxEmailSettings() {
-  const { data: user } = useUserQuery();
-  const inboxEmail = getInboxEmail(user?.team?.inboxId ?? "");
+  const { data: team } = useTeamQuery();
+  const inboxEmail = getInboxEmail(team?.inboxId ?? "");
 
   return (
     <Card>

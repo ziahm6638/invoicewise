@@ -787,6 +787,8 @@ export type Session = {
     full_name?: string;
   };
   teamId: string | null;
+  /** The Better Auth session id, present only for a browser session. */
+  sessionId?: string;
   /**
    * How the caller authenticated. API keys and OAuth tokens are bound to the
    * workspace they were issued for; only a browser session may act across the
@@ -822,6 +824,7 @@ export async function getAuthSession(
       full_name: result.user.name,
     },
     teamId: result.session.activeOrganizationId ?? null,
+    sessionId: result.session.id,
     authType: "session",
   };
 }

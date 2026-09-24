@@ -70,11 +70,15 @@ privileged routes (team settings, accounting, webhooks), and `withRequiredTeam`
 returns `403` for inbox, invoice, webhook and accounting routes when the caller
 has no active workspace.
 
-**API keys and OAuth grants.** Scopes are clamped to the issuing actor's role
-when a key is created, when an OAuth consent is granted on either the tRPC or
-the REST consent endpoint, and again on every token refresh. A key update is
-scoped by `id AND team_id`, so an id from another workspace is never
-updateable.
+**API keys and OAuth grants.** Granting API access is the "manage
+integrations" capability: creating a key, consenting to an OAuth application
+(on either the tRPC or the REST consent endpoint) and refreshing an OAuth token
+all require owner or admin in the workspace being granted, checked with
+`canManageIntegrations` against the live role. A member is refused even for
+scopes a member may hold, and the consent screen only offers workspaces where
+`team.list` reports `permissions.manageIntegrations`. Scopes are also clamped
+to the actor's role at each of those points. A key update is scoped by
+`id AND team_id`, so an id from another workspace is never updateable.
 
 The scope vocabulary is authoritative and lives in
 `packages/db/src/utils/scopes.ts`. Aliases (`apis.all`, `apis.read`) are
@@ -91,6 +95,24 @@ workspace it was issued for. `/teams` returns only that workspace for a
 credential, and detail, members and update requests for another workspace —
 even one the same person belongs to — return 404. A browser session keeps the
 deliberate multi-workspace behaviour.
+
+**Profile reads.** `GET /users/me` and tRPC `user.me` return the account
+profile and a workspace summary only. Workspace credentials such as the
+inbound-mail address (`inboxId`) come from the workspace-scoped `team.current`.
+
+**Mailbox OAuth connect.** `inboxAccounts.connect` (admin) issues a random
+256-bit `state`, stores only its hash in `auth_verifications` bound to the
+initiating user, workspace and browser session, and expires it after ten
+minutes (`packages/db/src/queries/connector-state.ts`). The dashboard callback
+passes it to `inboxAccounts.exchangeCodeForAccount`, which redeems it with one
+conditional delete before any provider call, so a replayed, expired, forged or
+foreign-session state is refused and a concurrent replay succeeds at most once.
+
+**Redirects.** `checkout` and `checkout/success` pass the caller's
+`redirectPath` through `safeRedirectPath`
+(`apps/dashboard/src/utils/safe-redirect.ts`), which keeps only same-origin
+relative paths and falls back to `/` for absolute, protocol-relative or
+backslash targets.
 
 **Invitations.** One flow, stored in `user_invites`: recipient email, status
 and expiry are checked under the team lock at acceptance time, and the invite
@@ -163,9 +185,16 @@ and REST: three roles, workspace switching, member removal, credential tenant
 binding, the OAuth consent → token → refresh → revoke flow, and account
 deletion. Providers are stubbed; nothing leaves the machine.
 
+The HTTP suite also covers OAuth consent by role across two workspaces (a
+member of one workspace is refused there but may grant as owner of their own),
+refresh after demotion, the profile read carrying no workspace credential, and
+the mailbox connect `state` (forged, foreign user, foreign session, replayed,
+concurrent, expired and cross-workspace attempts are refused).
+
 `apps/dashboard/src/app/api/billing-routes.test.ts` proves the checkout and
 portal routes refuse members, admins and foreign workspaces before any provider
-call, and `apps/dashboard/src/components/tables/members/permissions.test.ts`
+call, `apps/dashboard/src/app/api/checkout/success/route.test.ts` proves the
+success redirect refuses absolute and protocol-relative targets, and `apps/dashboard/src/components/tables/members/permissions.test.ts`
 proves the members-table controls follow the server matrix.
 
 ```bash
@@ -177,7 +206,8 @@ cd apps/api && PERMISSIONS_TEST_DATABASE_URL=postgresql://invoicewise:invoicewis
   bun test src/trpc/routers/team.permissions.integration.test.ts
 cd apps/api && PERMISSIONS_TEST_DATABASE_URL=postgresql://invoicewise:invoicewise@localhost:5432/invoicewise_perms_test \
   bun test src/permissions.http.integration.test.ts
-cd apps/dashboard && bun test src/app/api/billing-routes.test.ts src/components/tables/members/permissions.test.ts
+cd apps/dashboard && bun test src/app/api/billing-routes.test.ts src/app/api/checkout/success/route.test.ts \
+  src/components/tables/members/permissions.test.ts
 ```
 
 The suite skips itself when `PERMISSIONS_TEST_DATABASE_URL` is unset, so it can
