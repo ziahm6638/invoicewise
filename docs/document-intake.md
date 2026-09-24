@@ -215,7 +215,10 @@ Enforced before any provider work, in `packages/documents/src/intake.ts`:
   survives both.
 - Worker re-check: the stored bytes must match the persisted size, type and
   sha256 content hash before extraction runs, and only `accepted` (or legacy)
-  records resolve to a worker binding.
+  records resolve to a worker binding. A legacy job queued before the intake
+  contract (a file path, no inbox id) still runs only when that path is the
+  job's own `<teamId>/inbox/...` path; it reuses the matching row or creates
+  and binds one as before.
 - Intake failures are classified in one place
   (`@invoicewise/jobs/intake-failure`). A failed object write **or read-back**
   is `storage_unavailable` (transient, retried). Parser admission exhaustion,

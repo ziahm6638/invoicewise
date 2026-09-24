@@ -51,7 +51,9 @@ session with none cannot reach workspace-scoped handlers.
 membership from the primary database on every request, so deletion and
 demotion take effect on the next call. Effective scopes are intersected with
 what the caller's current role allows. `withRequiredTeamRole` guards the
-privileged routes (team settings, accounting, webhooks).
+privileged routes (team settings, accounting, webhooks), and `withRequiredTeam`
+returns `403` for inbox, invoice, webhook and accounting routes when the caller
+has no active workspace.
 
 **API keys and OAuth grants.** Scopes are clamped to the issuing actor's role
 when a key is created, when an OAuth consent is granted on either the tRPC or

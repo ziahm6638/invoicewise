@@ -1,11 +1,7 @@
 {
   "name": "invoicewise",
   "private": true,
-  "workspaces": [
-    "packages/*",
-    "apps/*",
-    "packages/email/*"
-  ],
+  "workspaces": ["packages/*", "apps/*", "packages/email/*"],
   "scripts": {
     "build": "turbo build",
     "clean": "git clean -xdf node_modules",
@@ -38,8 +34,6 @@
     "typescript": "^5.9.2"
   },
   "manypkg": {
-    "ignoredRules": [
-      "EXTERNAL_MISMATCH"
-    ]
+    "ignoredRules": ["EXTERNAL_MISMATCH"]
   }
 }
