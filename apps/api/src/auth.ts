@@ -1,4 +1,11 @@
 import {
+  AUTH_RATE_LIMIT_RULES,
+  TRUSTED_PROXY_RANGES,
+  assertProductionAuthConfig,
+  isAuthRateLimitEnabled,
+  resolveAuthSecret,
+} from "@api/auth-policy";
+import {
   assertTransactionalMailConfigured,
   deliverTransactionalMail,
 } from "@api/services/auth-mail";
@@ -7,7 +14,9 @@ import { db, primaryDb } from "@invoicewise/db/client";
 import { ensurePersonalWorkspace } from "@invoicewise/db/queries/teams";
 import {
   authAccounts,
+  authRateLimits,
   authSessions,
+  authTwoFactors,
   authVerifications,
   teams,
   userInvites,
@@ -15,7 +24,7 @@ import {
   usersOnTeam,
 } from "@invoicewise/db/schema";
 import bcrypt from "bcryptjs";
-import { betterAuth } from "better-auth";
+import { type GenericEndpointContext, betterAuth } from "better-auth";
 import {
   APIError,
   type AuthMiddleware,
@@ -23,7 +32,7 @@ import {
   getSessionFromCtx,
 } from "better-auth/api";
 import { signJWT, verifyJWT } from "better-auth/crypto";
-import { bearer, organization } from "better-auth/plugins";
+import { bearer, organization, twoFactor } from "better-auth/plugins";
 import { and, eq, ne } from "drizzle-orm";
 
 const baseURL =
@@ -31,23 +40,16 @@ const baseURL =
   process.env.NEXT_PUBLIC_URL ??
   "http://localhost:3001";
 
-const localAuthSecret =
-  "invoicewise-local-development-auth-secret-change-in-production";
-const configuredAuthSecret =
-  process.env.BETTER_AUTH_SECRET ??
-  (process.env.NODE_ENV === "production" ? undefined : localAuthSecret);
+const isProduction = process.env.NODE_ENV === "production";
+const authSecret = resolveAuthSecret();
 const cookieDomain = process.env.BETTER_AUTH_COOKIE_DOMAIN;
 
-if (!configuredAuthSecret) {
-  throw new Error("BETTER_AUTH_SECRET is required in production");
-}
-
-const authSecret: string = configuredAuthSecret;
-
-// Verification, invitation and reset links carry bearer tokens, so a
-// production process refuses to start rather than fall back to printing them.
-if (process.env.NODE_ENV === "production") {
+// Verification, invitation and reset links carry bearer tokens, and the secret
+// signs every session, so a production process refuses to start on a missing
+// sender, a weak or development secret, or a plain-http origin.
+if (isProduction) {
   assertTransactionalMailConfigured();
+  assertProductionAuthConfig();
 }
 
 /**
@@ -73,11 +75,29 @@ const SESSION_FRESH_AGE_SECONDS = 60 * 60 * 24;
 /**
  * Endpoints that need a recent sign-in on top of a valid session.
  *
- * Better Auth's `/change-email` only requires an authoritative session, so the
- * recent-authentication requirement for moving a verified address is enforced
- * here, for every caller of the authoritative flow.
+ * Better Auth's `/change-email` and most two-factor management endpoints only
+ * require a session (the two-factor ones also re-check the password), so the
+ * recent-authentication requirement for moving a verified address or changing
+ * the second factor is enforced here, for every caller of those flows.
  */
-const SENSITIVE_IDENTITY_PATHS = new Set(["/change-email"]);
+const SENSITIVE_IDENTITY_PATHS = new Set([
+  "/change-email",
+  "/two-factor/enable",
+  "/two-factor/disable",
+  "/two-factor/get-totp-uri",
+  "/two-factor/generate-backup-codes",
+]);
+
+/**
+ * Second-factor verification endpoints. A trusted-device cookie would let a
+ * later sign-in skip the second factor for 30 days, which is not offered for
+ * an account holding financial documents.
+ */
+const TWO_FACTOR_VERIFY_PATHS = new Set([
+  "/two-factor/verify-totp",
+  "/two-factor/verify-backup-code",
+  "/two-factor/verify-otp",
+]);
 
 /** Origins Better Auth may redirect to after an identity flow. */
 const trustedOrigins = [
@@ -149,6 +169,42 @@ const readIdentityToken = async (token: string | null) =>
  */
 async function revokeAllSessionsForUser(userId: string) {
   await primaryDb.delete(authSessions).where(eq(authSessions.userId, userId));
+}
+
+/**
+ * Ends the caller's other sessions right before the second factor is switched
+ * on or off.
+ *
+ * The two-factor plugin writes `twoFactorEnabled` only after the password and,
+ * for enrollment, the authenticator code have been checked, and then rotates
+ * the caller's own session. Revoking here, before that write, means a session
+ * opened without the second factor (possibly by whoever prompted the change)
+ * cannot outlive enrollment, and none survives turning the factor off. A
+ * failed revocation aborts the write, so the factor never changes beside live
+ * old sessions.
+ */
+async function revokeOtherSessionsOnTwoFactorChange(
+  data: Record<string, unknown>,
+  context: GenericEndpointContext | null,
+) {
+  if (!("twoFactorEnabled" in data)) {
+    return;
+  }
+
+  const current = context?.context.session?.session;
+
+  if (!current) {
+    return;
+  }
+
+  await primaryDb
+    .delete(authSessions)
+    .where(
+      and(
+        eq(authSessions.userId, current.userId),
+        ne(authSessions.token, current.token),
+      ),
+    );
 }
 
 /**
@@ -434,22 +490,19 @@ async function revokeSessionsBeforePasswordReset(context: AuthHookContext) {
 /**
  * Revokes the caller's other sessions before a password change is applied.
  *
- * The current password is verified first so a failed attempt cannot sign the
- * user out of their other devices; the endpoint still performs its own check
- * and keeps the caller's rotated session. If the revocation cannot complete,
- * the request fails before the password changes.
+ * A password change is the response to a suspected credential compromise, so
+ * other sessions end whether or not the caller asked for it with
+ * `revokeOtherSessions`. The current password is verified first so a failed
+ * attempt cannot sign the user out of their other devices; the endpoint still
+ * performs its own check and keeps the caller's rotated session. If the
+ * revocation cannot complete, the request fails before the password changes.
  */
 async function revokeOtherSessionsBeforePasswordChange(
   context: AuthHookContext,
 ) {
-  const body = context.body as
-    | { revokeOtherSessions?: unknown; currentPassword?: unknown }
-    | undefined;
+  const body = context.body as { currentPassword?: unknown } | undefined;
 
-  if (
-    body?.revokeOtherSessions !== true ||
-    typeof body.currentPassword !== "string"
-  ) {
+  if (typeof body?.currentPassword !== "string") {
     return;
   }
 
@@ -533,6 +586,16 @@ export const auth = betterAuth({
         });
       }
 
+      if (TWO_FACTOR_VERIFY_PATHS.has(ctx.path)) {
+        const body = ctx.body as { trustDevice?: unknown } | undefined;
+
+        if (body?.trustDevice === true) {
+          throw new APIError("BAD_REQUEST", {
+            message: "Trusted devices are not supported",
+          });
+        }
+      }
+
       if (SENSITIVE_IDENTITY_PATHS.has(ctx.path)) {
         const session = await getSessionFromCtx(ctx, {
           disableCookieCache: true,
@@ -551,8 +614,7 @@ export const auth = betterAuth({
           SESSION_FRESH_AGE_SECONDS * 1000
         ) {
           throw new APIError("FORBIDDEN", {
-            message:
-              "Sign in again before changing the email address on this account",
+            message: "Sign in again before changing your account security",
           });
         }
       }
@@ -598,11 +660,37 @@ export const auth = betterAuth({
       organization: teams,
       member: usersOnTeam,
       invitation: userInvites,
+      twoFactor: authTwoFactors,
+      rateLimit: authRateLimits,
     },
   }),
+  /**
+   * Counters live in the primary database so the dashboard (which serves
+   * `/api/auth`) and the API process share one budget per client IP and path,
+   * and a restart does not reset them. See `AUTH_RATE_LIMIT_RULES`.
+   */
+  rateLimit: {
+    enabled: isAuthRateLimitEnabled(),
+    storage: "database",
+    window: 10,
+    max: 100,
+    customRules: AUTH_RATE_LIMIT_RULES,
+  },
   advanced: {
     database: {
       generateId: "uuid",
+    },
+    ipAddress: {
+      ipAddressHeaders: ["x-forwarded-for"],
+      trustedProxies: TRUSTED_PROXY_RANGES,
+    },
+    // Production is https-only (see `assertProductionAuthConfig`): cookies
+    // carry the `__Secure-` prefix and the Secure attribute, stay HttpOnly and
+    // are not sent on cross-site subrequests.
+    useSecureCookies: isProduction ? true : undefined,
+    defaultCookieAttributes: {
+      httpOnly: true,
+      sameSite: "lax",
     },
     crossSubDomainCookies: cookieDomain
       ? { enabled: true, domain: cookieDomain }
@@ -645,6 +733,8 @@ export const auth = betterAuth({
     maxPasswordLength: 128,
     requireEmailVerification: true,
     revokeSessionsOnPasswordReset: true,
+    // A reset link works once, within one hour of being requested.
+    resetPasswordTokenExpiresIn: 60 * 60,
     password: {
       hash: (password) => bcrypt.hash(password, 12),
       verify: ({ hash, password }) => bcrypt.compare(password, hash),
@@ -712,6 +802,11 @@ export const auth = betterAuth({
   },
   databaseHooks: {
     user: {
+      update: {
+        async before(data, context) {
+          await revokeOtherSessionsOnTwoFactorChange(data, context);
+        },
+      },
       create: {
         async after(user) {
           // Provisioning is retried on verification and sign-in, so a failure
@@ -777,6 +872,30 @@ export const auth = betterAuth({
       },
     }),
     bearer({ requireSignature: true }),
+    /**
+     * Authenticator-app (TOTP) second factor with single-use recovery codes.
+     *
+     * Enrollment is two-step: `/two-factor/enable` (password + recent sign-in)
+     * returns the secret and ten recovery codes, and the factor only becomes
+     * required once `/two-factor/verify-totp` accepts a code from the app. The
+     * secret and the recovery codes are stored encrypted with the auth secret;
+     * a recovery code is removed from the stored list the moment it is used.
+     * Email/SMS codes are not configured, so the factor is always something
+     * the mailbox alone cannot supply.
+     */
+    twoFactor({
+      issuer: "InvoiceWise",
+      backupCodeOptions: {
+        amount: 10,
+        length: 10,
+        storeBackupCodes: "encrypted",
+      },
+      accountLockout: {
+        enabled: true,
+        maxFailedAttempts: 10,
+        durationSeconds: 15 * 60,
+      },
+    }),
   ],
 });
 

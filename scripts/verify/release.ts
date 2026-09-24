@@ -916,6 +916,21 @@ async function securityRegressionSuites() {
     }),
     timeoutMs: 20 * 60 * 1000,
   });
+
+  await v.runStep("verify:account-security-http-regressions", {
+    command: "bun",
+    args: [
+      "--no-env-file",
+      "test",
+      "src/account-security.http.integration.test.ts",
+    ],
+    cwd: ws(API_DIR),
+    env: env({
+      ACCOUNT_SECURITY_TEST_DATABASE_URL: databaseUrl(IDENTITY_DATABASE),
+      ACCOUNT_SECURITY_TEST_PORT: String(await freePort()),
+    }),
+    timeoutMs: 20 * 60 * 1000,
+  });
 }
 
 /**

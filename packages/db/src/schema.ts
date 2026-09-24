@@ -1964,6 +1964,9 @@ export const users = pgTable(
     timeFormat: numericCasted("time_format").default(24),
     // UK day-first for new accounts; the dashboard falls back to the same.
     dateFormat: text("date_format").default("dd/MM/yyyy"),
+    // Better Auth two-factor plugin: set only once an authenticator code has
+    // been verified, cleared when the second factor is disabled or reset.
+    twoFactorEnabled: boolean("two_factor_enabled").default(false).notNull(),
   },
   (table) => [
     uniqueIndex("users_email_key").on(table.email),
@@ -2851,6 +2854,66 @@ export const authVerifications = pgTable(
       .notNull(),
   },
   (table) => [index("auth_verifications_identifier_idx").on(table.identifier)],
+);
+
+/**
+ * Better Auth two-factor plugin state: the encrypted TOTP secret and the
+ * encrypted list of unused recovery codes. One row per account.
+ */
+export const authTwoFactors = pgTable(
+  "auth_two_factors",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    secret: text().notNull(),
+    backupCodes: text("backup_codes").notNull(),
+    userId: uuid("user_id").notNull(),
+    verified: boolean().default(true).notNull(),
+    failedVerificationCount: integer("failed_verification_count")
+      .default(0)
+      .notNull(),
+    lockedUntil: timestamp("locked_until", {
+      withTimezone: true,
+      mode: "date",
+    }),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "date",
+    })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "date",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("auth_two_factors_user_id_key").on(table.userId),
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [users.id],
+      name: "auth_two_factors_user_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+/**
+ * Better Auth rate-limit counters, kept in the primary database so the
+ * dashboard and API processes share one budget per client and path.
+ */
+export const authRateLimits = pgTable(
+  "auth_rate_limits",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    key: text().notNull(),
+    count: integer().notNull(),
+    lastRequest: bigint("last_request", { mode: "number" }).notNull(),
+  },
+  (table) => [
+    unique("auth_rate_limits_key_key").on(table.key),
+    index("auth_rate_limits_last_request_idx").on(table.lastRequest),
+  ],
 );
 
 export const shortLinks = pgTable(

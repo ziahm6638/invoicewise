@@ -188,7 +188,7 @@ the workspace rules around them instead of keeping a second copy.
 | Signup | `/api/auth/sign-up/email`, then the emailed verification link | Verification signs the account in and provisions one personal workspace; a failed provisioning attempt is retried on the link and on sign-in |
 | Email change | `/api/auth/change-email`, then the link sent to the new address | Requires a session signed in within the recent-auth window; completing the change ends every session, including the one the completion response would issue |
 | Password reset | `/api/auth/request-password-reset`, then `/api/auth/reset-password` | Every session ends and the account signs in again |
-| Password change | `/api/auth/change-password` with `revokeOtherSessions` | The caller receives one fresh session; every other session ends |
+| Password change | `/api/auth/change-password` | Every other session ends, whether or not `revokeOtherSessions` is sent; with it, the caller also receives one fresh session |
 | Invitations | dashboard `team.invite` / `team.acceptInvite` (tRPC), delivered by the `invite-team-members` queue job | Unaffected by identity changes |
 
 The rules that keep those flows safe:
@@ -214,10 +214,72 @@ The rules that keep those flows safe:
   never needs a manual database repair.
 - Session revocation is ordered *before* the identity or credential mutation it
   protects: `/verify-email` for a change-email token, `/reset-password`, and
-  `/change-password` with `revokeOtherSessions`. If the revocation cannot
+  `/change-password`. If the revocation cannot
   complete, the request fails with the verified address, reset token and
   password unchanged, so the customer can retry the same link instead of being
   left with a moved address or a new password beside live old sessions.
+
+### Account security
+
+The dashboard's **Account → Security** page drives Better Auth's `twoFactor`
+plugin and session APIs; there is no custom factor or session store.
+
+- **Second factor.** Authenticator-app TOTP with ten single-use recovery codes.
+  `/two-factor/enable` needs the password and returns the secret and codes once;
+  the factor becomes required only after `/two-factor/verify-totp` accepts a
+  code. Secret and codes are stored encrypted with `BETTER_AUTH_SECRET` in
+  `auth_two_factors`; a used code is removed. Turning the factor on or off ends
+  every other session (`databaseHooks.user.update`). Re-enrolling is off, then
+  on: new secret, new codes. Email/SMS codes and trusted devices are not
+  offered (`trustDevice: true` is refused).
+- **Recent authentication.** Enabling, disabling, fetching the TOTP URI and
+  regenerating recovery codes need a session younger than `session.freshAge`
+  (24 hours) as well as the password (`SENSITIVE_IDENTITY_PATHS` in
+  `apps/api/src/auth.ts`).
+- **Sessions.** Users list and revoke their sessions (`/list-sessions`,
+  `/revoke-session`, `/revoke-other-sessions`). Session rows are authoritative:
+  no cookie cache or secondary storage is configured, and the API's cookie and
+  bearer authentication both read the row, so a revoked session fails its next
+  request everywhere.
+- **Owner visibility.** `team.members` includes each member's second-factor
+  state for workspace owners only; other roles receive `null`.
+- **Rate limits.** `AUTH_RATE_LIMIT_RULES` in `apps/api/src/auth-policy.ts`
+  budgets sign-in, signup, reset, verification, password/email change and every
+  `/two-factor/*` path per client IP, stored in `auth_rate_limits` so the
+  dashboard and API share one budget. The client IP is the first untrusted hop
+  in `X-Forwarded-For`. The plugin also caps each sign-in challenge at five
+  code attempts and locks the factor for 15 minutes after ten failures.
+  Limiting is always on in production; elsewhere it is off unless
+  `AUTH_RATE_LIMIT=enforce`. Unknown addresses and wrong passwords get the same
+  response, and reset requests answer the same for any address.
+- **Production preflight.** `assertProductionAuthConfig` refuses to boot on a
+  missing, short (<32) or local-development `BETTER_AUTH_SECRET`, a non-https
+  `BETTER_AUTH_URL` or `ALLOWED_API_ORIGINS` entry (loopback excepted), a cookie
+  domain that does not cover the auth origin, or an `AUTH_EMAIL_FROM` outside
+  the `SMTP_USER` mailbox's domain. Production cookies are `__Secure-`,
+  `Secure`, `HttpOnly` and `SameSite=Lax`.
+
+#### Lost second factor
+
+A user who has lost the authenticator signs in with one recovery code, then
+turns the factor off and on again to get a new secret and codes. With no codes
+left, an operator confirms the account holder's identity out of band (for
+example from the account's verified mailbox plus a detail only the owner
+knows), then runs:
+
+```bash
+kamal app exec --roles api --reuse \
+  "bun apps/api/src/scripts/reset-second-factor.ts --email person@example.com"
+```
+
+It removes the factor and ends every session in one transaction. Workspace
+memberships and roles are untouched, so recovery never grants more access; the
+user signs in with the password and should enroll again.
+
+Coverage: `apps/api/src/account-security.http.integration.test.ts` (enrollment,
+two sessions, revocation, single-use recovery codes, replay, stale sessions,
+lost factor, owner visibility, reset-link expiry, rate limits) and
+`apps/api/src/auth-policy.test.ts` (production preflight).
 
 ### Transactional mail
 
@@ -396,9 +458,9 @@ Requirements and isolation rules:
   a different disposable stack (defaults are local: `localhost` for Postgres, `127.0.0.1` for Redis and MinIO).
 - Every port the command itself binds is per-run. The API executable and
   dashboard origins are chosen free at start (or pinned with
-  `VERIFY_API_PORT` / `VERIFY_DASHBOARD_PORT`), the three HTTP regression suites
+  `VERIFY_API_PORT` / `VERIFY_DASHBOARD_PORT`), the four HTTP regression suites
   receive their own free ports through `PERMISSIONS_TEST_PORT`,
-  `INTAKE_TEST_PORT` and `IDENTITY_TEST_PORT`, and the delivery verifier's
+  `INTAKE_TEST_PORT`, `IDENTITY_TEST_PORT` and `ACCOUNT_SECURITY_TEST_PORT`, and the delivery verifier's
   webhook listener binds port 0. Two `bun run verify` runs in different
   worktrees on one machine therefore cannot collide on app ports; give each run
   its own backing stack by starting a second `ci-services.sh` with a distinct

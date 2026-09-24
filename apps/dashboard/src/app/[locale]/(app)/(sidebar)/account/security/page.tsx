@@ -1,4 +1,6 @@
+import { ActiveSessions } from "@/components/active-sessions";
 import { ChangePassword } from "@/components/change-password";
+import { TwoFactorSettings } from "@/components/two-factor-settings";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -6,5 +8,11 @@ export const metadata: Metadata = {
 };
 
 export default function Security() {
-  return <ChangePassword />;
+  return (
+    <div className="space-y-12">
+      <ChangePassword />
+      <TwoFactorSettings />
+      <ActiveSessions />
+    </div>
+  );
 }
