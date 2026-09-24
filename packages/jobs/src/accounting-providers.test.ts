@@ -392,7 +392,12 @@ describe("QuickBooks", () => {
       {
         ...bill,
         lineItems: [
-          { description: "Labour", quantity: null, unitPrice: null, total: 100 },
+          {
+            description: "Labour",
+            quantity: null,
+            unitPrice: null,
+            total: 100,
+          },
           {
             description: "Materials",
             quantity: null,
@@ -416,7 +421,12 @@ describe("QuickBooks", () => {
       {
         ...bill,
         lineItems: [
-          { description: "Labour", quantity: null, unitPrice: null, total: 100 },
+          {
+            description: "Labour",
+            quantity: null,
+            unitPrice: null,
+            total: 100,
+          },
           { description: "Materials", quantity: 1, unitPrice: 20, total: 20 },
         ],
       },

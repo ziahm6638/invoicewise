@@ -50,8 +50,8 @@ callback). The bill adapters read them from the connection.
 ## What each provider receives
 
 - **Xero**: an `ACCPAY` invoice in `DRAFT` (a bill awaiting approval, never
-  approved or paid), contact by supplier name, line items (or one line for the
-  net total), amounts exclusive of tax. The request carries
+  approved or paid), contact by supplier name, line items, amounts exclusive
+  of tax. The request carries
   `Idempotency-Key: invoicewise:<invoice UUID>`, so a retried post returns the
   original bill. The source document is then uploaded to the bill's
   attachments by file name (a repeat replaces it rather than duplicating it).
@@ -60,6 +60,10 @@ callback). The bill adapters read them from the connection.
   first expense account; `requestid=invoicewise:<invoice UUID>` makes the
   create idempotent. The document is uploaded as an `Attachable` linked to the
   bill unless one already is.
+
+Both post the extracted line items only when every line has an amount and they
+add up to the net total (within 0.01); otherwise the bill carries a single line
+for the net total, so a bill never understates the invoice.
 
 Provider validation errors (Xero `ValidationErrors`, QuickBooks `Fault`) are
 kept verbatim on the invoice. Missing organisation or supplier is permanent;
@@ -74,7 +78,8 @@ attachment fails is recorded as posted and logs the attachment error.
    limited to that provider's integration.
 3. The dashboard opens Nango Connect UI (`@nangohq/frontend`) with the session
    token, the public API URL and the Connect UI host from the session's
-   `connect_link` (`https://nango-connect.invoicewise.uk`). The provider
+   `connect_link` (`https://nango-connect.invoicewise.uk`); a session without
+   one is refused rather than falling back to Nango Cloud. The provider
    consent screen runs in a popup and returns to Nango's callback.
 4. On Connect UI's `connect` event the API verifies the connection carries this
    workspace's tag and the configured integration, then stores the connection
