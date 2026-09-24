@@ -112,7 +112,8 @@ foreign-session state is refused and a concurrent replay succeeds at most once.
 `redirectPath` through `safeRedirectPath`
 (`apps/dashboard/src/utils/safe-redirect.ts`), which keeps only same-origin
 relative paths and falls back to `/` for absolute, protocol-relative or
-backslash targets.
+backslash targets; the kept path is resolved against the public app origin
+(`getPublicUrl`), never the proxied request's internal origin.
 
 **Invitations.** One flow, stored in `user_invites`: recipient email, status
 and expiry are checked under the team lock at acceptance time, and the invite
