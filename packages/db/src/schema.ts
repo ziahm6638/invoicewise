@@ -129,6 +129,15 @@ export const accountingProviderEnum = pgEnum("accounting_provider", [
   "xero",
   "quickbooks",
 ]);
+export const deletionSubjectEnum = pgEnum("deletion_subject", [
+  "workspace",
+  "account",
+]);
+export const deletionStatusEnum = pgEnum("deletion_status", [
+  "pending",
+  "completed",
+  "failed",
+]);
 export const accountingPostStatusEnum = pgEnum("accounting_post_status", [
   "posted",
   "already_posted",
@@ -1501,6 +1510,80 @@ export const workflowJobs = pgTable(
     ),
     index("workflow_jobs_due_idx").on(table.status, table.runAt),
     index("workflow_jobs_team_id_idx").on(table.teamId),
+  ],
+);
+
+/**
+ * A provider connection captured when its workspace was deleted, so cleanup
+ * can still revoke it after the workspace's own rows are gone. A mailbox keeps
+ * only the encrypted refresh token, and only until it has been revoked.
+ */
+export type DeletionConnection =
+  | {
+      kind: "accounting";
+      provider: "xero" | "quickbooks";
+      connectionId: string;
+      integrationId: string;
+      revokedAt?: string;
+    }
+  | {
+      kind: "mailbox";
+      provider: "gmail" | "outlook";
+      accountId: string;
+      refreshToken: string | null;
+      revokedAt?: string;
+    };
+
+/**
+ * Durable record of an account or workspace deletion.
+ *
+ * The subject's database rows are removed when the request is accepted; this
+ * row carries what cleanup still has to do outside the database (provider
+ * connections and private objects), its progress and its last error. It has no
+ * foreign key to the subject, so it survives the deletion it describes.
+ */
+export const deletionRequests = pgTable(
+  "deletion_requests",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    subject: deletionSubjectEnum().notNull(),
+    subjectId: uuid("subject_id").notNull(),
+    requestedBy: uuid("requested_by"),
+    status: deletionStatusEnum().default("pending").notNull(),
+    connections: jsonb()
+      .$type<DeletionConnection[]>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    quiesceUntil: timestamp("quiesce_until", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    connectionsRevokedAt: timestamp("connections_revoked_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    storagePurgedAt: timestamp("storage_purged_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    attempts: integer().default(0).notNull(),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("deletion_requests_subject_key").on(table.subject, table.subjectId),
+    index("deletion_requests_status_idx").on(table.status),
   ],
 );
 

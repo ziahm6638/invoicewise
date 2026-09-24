@@ -22,6 +22,7 @@
     "db:migrate": "cd packages/db && bun --env-file=../../.env run migrate",
     "jobs:worker": "cd packages/jobs && bun --env-file=../../.env run worker",
     "jobs:status": "cd packages/jobs && bun --env-file=../../.env run status",
+    "jobs:resume-deletions": "cd packages/jobs && bun --env-file=../../.env run resume-deletions",
     "format": "biome format --write .",
     "lint": "turbo lint && manypkg check",
     "typecheck": "turbo typecheck"

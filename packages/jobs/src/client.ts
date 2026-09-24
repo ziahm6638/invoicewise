@@ -63,4 +63,7 @@ export const workflowKey = {
   onboarding: (userId: string, stage = "welcome") => `${userId}:${stage}`,
   accounting: (teamId: string, invoiceId: string) => `${teamId}:${invoiceId}`,
   webhook: (eventId: string, endpointId: string) => `${eventId}:${endpointId}`,
+  /** A cleanup run deferred until the deletion's quiesce time. */
+  deletionResume: (deletionId: string, resumeAt: string) =>
+    `${deletionId}:after:${resumeAt}`,
 };

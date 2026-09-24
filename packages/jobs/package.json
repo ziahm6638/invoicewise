@@ -5,6 +5,7 @@
   "scripts": {
     "worker": "bun run src/worker.ts",
     "status": "bun run src/status.ts",
+    "resume-deletions": "bun run src/resume-deletions.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test src",
     "verify": "bun run src/verify-workflows.ts",
@@ -18,6 +19,7 @@
     "./runner": "./src/runner.ts",
     "./schema": "./src/schema.ts",
     "./accounting": "./src/accounting.ts",
+    "./deletion": "./src/deletion.ts",
     "./webhooks": "./src/webhooks.ts"
   },
   "dependencies": {

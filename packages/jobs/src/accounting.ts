@@ -144,16 +144,22 @@ export async function completeAccountingConnection(
   });
 }
 
-export async function disconnectAccountingConnection(
-  db: Database,
-  input: { teamId: string; provider: AccountingProvider },
+/**
+ * Deletes a connection in Nango, which removes the provider credentials it
+ * holds. A connection Nango no longer has counts as already revoked.
+ */
+export async function revokeAccountingConnection(
+  connection: {
+    provider: AccountingProvider;
+    connectionId: string;
+    /** The integration the connection was made under, when it is known. */
+    integrationId?: string;
+  },
   env = process.env,
 ) {
-  const connection = await getActiveAccountingConnectionByProvider(db, input);
-  if (!connection) return undefined;
-  const config = getNangoConfig(input.provider, env);
+  const config = getNangoConfig(connection.provider, env);
   const query = new URLSearchParams({
-    provider_config_key: config.integrationId,
+    provider_config_key: connection.integrationId ?? config.integrationId,
   });
   try {
     await nangoRequest(
@@ -165,6 +171,19 @@ export async function disconnectAccountingConnection(
     if (!(error instanceof NangoRequestError && error.status === 404))
       throw error;
   }
+}
+
+export async function disconnectAccountingConnection(
+  db: Database,
+  input: { teamId: string; provider: AccountingProvider },
+  env = process.env,
+) {
+  const connection = await getActiveAccountingConnectionByProvider(db, input);
+  if (!connection) return undefined;
+  await revokeAccountingConnection(
+    { provider: input.provider, connectionId: connection.connectionId },
+    env,
+  );
   return disconnectAccountingConnectionRecord(db, input);
 }
 

@@ -102,4 +102,51 @@ describe("S3-compatible storage", () => {
       expect(storage.download(input)).rejects.toThrow();
     },
   );
+
+  integrationTest(
+    "removes a workspace prefix across pages without touching a sibling",
+    async () => {
+      const storage = createStorageClientFromEnv();
+      const run = `storage-prefix-test-${crypto.randomUUID()}`;
+      const target = [run, "workspace"];
+      const sibling = [run, "workspace-sibling"];
+      // A few objects keep the run fast: removal lists again after every
+      // batch, so one batch and many take the same path.
+      const targetPaths = Array.from({ length: 25 }, (_, index) => [
+        ...target,
+        "documents",
+        String(index),
+        "invoice.pdf",
+      ]);
+      const siblingPath = [...sibling, "documents", "0", "invoice.pdf"];
+
+      try {
+        for (const path of [...targetPaths, siblingPath]) {
+          await storage.upload({
+            bucket: "vault",
+            path,
+            file: Buffer.from("x"),
+          });
+        }
+
+        await storage.removePrefix({ bucket: "vault", prefix: target });
+        await storage.removePrefix({ bucket: "vault", prefix: target });
+
+        for (const path of targetPaths) {
+          await expect(
+            storage.download({ bucket: "vault", path }),
+          ).rejects.toThrow();
+        }
+        expect(
+          Buffer.from(
+            await (
+              await storage.download({ bucket: "vault", path: siblingPath })
+            ).arrayBuffer(),
+          ).toString("utf8"),
+        ).toBe("x");
+      } finally {
+        await storage.removePrefix({ bucket: "vault", prefix: [run] });
+      }
+    },
+  );
 });

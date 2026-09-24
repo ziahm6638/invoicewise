@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, extname, resolve, sep } from "node:path";
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -37,6 +39,16 @@ type UploadInput = StoragePath & {
   file: Blob | Buffer | Uint8Array | ArrayBuffer;
   contentType?: string;
   /** Optional abort signal so a stalled operation settles instead of hanging. */
+  signal?: AbortSignal;
+};
+
+type RemovePrefixInput = {
+  bucket: string;
+  /**
+   * Directory-like prefix, removed with everything below it. It must be a
+   * non-empty path, so a bucket can never be emptied wholesale.
+   */
+  prefix: string | string[];
   signal?: AbortSignal;
 };
 
@@ -160,6 +172,15 @@ function createLocalBackend(
       await rm(absolutePath, { force: true });
       input.signal?.throwIfAborted();
     },
+    async removePrefix(input: RemovePrefixInput) {
+      const { absolutePath } = resolveStoragePath({
+        bucket: input.bucket,
+        path: input.prefix,
+      });
+      input.signal?.throwIfAborted();
+      await rm(absolutePath, { recursive: true, force: true });
+      input.signal?.throwIfAborted();
+    },
   };
 }
 
@@ -267,6 +288,56 @@ function createS3Backend(
         new DeleteObjectCommand({ Bucket: config.bucket, Key: key(input) }),
         { abortSignal: input.signal },
       );
+    },
+    async removePrefix(input: RemovePrefixInput) {
+      // The trailing slash keeps `<id>/` from matching a sibling `<id>x/`.
+      const prefix = `${key({ bucket: input.bucket, path: input.prefix })}/`;
+
+      // Delete page by page and list again from the start: removed keys drop
+      // out of the listing, so no continuation token can go stale. A page
+      // that survives its own deletion fails instead of looping forever.
+      let previousPage = "";
+      for (;;) {
+        const listed = await client.send(
+          new ListObjectsV2Command({
+            Bucket: config.bucket,
+            Prefix: prefix,
+            MaxKeys: 1000,
+          }),
+          { abortSignal: input.signal },
+        );
+        const keys = (listed.Contents ?? [])
+          .map((object) => object.Key)
+          .filter((value): value is string => !!value);
+
+        if (keys.length === 0) return;
+
+        const page = keys.join("\n");
+        if (page === previousPage) {
+          throw new Error("Stored objects remained after deletion");
+        }
+        previousPage = page;
+
+        const deleted = await client.send(
+          new DeleteObjectsCommand({
+            Bucket: config.bucket,
+            Delete: {
+              Objects: keys.map((Key) => ({ Key })),
+              Quiet: true,
+            },
+          }),
+          { abortSignal: input.signal },
+        );
+
+        if (deleted.Errors?.length) {
+          const [first] = deleted.Errors;
+          throw new Error(
+            `Unable to remove ${deleted.Errors.length} stored object(s): ${
+              first?.Code ?? "unknown error"
+            }`,
+          );
+        }
+      }
     },
   };
 }
@@ -426,6 +497,10 @@ export const download = (
 export const remove = (
   input: Parameters<ReturnType<typeof createStorageClient>["remove"]>[0],
 ) => defaultStorageClient().remove(input);
+
+export const removePrefix = (
+  input: Parameters<ReturnType<typeof createStorageClient>["removePrefix"]>[0],
+) => defaultStorageClient().removePrefix(input);
 
 export const signedUrl = (
   input: Parameters<ReturnType<typeof createStorageClient>["signedUrl"]>[0],

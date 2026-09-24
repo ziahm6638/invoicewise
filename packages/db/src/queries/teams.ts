@@ -16,6 +16,12 @@ import {
 } from "@invoicewise/categories";
 import { and, eq, ne } from "drizzle-orm";
 import {
+  recordDeletionRequest,
+  snapshotWorkspaceConnections,
+  workspaceDeletionConfirmation,
+  workspaceQuiesceUntil,
+} from "./deletion-requests";
+import {
   TeamPermissionError,
   type TeamRole,
   canAssignRole,
@@ -24,6 +30,7 @@ import {
   canTransferOwnership,
   countTeamOwners,
   getTeamMemberRow,
+  isPostgresError,
   isTeamRole,
   lockTeamRow,
 } from "./team-permissions";
@@ -620,65 +627,123 @@ export async function leaveTeam(db: Database, params: LeaveTeamParams) {
 type DeleteTeamParams = {
   teamId: string;
   userId: string;
+  /** The workspace name, typed by the owner (see `workspaceDeletionConfirmation`). */
+  confirmName: string;
 };
 
+/**
+ * Deletes a workspace. Owner-only, and only with the workspace named back.
+ *
+ * Everything that can act on the workspace goes in this one transaction: its
+ * rows cascade with the team (memberships, invitations, API keys, OAuth
+ * tokens, mailbox and accounting connection records, invoices and queued or
+ * retrying jobs), and every member's active-workspace pointers are moved off
+ * it. With the team row gone, a late write — a job that was already running,
+ * a provider callback, incoming mail — fails on its foreign key instead of
+ * recreating data.
+ *
+ * What lives outside the database (provider connections, private objects) is
+ * captured in a durable deletion request whose cleanup is resumable; see
+ * `docs/offboarding.md`.
+ */
 export async function deleteTeam(db: Database, params: DeleteTeamParams) {
-  return db.transaction(async (tx) => {
-    if (!(await lockTeamRow(tx, params.teamId))) {
-      throw new TeamPermissionError("NOT_FOUND", "Team not found");
-    }
+  try {
+    return await db.transaction(async (tx) => {
+      const [team] = await tx
+        .select({ id: teams.id, name: teams.name })
+        .from(teams)
+        .where(eq(teams.id, params.teamId))
+        .for("update")
+        .limit(1);
 
-    const actor = await getTeamMemberRow(tx, params.teamId, params.userId);
+      if (!team) {
+        throw new TeamPermissionError("NOT_FOUND", "Team not found");
+      }
 
-    if (!canDeleteWorkspace(actor?.role)) {
+      const actor = await getTeamMemberRow(tx, params.teamId, params.userId);
+
+      if (!canDeleteWorkspace(actor?.role)) {
+        throw new TeamPermissionError(
+          "FORBIDDEN",
+          "Only the workspace owner can delete it",
+        );
+      }
+
+      if (
+        params.confirmName.trim() !== workspaceDeletionConfirmation(team.name)
+      ) {
+        throw new TeamPermissionError(
+          "BAD_REQUEST",
+          "Type the workspace name exactly to confirm deletion",
+        );
+      }
+
+      // Everyone whose stored or session pointer could name the workspace,
+      // collected before the membership rows cascade away.
+      const members = await tx
+        .select({ userId: usersOnTeam.userId })
+        .from(usersOnTeam)
+        .where(eq(usersOnTeam.teamId, params.teamId));
+      const pointedUsers = await tx
+        .select({ userId: users.id })
+        .from(users)
+        .where(eq(users.teamId, params.teamId));
+      const pointedSessions = await tx
+        .select({ userId: authSessions.userId })
+        .from(authSessions)
+        .where(eq(authSessions.activeOrganizationId, params.teamId));
+
+      // Repoint before deleting: the session pointer's foreign key is
+      // `ON DELETE SET NULL`, so once the team row is gone the sessions no
+      // longer name it and would be left with no active workspace while
+      // `users.team_id` still names one. Repointing already excludes this
+      // workspace, so its membership rows (which cascade with the team) are
+      // never chosen. User rows are locked in id order so concurrent deletions
+      // cannot deadlock on them.
+      const affectedUserIds = [
+        ...new Set(
+          [...members, ...pointedUsers, ...pointedSessions].map(
+            (row) => row.userId,
+          ),
+        ),
+      ].sort();
+
+      for (const userId of affectedUserIds) {
+        await repointActiveWorkspace(tx, userId, params.teamId);
+      }
+
+      const connections = await snapshotWorkspaceConnections(tx, params.teamId);
+      const quiesceUntil = await workspaceQuiesceUntil(
+        tx,
+        params.teamId,
+        new Date(),
+      );
+
+      await tx.delete(teams).where(eq(teams.id, params.teamId));
+
+      const request = await recordDeletionRequest(tx, {
+        subject: "workspace",
+        subjectId: params.teamId,
+        requestedBy: params.userId,
+        connections,
+        quiesceUntil,
+      });
+
+      return { id: team.id, deletionRequestId: request.id };
+    });
+  } catch (error) {
+    // Deletion takes the team lock and then touches member user rows, while
+    // account deletion takes them the other way round. Postgres breaks such a
+    // deadlock by killing one side; report it as a retryable conflict.
+    if (isPostgresError(error, "40P01")) {
       throw new TeamPermissionError(
-        "FORBIDDEN",
-        "Only the workspace owner can delete it",
+        "CONFLICT",
+        "Workspace deletion raced another workspace change. Retry the request",
       );
     }
 
-    // Everyone whose stored or session pointer could name the workspace,
-    // collected before the membership rows cascade away.
-    const members = await tx
-      .select({ userId: usersOnTeam.userId })
-      .from(usersOnTeam)
-      .where(eq(usersOnTeam.teamId, params.teamId));
-    const pointedUsers = await tx
-      .select({ userId: users.id })
-      .from(users)
-      .where(eq(users.teamId, params.teamId));
-    const pointedSessions = await tx
-      .select({ userId: authSessions.userId })
-      .from(authSessions)
-      .where(eq(authSessions.activeOrganizationId, params.teamId));
-
-    // Repoint before deleting: the session pointer's foreign key is
-    // `ON DELETE SET NULL`, so once the team row is gone the sessions no longer
-    // name it and would be left with no active workspace while `users.team_id`
-    // still names one. Repointing already excludes this workspace, so its
-    // membership rows (which cascade with the team) are never chosen. User rows
-    // are locked in id order so concurrent deletions cannot deadlock on them.
-    const affectedUserIds = [
-      ...new Set(
-        [...members, ...pointedUsers, ...pointedSessions].map(
-          (row) => row.userId,
-        ),
-      ),
-    ].sort();
-
-    for (const userId of affectedUserIds) {
-      await repointActiveWorkspace(tx, userId, params.teamId);
-    }
-
-    const [result] = await tx
-      .delete(teams)
-      .where(eq(teams.id, params.teamId))
-      .returning({
-        id: teams.id,
-      });
-
-    return result;
-  });
+    throw error;
+  }
 }
 
 type DeleteTeamMemberParams = {

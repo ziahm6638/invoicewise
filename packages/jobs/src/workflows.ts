@@ -8,6 +8,7 @@ import {
   getInboxAccountInfo,
   getTeamById,
   getUserById,
+  recordDeletionFailure,
   recordInboxProcessingFailure,
   updateInboxAccount,
 } from "@invoicewise/db/queries";
@@ -46,6 +47,11 @@ import { type CreateContactOptions, Resend } from "resend";
 import { enqueueAccountingPost, postAccountingDraft } from "./accounting";
 import { workflowKey } from "./client";
 import {
+  DeletionCleanupError,
+  revokeDeletionConnection,
+  runDeletionCleanup,
+} from "./deletion";
+import {
   acceptIntakeUpload,
   resolveWorkerIntakeBinding,
   verifyStoredIntake,
@@ -59,6 +65,7 @@ import {
   type OnboardTeamPayload,
   type PostAccountingDraftPayload,
   type ProcessAttachmentPayload,
+  type PurgeDeletedDataPayload,
   type SyncInboxAccountPayload,
   WorkflowRequest,
 } from "./schema";
@@ -813,6 +820,92 @@ const makeOnboardTeam = (db: Database, mailer: WorkflowMailer["Type"]) =>
     return { userId: payload.userId, stage };
   });
 
+const makePurgeDeletedData = (
+  db: Database,
+  storage: ReturnType<typeof createStorageClient>,
+) =>
+  Effect.fn("purgeDeletedDataWorkflow")(function* (
+    job: WorkflowJob,
+    payload: PurgeDeletedDataPayload,
+  ) {
+    const outcome = yield* Effect.tryPromise({
+      try: () =>
+        runDeletionCleanup(
+          {
+            db,
+            storage,
+            revokeConnection: (connection) =>
+              revokeDeletionConnection(connection),
+          },
+          payload.deletionId,
+        ),
+      catch: (error) =>
+        new WorkflowExecutionError({
+          reason:
+            error instanceof Error ? error.message : "Deletion cleanup failed",
+          retryable: !(
+            error instanceof DeletionCleanupError && !error.retryable
+          ),
+        }),
+    }).pipe(
+      // The deletion request keeps its progress and the reason for every
+      // failed run, and is marked failed once the job gives up, so an
+      // exhausted cleanup is visible to operators and can be resumed.
+      Effect.tapError((error) =>
+        attempt(
+          () =>
+            recordDeletionFailure(db, {
+              id: payload.deletionId,
+              error: error.reason,
+              final: !error.retryable || job.attempts >= job.maxAttempts,
+            }),
+          "Unable to record deletion failure",
+        ).pipe(
+          Effect.catchAll((recordError) =>
+            Effect.logError("deletion_failure_record_failed").pipe(
+              Effect.annotateLogs({
+                event: "deletion_failure_record_failed",
+                deletionId: payload.deletionId,
+                error: recordError.reason,
+              }),
+            ),
+          ),
+        ),
+      ),
+      Effect.tapError((error) =>
+        Effect.logError("deletion_cleanup_failed").pipe(
+          Effect.annotateLogs({
+            event: "deletion_cleanup_failed",
+            deletionId: payload.deletionId,
+            attempt: job.attempts,
+            error: error.reason,
+          }),
+        ),
+      ),
+    );
+
+    if (outcome.status === "waiting") {
+      // Objects are purged after the quiesce time; schedule that run instead
+      // of holding a worker or spending a retry.
+      yield* attempt(
+        () =>
+          enqueueWorkflowJob(db, {
+            name: "purge-deleted-data",
+            payload: { deletionId: payload.deletionId },
+            runAt: new Date(outcome.resumeAt),
+            idempotencyKey: workflowKey.deletionResume(
+              payload.deletionId,
+              outcome.resumeAt,
+            ),
+            maxAttempts: job.maxAttempts,
+          }),
+        "Unable to schedule deletion cleanup",
+      );
+    }
+
+    return outcome;
+  });
+
 export const WorkflowHandlerLive = Layer.effect(
   WorkflowHandler,
   Effect.gen(function* () {
@@ -824,6 +917,7 @@ export const WorkflowHandlerLive = Layer.effect(
     const initialInboxSetup = makeInitialInboxSetup(db);
     const inviteTeamMembers = makeInviteTeamMembers(mailer);
     const onboardTeam = makeOnboardTeam(db, mailer);
+    const purgeDeletedData = makePurgeDeletedData(db, storage);
     const webhookRepository = makeWebhookDeliveryRepository(db);
     const postAccountingDraftJob = (payload: PostAccountingDraftPayload) =>
       postAccountingDraft(db, storage, payload).pipe(
@@ -878,6 +972,8 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* deliverWebhookJob(job, request.payload);
             case "post-accounting-draft":
               return yield* postAccountingDraftJob(request.payload);
+            case "purge-deleted-data":
+              return yield* purgeDeletedData(job, request.payload);
           }
         }) as Effect.Effect<Record<string, unknown>, WorkflowExecutionError>,
     };

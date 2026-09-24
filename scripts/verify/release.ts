@@ -868,6 +868,20 @@ async function securityRegressionSuites() {
     timeoutMs: 10 * 60 * 1000,
   });
 
+  await v.runStep("verify:security-offboarding", {
+    command: "bun",
+    args: [
+      "--no-env-file",
+      "test",
+      "src/trpc/routers/team.offboarding.integration.test.ts",
+    ],
+    cwd: ws(API_DIR),
+    env: env({
+      PERMISSIONS_TEST_DATABASE_URL: databaseUrl(PERMISSIONS_DATABASE),
+    }),
+    timeoutMs: 10 * 60 * 1000,
+  });
+
   // The HTTP suites boot their own server on a per-run free port and must run
   // sequentially; the intake helpers scan the shared disposable database.
   await v.runStep("verify:security-http-regressions", {

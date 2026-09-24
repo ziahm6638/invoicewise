@@ -6,3 +6,4 @@ This directory contains technical documentation for InvoiceWise.
 - [Effect architecture](effect-architecture.md)
 - [REST, MCP, webhooks, and export](delivery.md)
 - [Nango accounting integrations](accounting-integrations.md)
+- [Offboarding and deletion](offboarding.md)

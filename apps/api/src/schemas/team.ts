@@ -143,6 +143,11 @@ export const deleteTeamSchema = z.object({
     description: "Unique identifier of the team to delete",
     example: "123e4567-e89b-12d3-a456-426614174000",
   }),
+  confirmName: z.string().max(255).openapi({
+    description:
+      "The workspace name, typed by the owner to confirm deletion (`DELETE` for an unnamed workspace)",
+    example: "Acme Ltd",
+  }),
 });
 
 export const deleteTeamMemberSchema = z.object({

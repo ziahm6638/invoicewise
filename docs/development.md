@@ -94,6 +94,10 @@ Inspect recent jobs and the `stuck` flag (a running row whose lease expired):
 bun run jobs:status
 ```
 
+It also lists unfinished account and workspace deletions. After fixing the
+cause of a `failed` one, re-queue its cleanup with `bun run jobs:resume-deletions`
+(see [offboarding](offboarding.md)).
+
 ## Run the dashboard
 
 ```bash
