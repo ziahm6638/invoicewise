@@ -27,7 +27,7 @@ const DEFAULT_QUESTIONS = [
     question:
       "Is the VAT calculation on `currentInvoice` arithmetically correct, so net amount plus VAT amount equals gross amount?",
     context:
-      "Allow normal currency rounding. Answer no when the amounts are missing or do not reconcile.",
+      "Allow normal currency rounding. Answer no when the amounts do not reconcile.",
   },
   {
     questionKey: "known_supplier",
@@ -43,7 +43,7 @@ const DEFAULT_QUESTIONS = [
     question:
       "Are `currentInvoice.bankDetails` consistent with bank details on previous invoices from the same supplier?",
     context:
-      "Answer no when material bank identifiers differ, are absent, or no prior bank detail exists for this supplier.",
+      "Answer no when material bank identifiers differ from a previous invoice from this supplier.",
   },
 ] as const;
 

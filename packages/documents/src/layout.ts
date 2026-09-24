@@ -89,7 +89,11 @@ export function layoutRuns(runs: readonly TextRun[], page = 1): DocumentLine[] {
       const gap = cell.x - previousEnd;
       const current = segments.at(-1);
       if (!current || gap > height * 1.2) {
-        segments.push({ x: cell.x, xEnd: cell.x + cell.width, text: cell.text });
+        segments.push({
+          x: cell.x,
+          xEnd: cell.x + cell.width,
+          text: cell.text,
+        });
       } else {
         // Runs closer than a word space are pieces of one word (kerning,
         // font changes); anything wider is a word break.

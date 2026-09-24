@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { layoutRuns, linesFromPlainText, runsFromTesseractTsv } from "../layout";
+import {
+  layoutRuns,
+  linesFromPlainText,
+  runsFromTesseractTsv,
+} from "../layout";
 import {
   accountNumberCandidates,
   addressCandidates,
@@ -164,6 +168,33 @@ describe("line items", () => {
         quantity: 10.5,
         unitPrice: 80,
         total: 840,
+      },
+    ]);
+  });
+
+  test("reads header cells printed close together as separate columns", () => {
+    const rows = lineItemRows(
+      linesFromPlainText(
+        [
+          "Description  Qty Unit Price VAT  Net",
+          "Boiler service and safety inspection  1  £180.00  20% £180.00",
+          "Replacement thermostatic radiator valve 4  £35.00  20% £140.00",
+          "Net Total:  £320.00",
+        ].join("\n"),
+      ),
+    );
+    expect(rows.map((row) => row.value)).toEqual([
+      {
+        description: "Boiler service and safety inspection",
+        quantity: 1,
+        unitPrice: 180,
+        total: 180,
+      },
+      {
+        description: "Replacement thermostatic radiator valve",
+        quantity: 4,
+        unitPrice: 35,
+        total: 140,
       },
     ]);
   });

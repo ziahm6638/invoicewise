@@ -58,7 +58,7 @@ export const columns: ColumnDef<OAuthApplication>[] = [
 
       return (
         <span className="text-sm text-muted-foreground truncate max-w-[200px]">
-          {format(new Date(updatedAt), "MMM d, yyyy")}
+          {format(new Date(updatedAt), "d MMM yyyy")}
         </span>
       );
     },

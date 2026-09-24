@@ -184,7 +184,10 @@ describe("invoice extraction from real PDFs", () => {
     const requests: Request[] = [];
     const result = await Effect.runPromise(
       processInvoice({
-        documentUrl: dataUrl(await fixture("uk-invoice.pdf"), "application/pdf"),
+        documentUrl: dataUrl(
+          await fixture("uk-invoice.pdf"),
+          "application/pdf",
+        ),
         mimetype: "application/pdf",
         companyName: "InvoiceWise Ltd",
       }).pipe(Effect.provide(oracle(ukInvoiceSelections, requests))),
@@ -218,6 +221,65 @@ describe("invoice extraction from real PDFs", () => {
     },
     60_000,
   );
+
+  test("reads a supplier named only in a wrapped footer, with a TO: customer block", async () => {
+    const result = await Effect.runPromise(
+      processInvoice({
+        documentUrl: dataUrl(
+          await fixture("uk-invoice-footer.pdf"),
+          "application/pdf",
+        ),
+        mimetype: "application/pdf",
+        companyName: "Harlow Estates Ltd",
+      }).pipe(
+        Effect.provide(
+          oracle({
+            supplier_name: "Brightwater Advisory Ltd",
+            supplier_address: "7 Canal Wharf, Wharf Road, Leeds, LS1 4BR",
+            invoice_number: "BW-2031",
+            invoice_date: "31/12/2025",
+            currency: "GBP",
+            gross_amount: 1200,
+            bank_account_name: "Brightwater Advisory Ltd",
+            bank_account_number: "41236789",
+            bank_sort_code: "30-94-57",
+          }),
+        ),
+      ),
+    );
+
+    expect(result.extraction).toEqual({
+      supplierName: "Brightwater Advisory Ltd",
+      supplierAddress: "7 Canal Wharf, Wharf Road, Leeds, LS1 4BR",
+      supplierVatNumber: null,
+      invoiceNumber: "BW-2031",
+      invoiceDate: "2025-12-31",
+      // "Payment due on receipt"
+      dueDate: "2025-12-31",
+      currency: "GBP",
+      netAmount: null,
+      vatAmount: null,
+      grossAmount: 1200,
+      lineItems: [
+        {
+          description: "Consultation – 1 DEC 25 to 31 DEC 25",
+          quantity: 4,
+          unitPrice: 300,
+          total: 1200,
+        },
+      ],
+      bankDetails: {
+        accountName: "Brightwater Advisory Ltd",
+        accountNumber: "41236789",
+        sortCode: "30-94-57",
+        iban: null,
+        bic: null,
+      },
+      description: null,
+      purchaseOrderReference: null,
+      textSource: "text-layer",
+    });
+  });
 
   test("fails, rather than saving an empty extraction, when nothing is readable", async () => {
     const error = await Effect.runPromise(
@@ -516,9 +578,11 @@ describe("TypeSafe invoice judgments", () => {
         }),
     });
     const result = await Effect.runPromise(
-      judgeInvoice(extraction, [{ id: "previous", extraction }], [
-        malformed,
-      ]).pipe(Effect.provide(JudgmentTest)),
+      judgeInvoice(
+        extraction,
+        [{ id: "previous", extraction }],
+        [malformed],
+      ).pipe(Effect.provide(JudgmentTest)),
     );
 
     expect(result).toHaveLength(5);
@@ -556,9 +620,17 @@ describe("live TypeSafe smoke", () => {
           companyName: "InvoiceWise Ltd",
         }).pipe(Effect.provide(TypeSafeLive)),
       );
-      const { description: _description, ...expected } =
-        ukInvoiceExtraction("text-layer");
+      // The address is printed twice (header block and footer); either copy
+      // is the supplier's address.
+      const {
+        description: _description,
+        supplierAddress: _address,
+        ...expected
+      } = ukInvoiceExtraction("text-layer");
       expect(result.extraction).toMatchObject(expected);
+      expect(result.extraction.supplierAddress).toMatch(
+        /^Unit 4, Riverside Trading Estate, Leeds,? LS11 5QP$/,
+      );
       expect(
         result.judgments.find(
           (judgment) => judgment.questionId === "vat_calculation_correct",

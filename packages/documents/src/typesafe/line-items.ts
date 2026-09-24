@@ -2,12 +2,16 @@
  * Line-item rows from invoice tables.
  *
  * A table is found by its header row (Description / Qty / Unit price /
- * Amount ...). Each following row until the totals is split into a
- * description and its numeric cells; the header's column order says which
- * number is the quantity, the unit price and the line total, and arithmetic
- * (quantity x unit price = total) settles the order when there is no usable
- * header. Rows without numbers continue the previous row's description, as
- * wrapped descriptions do. TypeSafe then confirms which rows are purchases.
+ * Amount ...), read as an ordered list of column roles; cells printed close
+ * together can share one text segment, so roles come from the header's words
+ * rather than its segments. Each following row until the totals keeps its
+ * description and ends in one number per numeric column, so the row's last N
+ * numbers map to the header's N numeric columns in order, and any earlier
+ * number (a date such as "1 DEC 25") stays in the description. Arithmetic
+ * (quantity x unit price = total) settles rows that do not line up with the
+ * header, and finds rows when there is no header at all. Rows without numbers
+ * continue the previous row's description, as wrapped descriptions do.
+ * TypeSafe then confirms which rows are purchased items.
  */
 import type { DocumentLine } from "../layout";
 import { parseMoney } from "./candidates";
@@ -29,138 +33,131 @@ export type LineItemRow = {
   header: string | null;
 };
 
-type Role = "description" | "quantity" | "unitPrice" | "total" | "vat" | "other";
+type Role = "description" | "quantity" | "unitPrice" | "total" | "vat";
 
-const roleOf = (header: string): Role => {
-  const text = header.toLowerCase();
-  if (
-    /\b(?:vat|tax)\b/.test(text) &&
-    !/\b(?:incl|inc\.?|including|gross)\b/.test(text)
-  ) {
-    return "vat";
-  }
-  if (/\b(?:qty|quantity|hours?|hrs|units?|days|no\.?|count)\b/.test(text) && !/price|rate|cost/.test(text)) {
-    return "quantity";
-  }
-  if (/\b(?:unit|price|rate|each|cost|per)\b/.test(text)) return "unitPrice";
-  if (/\b(?:amount|total|net|value|sum|gross|line)\b/.test(text)) return "total";
-  if (/\b(?:description|item|details?|services?|products?|particulars|work|goods)\b/.test(text)) {
-    return "description";
-  }
-  return "other";
-};
+/** Header vocabulary, longest phrases first, each with the column it names. */
+const HEADER_TERMS: [RegExp, Role][] = (
+  [
+    [
+      /^(?:unit ?(?:price|cost|rate)|price ?(?:each|per unit)|rate ?per)/,
+      "unitPrice",
+    ],
+    [/^(?:vat|tax) ?(?:rate|%|amount|amt)?/, "vat"],
+    [
+      /^(?:line ?total|net ?amount|total ?amount|amount|total|net|value|sum|subtotal|gross)/,
+      "total",
+    ],
+    [/^(?:qty|quantity|hours?|hrs|days|units|no\.? ?of|count)/, "quantity"],
+    [/^(?:price|rate|each|cost|fee)/, "unitPrice"],
+    [
+      /^(?:description|item|items|details?|services?|products?|particulars|work|goods)/,
+      "description",
+    ],
+  ] as [RegExp, Role][]
+).map(([pattern, role]) => [
+  // Whole words only: "net" names a column, "network" does not. Words
+  // inside a term are one space apart; two spaces are a column gap.
+  new RegExp(`${pattern.source}(?![a-z])`),
+  role,
+]);
 
-const HEADER_WORDS =
-  /\b(?:description|item|details?|services?|products?|particulars|qty|quantity|hours?|hrs|units?|price|rate|each|cost|amount|total|vat|tax|net)\b/i;
+/** Words a header may carry besides its column names. */
+const HEADER_FILLER =
+  /^(?:\(?(?:gbp|eur|usd|£|€|\$)\)?|ex\.?|excl?\.?|inc\.?|incl\.?|%|of|per|&|\/|-|the|no\.?|#|\(?hours?\)?)$/i;
 
-const isHeader = (line: DocumentLine) => {
-  const roles = line.segments.map((segment) => roleOf(segment.text));
-  const numeric = roles.filter((role) =>
-    ["quantity", "unitPrice", "total"].includes(role),
-  ).length;
-  return (
-    line.segments.length >= 2 &&
-    roles.includes("description") &&
-    numeric >= 1 &&
-    line.segments.every((segment) => HEADER_WORDS.test(segment.text) || segment.text.length <= 12) &&
-    !/\d/.test(line.text.replace(/\bno\.?\b/gi, ""))
-  );
+/** Column roles named by a header row, in order, or null when the row is not a header. */
+const headerRoles = (line: DocumentLine): Role[] | null => {
+  if (/\d/.test(line.text)) return null;
+  const roles: Role[] = [];
+  let rest = line.text.toLowerCase().trim();
+  let unknown = 0;
+  while (rest) {
+    const term = HEADER_TERMS.find(([pattern]) => pattern.test(rest));
+    if (term) {
+      const match = term[0].exec(rest)!;
+      roles.push(term[1]);
+      rest = rest.slice(match[0].length).replace(/^[\s:/|.,()-]+/, "");
+      continue;
+    }
+    const word = /^\S+/.exec(rest)![0];
+    if (!HEADER_FILLER.test(word)) unknown += 1;
+    rest = rest.slice(word.length).trimStart();
+  }
+  const numeric = roles.filter((role) => role !== "description").length;
+  return roles.includes("description") && numeric >= 1 && unknown <= 2
+    ? roles
+    : null;
 };
 
 const TOTALS =
-  /^(?:sub\s*-?\s*total|total|net(?:\s+total)?|vat\b|tax\b|amount\s+(?:due|payable)|balance|gross|carriage|shipping|delivery\s+charge|discount|invoice\s+total|payment|bank|account|thank)/i;
+  /^(?:sub\s*-?\s*total|total|net(?:\s+total)?\b|vat\b|tax\b|amount\s+(?:due|payable)|balance|gross|carriage|shipping|delivery\s+charge|discount|invoice\s+total|payment|bank|account|thank)/i;
 
-const NUMERIC_CELL =
-  /^(?:[£€$]|(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\b)?\s?-?\(?\d[\d,]*(?:\.\d+)?\)?\s?(?:%|(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF))?$/i;
+/** A totals row ("Subtotal", "VAT @ 20%", "Total due (GBP):") ends the table. */
+const isTotals = (description: string) =>
+  TOTALS.test(description) && description.split(" ").length <= 5;
 
-type Cell = { text: string; x: number; xEnd: number };
+const NUMERIC_TOKEN =
+  /^(?:[£€$]|(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF))?-?\(?\d[\d,]*(?:\.\d+)?\)?(?:%|(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF))?$/i;
 
-/** Splits a row into description text and trailing numeric cells. */
-const splitRow = (line: DocumentLine) => {
-  const cells: Cell[] = line.segments.flatMap((segment) => {
-    // A segment that ends in several numbers holds merged cells (close
-    // columns, OCR spacing); split its numeric tail into words.
-    const words = segment.text.split(" ");
-    let tail = words.length;
-    while (tail > 0 && NUMERIC_CELL.test(words[tail - 1]!)) tail--;
-    if (tail === words.length || (tail === 0 && words.length === 1)) {
-      return [{ text: segment.text, x: segment.x, xEnd: segment.xEnd }];
-    }
-    const head = words.slice(0, tail).join(" ");
-    const width = (segment.xEnd - segment.x) / Math.max(1, segment.text.length);
-    let offset = head.length ? head.length + 1 : 0;
-    const out: Cell[] = head
-      ? [{ text: head, x: segment.x, xEnd: segment.x + head.length * width }]
-      : [];
-    for (const word of words.slice(tail)) {
-      out.push({
-        text: word,
-        x: segment.x + offset * width,
-        xEnd: segment.x + (offset + word.length) * width,
-      });
-      offset += word.length + 1;
-    }
-    return out;
-  });
-  let first = cells.length;
-  while (first > 0 && NUMERIC_CELL.test(cells[first - 1]!.text)) first--;
+const tokens = (text: string) =>
+  text
+    // Keep a currency code or symbol attached to its amount.
+    .replace(/\b(GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\s+(?=\d)/gi, "$1")
+    .replace(/([£€$])\s+(?=\d)/g, "$1")
+    .split(/\s+/)
+    .filter(Boolean);
+
+/**
+ * Splits a row into its description and its numeric cells: up to `leading`
+ * numbers before the description (a quantity-first table) and up to
+ * `trailing` after it.
+ */
+const splitRow = (
+  text: string,
+  trailing = Number.POSITIVE_INFINITY,
+  leading = 0,
+) => {
+  const words = tokens(text);
+  let start = 0;
+  while (
+    start < leading &&
+    start < words.length &&
+    NUMERIC_TOKEN.test(words[start]!)
+  ) {
+    start += 1;
+  }
+  const maxNumbers = trailing;
+  let first = words.length;
+  while (
+    first > start &&
+    words.length - first < maxNumbers &&
+    NUMERIC_TOKEN.test(words[first - 1]!)
+  ) {
+    first -= 1;
+  }
   return {
-    description: cells
-      .slice(0, first)
-      .map((cell) => cell.text)
+    description: words
+      .slice(start, first)
       .join(" ")
-      .trim(),
-    numbers: cells.slice(first),
+      .replace(/[\s|–-]+$/, ""),
+    numbers: [...words.slice(0, start), ...words.slice(first)],
   };
 };
 
 const close = (a: number, b: number) =>
   Math.abs(a - b) <= Math.max(0.011, Math.abs(b) * 0.005);
 
-/** Assigns numeric cells to quantity, unit price and total. */
-const assign = (
-  numbers: Cell[],
-  columns: { role: Role; x: number; xEnd: number }[] | null,
+/** Quantity x unit price = total among the row's numbers, total last. */
+const byArithmetic = (
+  numbers: string[],
 ): Omit<InvoiceLineItem, "description"> | null => {
   const values = numbers
-    .filter((cell) => !cell.text.includes("%"))
-    .map((cell) => ({ cell, value: parseMoney(cell.text) }))
-    .filter(
-      (entry): entry is { cell: Cell; value: number } => entry.value !== null,
-    );
+    .filter((token) => !token.includes("%"))
+    .map((token) => parseMoney(token))
+    .filter((value): value is number => value !== null);
   if (values.length === 0) return null;
-
-  if (columns) {
-    const numericColumns = columns.filter((column) =>
-      ["quantity", "unitPrice", "total", "vat"].includes(column.role),
-    );
-    const roles: Role[] =
-      numbers.length === numericColumns.length
-        ? numericColumns.map((column) => column.role)
-        : numbers.map((cell) => {
-            const center = (cell.x + cell.xEnd) / 2;
-            const nearest = [...numericColumns].sort(
-              (a, b) =>
-                Math.min(Math.abs(center - (a.x + a.xEnd) / 2), Math.abs(cell.xEnd - a.xEnd)) -
-                Math.min(Math.abs(center - (b.x + b.xEnd) / 2), Math.abs(cell.xEnd - b.xEnd)),
-            )[0];
-            return nearest?.role ?? "other";
-          });
-    const byRole = (role: Role) => {
-      const index = roles.lastIndexOf(role);
-      const cell = index >= 0 ? numbers[index] : undefined;
-      return cell && !cell.text.includes("%") ? parseMoney(cell.text) : null;
-    };
-    const quantity = byRole("quantity");
-    const unitPrice = byRole("unitPrice");
-    const total = byRole("total");
-    if (total !== null || unitPrice !== null) {
-      return { quantity, unitPrice, total };
-    }
-  }
-
-  const total = values.at(-1)!.value;
-  const earlier = values.slice(0, -1).map((entry) => entry.value);
+  const total = values.at(-1)!;
+  const earlier = values.slice(0, -1);
   for (let q = 0; q < earlier.length; q++) {
     for (let u = 0; u < earlier.length; u++) {
       if (q !== u && close(earlier[q]! * earlier[u]!, total)) {
@@ -178,39 +175,60 @@ const assign = (
   return { quantity: null, unitPrice: null, total };
 };
 
+/** Maps a row's numbers to the header's numeric columns, in order. */
+const byHeader = (
+  numbers: string[],
+  roles: Role[],
+): Omit<InvoiceLineItem, "description"> | null => {
+  const numericRoles: Role[] = roles.filter((role) => role !== "description");
+  if (numbers.length !== numericRoles.length) return byArithmetic(numbers);
+  const valueFor = (role: Role) => {
+    const index = numericRoles.lastIndexOf(role);
+    const token = index >= 0 ? numbers[index] : undefined;
+    return token && !token.includes("%") ? parseMoney(token) : null;
+  };
+  const item = {
+    quantity: valueFor("quantity"),
+    unitPrice: valueFor("unitPrice"),
+    total: valueFor("total"),
+  };
+  return item.total === null && item.unitPrice === null
+    ? byArithmetic(numbers)
+    : item;
+};
+
 /** Rows of `desc | qty | price | total`, as some plain-text exports print them. */
 const pipeRow = (line: DocumentLine) => {
   const cells = line.text.split("|").map((cell) => cell.trim());
   if (cells.length < 3) return null;
-  const numbers = cells.slice(1).map((text) => ({ text, x: 0, xEnd: 0 }));
-  if (!numbers.every((cell) => NUMERIC_CELL.test(cell.text))) return null;
-  const assigned = assign(numbers, null);
+  const numbers = cells.slice(1).map((cell) => tokens(cell).join(""));
+  if (!numbers.every((cell) => NUMERIC_TOKEN.test(cell))) return null;
+  const assigned = byArithmetic(numbers);
   return assigned ? { description: cells[0]!, ...assigned } : null;
 };
 
 export function lineItemRows(lines: readonly DocumentLine[]): LineItemRow[] {
   const rows: LineItemRow[] = [];
-  const push = (
-    value: InvoiceLineItem,
-    line: number,
-    source: string,
-    header: string | null,
-  ) =>
-    rows.push({ id: `line_item_${rows.length}`, value, line, source, header });
-
-  let header: DocumentLine | null = null;
-  let columns: { role: Role; x: number; xEnd: number }[] | null = null;
+  let table: { header: DocumentLine; roles: Role[] } | null = null;
   let previous: LineItemRow | null = null;
   let previousLine: DocumentLine | null = null;
 
+  const push = (value: InvoiceLineItem, index: number, line: DocumentLine) => {
+    previous = {
+      id: `line_item_${rows.length}`,
+      value,
+      line: index,
+      source: line.text,
+      header: table?.header.text ?? null,
+    };
+    rows.push(previous);
+    previousLine = line;
+  };
+
   lines.forEach((line, index) => {
-    if (isHeader(line)) {
-      header = line;
-      columns = line.segments.map((segment) => ({
-        role: roleOf(segment.text),
-        x: segment.x,
-        xEnd: segment.xEnd,
-      }));
+    const roles = headerRoles(line);
+    if (roles) {
+      table = { header: line, roles };
       previous = null;
       previousLine = line;
       return;
@@ -218,67 +236,58 @@ export function lineItemRows(lines: readonly DocumentLine[]): LineItemRow[] {
 
     const piped = pipeRow(line);
     if (piped) {
-      if (!TOTALS.test(piped.description ?? "")) {
-        push(piped, index, line.text, header?.text ?? null);
-      }
+      if (!isTotals(piped.description)) push(piped, index, line);
       return;
     }
 
-    if (!header || !columns) {
+    if (!table) {
       // Without a header, only rows whose arithmetic proves them are rows.
-      const { description, numbers } = splitRow(line);
-      if (!description || numbers.length < 3 || TOTALS.test(description)) return;
-      const assigned = assign(numbers, null);
+      const { description, numbers } = splitRow(line.text);
+      if (!description || numbers.length < 3 || isTotals(description)) {
+        return;
+      }
+      const assigned = byArithmetic(numbers);
       if (assigned?.quantity != null && assigned.unitPrice != null) {
-        push({ description, ...assigned }, index, line.text, null);
+        push({ description, ...assigned }, index, line);
       }
       return;
     }
 
-    const activeHeader = header as DocumentLine;
-    if (line.page !== activeHeader.page && !isHeader(line)) {
+    const active = table as { header: DocumentLine; roles: Role[] };
+    if (line.page !== active.header.page) {
       // A table continues on a new page only under a repeated header.
-      header = null;
-      columns = null;
+      table = null;
       return;
     }
-    const { description, numbers } = splitRow(line);
-    if (TOTALS.test(line.segments[0]?.text ?? "") || TOTALS.test(description)) {
-      header = null;
-      columns = null;
+    const leading = active.roles.indexOf("description");
+    const numericColumns = active.roles.filter(
+      (role) => role !== "description",
+    ).length;
+    const { description, numbers } = splitRow(
+      line.text,
+      numericColumns - leading,
+      leading,
+    );
+    if (isTotals(description)) {
+      table = null;
       return;
     }
     const gap = previousLine ? line.top - previousLine.top : 0;
     if (numbers.length === 0) {
       const last = previous as LineItemRow | null;
-      const descriptionColumn = (columns as { role: Role; x: number; xEnd: number }[]).find(
-        (column) => column.role === "description",
-      );
-      const inColumn =
-        !descriptionColumn ||
-        line.segments[0]!.x <= descriptionColumn.x + line.height * 2;
-      if (last && inColumn && gap <= line.height * 2.2 && line.segments.length === 1) {
-        last.value.description = `${last.value.description ?? ""} ${description}`.trim();
+      if (last && gap <= line.height * 2.2 && line.segments.length === 1) {
+        last.value.description =
+          `${last.value.description ?? ""} ${description}`.trim();
         last.source = `${last.source}\n${line.text}`;
         previousLine = line;
         return;
       }
-      if (gap > line.height * 4) {
-        header = null;
-        columns = null;
-      }
+      if (gap > line.height * 4) table = null;
       return;
     }
-    const assigned = assign(numbers, columns);
-    if (!assigned) return;
-    push(
-      { description: description || null, ...assigned },
-      index,
-      line.text,
-      activeHeader.text,
-    );
-    previous = rows.at(-1)!;
-    previousLine = line;
+    const assigned = byHeader(numbers, active.roles);
+    if (assigned)
+      push({ description: description || null, ...assigned }, index, line);
   });
 
   return rows;

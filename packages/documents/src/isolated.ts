@@ -769,7 +769,13 @@ export async function extractPdfTextIsolated(
     height: page.height,
     lines: layoutRuns(
       page.runs.map(
-        ([x, y, width, height, text]): TextRun => ({ x, y, width, height, text }),
+        ([x, y, width, height, text]): TextRun => ({
+          x,
+          y,
+          width,
+          height,
+          text,
+        }),
       ),
       index + 1,
     ),

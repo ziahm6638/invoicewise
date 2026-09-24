@@ -1,0 +1,1 @@
+ALTER TABLE "users" ALTER COLUMN "date_format" SET DEFAULT 'dd/MM/yyyy';

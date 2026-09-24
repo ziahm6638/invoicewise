@@ -111,7 +111,9 @@ export const labeledValues = (
     line.segments.forEach((segment, position) => {
       const match = label.exec(segment.text);
       if (!match) return;
-      const labelText = clean(segment.text.slice(0, match.index + match[0].length));
+      const labelText = clean(
+        segment.text.slice(0, match.index + match[0].length),
+      );
       const rest = segment.text.slice(match.index + match[0].length);
       const inline = take(rest);
       if (inline) {
@@ -244,7 +246,11 @@ export const ibanCandidates = (lines: readonly DocumentLine[]) =>
   withIds(
     "iban",
     [
-      ...labeledValues(lines, /\bIBAN\b\s*(?:no\.?|number)?\s*[:.]?/i, IBAN_VALUE),
+      ...labeledValues(
+        lines,
+        /\bIBAN\b\s*(?:no\.?|number)?\s*[:.]?/i,
+        IBAN_VALUE,
+      ),
       ...patternValues(
         lines,
         /\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,3})?\b/,
@@ -274,7 +280,7 @@ export const accountNameCandidates = (lines: readonly DocumentLine[]) =>
     "account_name",
     labeledValues(
       lines,
-      /\b(?:(?:bank\s+)?account\s*(?:name|holder)|beneficiary(?:\s+name)?|payee(?:\s+name)?|(?:cheques?\s+)?(?:made\s+)?payable\s+to|pay\s+to)\b\s*[:.]?/i,
+      /\b(?:(?:bank\s+)?account\s*(?:name|holder)|beneficiary(?:\s+name)?|payee(?:\s+name)?|(?:cheques?\s+)?(?:made\s+)?payable\s+to|pay\s+to)\b\s*[:.]?|^name\b\s*[:.]?/i,
       /[^\d\s][^:]{1,79}/,
     ).filter((found) => hasLetters(found.value)),
     (value) => value.toLowerCase(),
@@ -357,7 +363,10 @@ export const parseMoney = (raw: string): number | null => {
   return negative ? -Math.abs(value) : value;
 };
 
-export const amountCandidates = (lines: readonly DocumentLine[], limit = 150) => {
+export const amountCandidates = (
+  lines: readonly DocumentLine[],
+  limit = 150,
+) => {
   const found: Found<number>[] = [];
   lines.forEach((line, index) => {
     for (const segment of line.segments) {
@@ -385,7 +394,9 @@ export const amountCandidates = (lines: readonly DocumentLine[], limit = 150) =>
   const summary = /total|vat|tax|net|gross|due|balance|payable|subtotal/i;
   const ranked = [
     ...unique.filter((candidate) => summary.test(candidate.label ?? "")),
-    ...unique.filter((candidate) => !summary.test(candidate.label ?? "")).reverse(),
+    ...unique
+      .filter((candidate) => !summary.test(candidate.label ?? ""))
+      .reverse(),
   ].slice(0, limit);
   const kept = new Set(ranked.map((candidate) => candidate.id));
   return unique
@@ -451,7 +462,13 @@ export const supplierNameCandidates = (
   lines.forEach((line, index) => {
     for (const segment of line.segments) {
       for (const match of segment.text.matchAll(COMPANY_NAME)) {
-        const value = clean(match[1]!).replace(/\s+[&,]$/, "");
+        const value = clean(match[1]!)
+          .replace(/\s+[&,]$/, "")
+          // A label run into the name ("Name Acme Ltd", "To: Acme Ltd").
+          .replace(
+            /^(?:(?:account\s+)?name|to|from|for|payee|bill\s+to|invoice\s+to)\b\s*:?\s+/i,
+            "",
+          );
         if (value.length <= 80) {
           found.push({
             value,
@@ -471,15 +488,16 @@ export const supplierNameCandidates = (
 const UK_POSTCODE =
   /\b(?:GIR ?0AA|[A-PR-UWYZ][A-HK-Y]?\d[A-Z\d]? ?\d[ABD-HJLNP-UW-Z]{2})\b/;
 
-const ADDRESS_LABEL =
-  /^(?:.*?\b(?:registered\s+(?:office|address)|trading\s+address|address|office|from)\b\s*[:\-–]?\s*)/i;
+/** Words that introduce an address inside running text, e.g. a footer. */
+const ADDRESS_INTRO =
+  /\b(?:registered\s+(?:office|address)|(?:trading|business|postal)\s+address|address|registered\s+in\s+[\p{L} ]+?\s+at|located\s+at|office)\b\s*[:\-–]?\s*/giu;
 
 /** Rows that end an address block when walking up from its postcode. */
 const NOT_AN_ADDRESS_ROW =
-  /^(?:(?:tax\s+)?invoice\b|date\b|due\b|vat\b|tax\b|tel|phone|fax|mob|e-?mail|web\b|account|sort\s*code|iban|bic|swift|company\s+(?:no|number|reg)|reg(?:istered|istration)?\s+(?:no|number))/i;
+  /^(?:(?:tax\s+)?invoice\b|date\b|due\b|vat\b|tax\b|tel|phone|fax|mob|e-?mail|web\b|account|sort\s*code|iban|bic|swift|company\s+(?:no|number|reg)|reg(?:istered|istration)?\s+(?:no|number)|thank|payment|total)/i;
 
 const RECIPIENT_LABEL =
-  /^(?:bill(?:ed)?|invoice(?:d)?|ship(?:ped)?|deliver(?:ed|y)?|sold|charge(?:d)?|customer|client)\b.*?(?:to|address)?\s*:?$/i;
+  /^(?:(?:bill(?:ed)?|invoice(?:d)?|ship(?:ped)?|deliver(?:ed|y)?|sold|charge(?:d)?)(?:\s+to)?|to|customer|client|attn|attention)\b[^:]*:?$/i;
 
 /**
  * Postal-address candidates. A UK postcode anchors each one; the address is
@@ -498,19 +516,6 @@ export const addressCandidates = (lines: readonly DocumentLine[]) => {
         postcode.index + postcode[0].length,
       );
 
-      if (/,/.test(upToPostcode) && upToPostcode.length > 20) {
-        const labelled = ADDRESS_LABEL.exec(upToPostcode);
-        const value = clean(
-          labelled ? upToPostcode.slice(labelled[0].length) : upToPostcode,
-        );
-        found.push({
-          value,
-          line: index,
-          label: labelled ? clean(labelled[0]) : labelFor(lines, index, segment),
-        });
-        continue;
-      }
-
       const rows: string[] = [clean(upToPostcode)];
       let label: string | null = null;
       let current = line;
@@ -518,11 +523,18 @@ export const addressCandidates = (lines: readonly DocumentLine[]) => {
         const previous = lines[above]!;
         if (previous.page !== current.page) break;
         if (current.top - previous.top > current.height * 2.6) break;
-        const aligned = previous.segments.find(
-          (candidate) =>
-            Math.abs(candidate.x - segment.x) <= line.height * 1.5 ||
-            Math.abs(candidate.xEnd - segment.xEnd) <= line.height * 1.5,
-        );
+        const aligned =
+          previous.segments.find(
+            (candidate) =>
+              Math.abs(candidate.x - segment.x) <= line.height * 1.5 ||
+              Math.abs(candidate.xEnd - segment.xEnd) <= line.height * 1.5,
+          ) ??
+          // Running text (a centred footer) wraps an address mid-sentence:
+          // the row above continues into this one when it ends in a comma.
+          previous.segments.find(
+            (candidate) =>
+              /,\s*$/.test(candidate.text) && overlaps(candidate, segment),
+          );
         if (!aligned) break;
         const text = clean(aligned.text);
         if (
@@ -537,6 +549,28 @@ export const addressCandidates = (lines: readonly DocumentLine[]) => {
         }
         rows.unshift(text);
         current = previous;
+      }
+
+      // An address introduced inside running text ("registered in England
+      // and Wales at ...", "Registered office: ...") starts after its
+      // introduction; the words before it are not part of the address.
+      let introduced = -1;
+      rows.forEach((row, position) => {
+        if ([...row.matchAll(ADDRESS_INTRO)].length > 0) introduced = position;
+      });
+      if (introduced >= 0) {
+        const row = rows[introduced]!;
+        const intro = [...row.matchAll(ADDRESS_INTRO)].at(-1)!;
+        const rest = [
+          clean(row.slice((intro.index ?? 0) + intro[0].length)),
+          ...rows.slice(introduced + 1),
+        ].filter(Boolean);
+        found.push({
+          value: rest.join(", "),
+          line: index,
+          label: clean(row.slice(0, (intro.index ?? 0) + intro[0].length)),
+        });
+        continue;
       }
       for (let start = 0; start < rows.length; start++) {
         found.push({

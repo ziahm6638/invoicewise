@@ -59,7 +59,11 @@ export function parseInvoiceDate(raw: string | null): string | null {
 
   const yearFirst = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(value);
   if (yearFirst) {
-    return iso(Number(yearFirst[1]), Number(yearFirst[2]), Number(yearFirst[3]));
+    return iso(
+      Number(yearFirst[1]),
+      Number(yearFirst[2]),
+      Number(yearFirst[3]),
+    );
   }
 
   const numeric = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/.exec(value);

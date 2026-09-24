@@ -26,8 +26,13 @@ const required = (name: string) => {
   return value;
 };
 
+// What a correct model selects for each field of the synthetic fixture. The
+// stub can only choose among the candidates the pipeline found in the PDF, so
+// the persisted extraction proves the real reading, layout and candidate
+// mining end to end.
 const extractionValues: Record<string, string | number> = {
-  supplier_name: "Acme Supplies Ltd",
+  supplier_name: "ACME SUPPLIES LTD",
+  supplier_address: "10 Market Street, London, EC1A 1AA",
   supplier_vat_number: "GB123456789",
   invoice_number: "INV-2026-0042",
   invoice_date: "2026-09-01",
@@ -36,7 +41,7 @@ const extractionValues: Record<string, string | number> = {
   net_amount: 1000,
   vat_amount: 200,
   gross_amount: 1200,
-  bank_account_name: "Acme Supplies Ltd",
+  bank_account_name: "ACME SUPPLIES LTD",
   bank_account_number: "12345678",
   bank_sort_code: "12-34-56",
   bank_iban: "GB12 ACME 1234 5678 9012 34",
@@ -104,7 +109,11 @@ const startTypeSafeStub = () =>
       const body = (await request.json()) as {
         questions: Record<string, any>;
       };
-      const answers = Object.hasOwn(body.questions, "supplier_name")
+      const isExtraction = Object.keys(body.questions).some(
+        (id) =>
+          Object.hasOwn(extractionValues, id) || id.startsWith("line_item_"),
+      );
+      const answers = isExtraction
         ? extractionAnswers(body.questions)
         : judgmentAnswers(body.questions);
       return Response.json({
@@ -117,6 +126,7 @@ const startTypeSafeStub = () =>
 
 const priorExtraction: InvoiceExtraction = {
   supplierName: "ACME SUPPLIES LTD",
+  supplierAddress: "10 Market Street, London, EC1A 1AA",
   supplierVatNumber: "GB123456789",
   invoiceNumber: "INV-2026-0042",
   invoiceDate: "2026-09-01",
@@ -142,7 +152,11 @@ const priorExtraction: InvoiceExtraction = {
   },
   description: "September consulting services",
   purchaseOrderReference: "PO-7788",
+  textSource: "text-layer",
 };
+
+/** Every field the synthetic PDF prints, as the pipeline must persist it. */
+const expectedExtraction: InvoiceExtraction = { ...priorExtraction };
 
 const runBatch = () =>
   Effect.runPromise(
@@ -369,6 +383,14 @@ async function main() {
       (judgment) => judgment.status === "failed",
     );
 
+    if (!Bun.deepEquals(persisted?.extraction, expectedExtraction)) {
+      throw new Error(
+        `Persisted extraction does not match the invoice: ${JSON.stringify(
+          persisted?.extraction ?? null,
+        )}`,
+      );
+    }
+
     if (
       completed?.status !== "succeeded" ||
       completed.attempts !== 2 ||
@@ -392,6 +414,8 @@ async function main() {
         workflowId: completed.id,
         attempts: completed.attempts,
         persistedInvoiceId: persisted.id,
+        extractedSupplier: expectedExtraction.supplierName,
+        extractedLineItems: expectedExtraction.lineItems.length,
         judgmentCount: judgments.length,
         defaultJudgmentCount: defaultJudgments.length,
         configuredJudgmentAnswered: true,

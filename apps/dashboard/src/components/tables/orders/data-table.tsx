@@ -46,11 +46,7 @@ export function OrdersDataTable() {
             tableData.map((order) => (
               <TableRow key={order.id} className="h-[45px]">
                 <TableCell className="w-[120px] text-sm text-muted-foreground">
-                  {formatDate(
-                    order.createdAt.toISOString(),
-                    "MMM, yyyy",
-                    false,
-                  )}
+                  {formatDate(order.createdAt, "d MMM yyyy")}
                 </TableCell>
                 <TableCell className="w-[100px] font-medium">
                   <FormatAmount

@@ -444,6 +444,9 @@ const lineItemQuestion = (row: LineItemRow): TypeSafeQuestion => ({
 const PAYMENT_TERMS =
   /\b(?:(?:payment\s+)?terms?|due|payable|pay(?:ment)?\s+within)\b[^\n.]{0,40}?\b(\d{1,3})\s*days?\b|\bnet\s*(\d{1,3})\b/i;
 
+const DUE_ON_RECEIPT =
+  /\b(?:due|payable)\s+(?:up)?on\s+(?:receipt|presentation)\b|\bdue\s+immediately\b/i;
+
 const stripLeadingName = (address: string, name: string | null) => {
   if (!name) return address;
   const prefix = name.toLowerCase().replace(/\.$/, "");
@@ -526,6 +529,7 @@ export const extractInvoiceLines = (
         rules: [
           ...SUPPLIER_RULES,
           "Prefer the business name exactly as printed, without an address or registration text.",
+          "When the invoice names the issuing business in more than one way, prefer the name it gives as the registered or trading business over a bank account name.",
         ],
       }),
     );
@@ -705,6 +709,9 @@ export const extractInvoiceLines = (
     )?.value;
     const invoiceDate = pick(fieldAnswers, "invoice_date", dates)?.iso ?? null;
     let dueDate = pick(fieldAnswers, "due_date", dates)?.iso ?? null;
+    if (!dueDate && invoiceDate && DUE_ON_RECEIPT.test(plain)) {
+      dueDate = invoiceDate;
+    }
     if (!dueDate && invoiceDate) {
       const terms = PAYMENT_TERMS.exec(plain);
       const days = Number(terms?.[1] ?? terms?.[2]);
@@ -908,6 +915,30 @@ const hasBankDetails = (extraction: unknown) =>
     (value) => typeof value === "string" && value.trim() !== "",
   );
 
+const supplierKey = (name: unknown) =>
+  typeof name === "string"
+    ? name
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, " ")
+        .replace(/\b(?:ltd|limited|plc|llp|inc|llc|co|company|the|uk)\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    : "";
+
+/** A previous invoice plausibly from the same supplier: same name or VAT number. */
+const fromSameSupplier = (
+  extraction: InvoiceExtraction,
+  previous: PreviousInvoice,
+) => {
+  const other = asRecord(previous.extraction);
+  const name = supplierKey(extraction.supplierName);
+  const vat = extraction.supplierVatNumber;
+  return (
+    (name !== "" && supplierKey(other.supplierName) === name) ||
+    (vat !== null && other.supplierVatNumber === vat)
+  );
+};
+
 const NO_HISTORY =
   "There are no earlier invoices in this workspace to compare with yet.";
 
@@ -931,11 +962,13 @@ const inapplicableReason = (
         return "No bank details were found on this invoice to compare.";
       }
       if (previousInvoices.length === 0) return NO_HISTORY;
-      return previousInvoices.some((invoice) =>
-        hasBankDetails(invoice.extraction),
+      return previousInvoices.some(
+        (invoice) =>
+          hasBankDetails(invoice.extraction) &&
+          (!extraction.supplierName || fromSameSupplier(extraction, invoice)),
       )
         ? null
-        : "No earlier invoice has bank details to compare with.";
+        : "No earlier invoice from this supplier has bank details to compare with.";
     case "vat_calculation_correct":
       return extraction.netAmount === null ||
         extraction.vatAmount === null ||

@@ -6,6 +6,11 @@
  *                           totals, payment details, registered-office footer)
  *   uk-invoice-scanned.pdf  the same page rasterised into an image-only PDF,
  *                           so it has no text layer and needs OCR
+ *   uk-invoice-footer.pdf   a sole-trader style invoice: no supplier header,
+ *                           the business and its address only in a centred
+ *                           footer sentence that wraps mid-address, a "TO:"
+ *                           customer block, HOURS/RATE columns, "Name" as the
+ *                           bank account label and "Payment due on receipt"
  *
  * Run from packages/documents: `bun src/test/fixtures/generate-uk-invoice.ts`.
  * The fixtures are committed; this script documents how they were made.
@@ -55,9 +60,18 @@ const textInvoice = async () => {
     (line, index) => doc.text(line, 50, 174 + index * 14),
   );
 
-  const columns = { description: 50, qty: 300, unit: 350, vat: 430, amount: 480 };
+  const columns = {
+    description: 50,
+    qty: 300,
+    unit: 350,
+    vat: 430,
+    amount: 480,
+  };
   const tableTop = 250;
-  doc.rect(45, tableTop - 6, 505, 20).fill("#eeeeee").fillColor("#000000");
+  doc
+    .rect(45, tableTop - 6, 505, 20)
+    .fill("#eeeeee")
+    .fillColor("#000000");
   doc.font(bold);
   doc.text("Description", columns.description, tableTop);
   doc.text("Qty", columns.qty, tableTop);
@@ -136,6 +150,66 @@ const textInvoice = async () => {
   return done;
 };
 
+const footerInvoice = async () => {
+  const doc = new PDFDocument({ size: "A4", margin: 0 });
+  const done = collect(doc);
+  const regular = "Helvetica";
+  const bold = "Helvetica-Bold";
+
+  doc.font(bold).fontSize(24).text("INVOICE", 50, 50);
+  doc.font(regular).fontSize(10);
+  doc.text("INVOICE NO. BW-2031", 50, 84);
+  doc.text("DATE: 31/12/2025", 50, 98);
+  doc.font(bold).text("TO:", 50, 130).text("FOR:", 330, 130);
+  doc.font(regular);
+  doc.text("Harlow Estates Ltd", 50, 144).text("Consultation", 330, 144);
+  [
+    "Suite 12",
+    "48 Market Street",
+    "Manchester",
+    "M1 1PW",
+    "0161 496 0000",
+    "accounts@harlowestates.example",
+  ].forEach((line, index) => doc.text(line, 50, 158 + index * 14));
+
+  const tableTop = 270;
+  doc.font(bold);
+  doc.text("DESCRIPTION", 50, tableTop);
+  doc.text("HOURS", 330, tableTop);
+  doc.text("RATE", 400, tableTop);
+  doc.text("AMOUNT", 480, tableTop);
+  doc.font(regular);
+  doc.text("Consultation – 1 DEC 25 to 31 DEC 25", 50, tableTop + 24);
+  doc.text("4", 330, tableTop + 24);
+  doc.text("300.00", 400, tableTop + 24);
+  doc.text("£1,200.00", 480, tableTop + 24);
+  doc
+    .font(bold)
+    .text("TOTAL", 400, tableTop + 56)
+    .text("£1,200.00", 480, tableTop + 56);
+  doc.font(regular);
+  doc.text("Payment due on receipt", 50, tableTop + 100);
+  doc.text("Name Brightwater Advisory Ltd", 50, tableTop + 118);
+  doc.text("Sort Code 30-94-57", 50, tableTop + 132);
+  doc.text("Account Number 41236789", 50, tableTop + 146);
+  doc.text("Thank you for your business!", 0, 560, {
+    width: 595,
+    align: "center",
+  });
+
+  doc.fontSize(8);
+  [
+    "Brightwater is a trading name for Brightwater Advisory Ltd, registered in England and Wales at 7 Canal Wharf, Wharf Road,",
+    "Leeds, LS1 4BR. Company number 12345678. For any queries in relation to this invoice please email us at",
+    "hello@brightwater.example for more information.",
+  ].forEach((line, index) =>
+    doc.text(line, 0, 770 + index * 10, { width: 595, align: "center" }),
+  );
+
+  doc.end();
+  return done;
+};
+
 const scannedInvoice = async (source: Buffer) => {
   const rendered = await renderPdfPageIsolated(
     new Uint8Array(source),
@@ -166,4 +240,10 @@ await writeFile(
   resolve(directory, "uk-invoice-scanned.pdf"),
   await scannedInvoice(text),
 );
-console.log("wrote uk-invoice.pdf and uk-invoice-scanned.pdf");
+await writeFile(
+  resolve(directory, "uk-invoice-footer.pdf"),
+  await footerInvoice(),
+);
+console.log(
+  "wrote uk-invoice.pdf, uk-invoice-scanned.pdf and uk-invoice-footer.pdf",
+);

@@ -201,7 +201,17 @@ Enforced before any provider work, in `packages/documents/src/intake.ts`:
   working-directory `.env` is not loaded either.
 - The same isolated process performs PDF text extraction for the invoice
   pipeline and first-page rendering for the dashboard preview, each with its
-  own timeout and output bounds. Render geometry is checked against the
+  own timeout and output bounds. Text comes back as positioned runs, and the
+  parent rebuilds rows and column gaps from their geometry
+  (`packages/documents/src/layout.ts`); joining pdf.js items into one string
+  loses every line break and made every field unfindable (issue #71).
+- A page whose text layer has fewer than 40 letters and digits (a scan or an
+  image-only export) is rendered at up to 300 DPI and OCR'd with `tesseract`,
+  which runs under the same supervisor: minimal environment, wall-clock, RSS
+  and output budgets, bounded admission. PNG and JPEG uploads are OCR'd
+  directly. At most 10 pages per document are OCR'd. The production image and
+  CI install `tesseract-ocr`; locally, `brew install tesseract` (or
+  `apt-get install tesseract-ocr`) is needed for the scanned-invoice test. Render geometry is checked against the
   **scaled** viewport, so `scale: 2` cannot turn a bounded page into an
   unbounded canvas allocation.
 - Extraction never truncates silently: a document with more pages than the
@@ -231,8 +241,30 @@ Enforced before any provider work, in `packages/documents/src/intake.ts`:
   acknowledged as a permanent loss.
 
 The worker re-validates the cheap bounds and refuses missing, deleted or
-foreign bindings. Semantic extraction (TypeSafe format expansion) is unchanged;
-that is roadmap issue #36.
+foreign bindings.
+
+## Extraction
+
+TypeSafe selects; it does not generate, and it reads only text. Extraction
+therefore runs in three steps (`packages/documents/src/typesafe/`):
+
+1. Code finds every candidate value in the laid-out text
+   (`candidates.ts`): a value beside its label, after it, or stacked beneath
+   it; distinctive shapes anywhere (GB VAT numbers, IBANs, sort codes, UK
+   written and numeric dates); postcode-anchored address blocks; and table
+   rows parsed against their header columns (`line-items.ts`).
+2. TypeSafe receives the whole document, one tagged row per printed line, and
+   picks which candidate each field is, or that the invoice does not state it,
+   and confirms which table rows are purchased items.
+3. Code copies the chosen values and normalises them (ISO dates, `12-34-56`
+   sort codes, grouped IBANs).
+
+An extraction with no readable text, or in which none of supplier, invoice
+number, date, amounts or line items was found, fails the job instead of being
+saved empty, so the invoice shows as failed. Judgments receive the document
+text alongside the extraction; default checks that compare against history,
+or need values the invoice does not have, are recorded as `not_applicable`
+with a reason rather than answered "No".
 
 ## Reads, signatures and deletion
 

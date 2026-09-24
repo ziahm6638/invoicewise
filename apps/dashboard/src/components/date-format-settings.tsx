@@ -1,6 +1,7 @@
 "use client";
 
 import { useUserMutation, useUserQuery } from "@/hooks/use-user";
+import { DEFAULT_DATE_FORMAT } from "@/utils/format";
 import {
   Card,
   CardContent,
@@ -31,7 +32,7 @@ export function DateFormatSettings() {
 
       <CardContent>
         <Select
-          defaultValue={user?.dateFormat ?? undefined}
+          defaultValue={user?.dateFormat ?? DEFAULT_DATE_FORMAT}
           onValueChange={(value) => {
             updateUserMutation.mutate({
               dateFormat: value as
