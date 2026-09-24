@@ -15,7 +15,15 @@
  *   cd apps/api && PERMISSIONS_TEST_DATABASE_URL=postgresql://invoicewise:invoicewise@localhost:5432/invoicewise_perms_test \
  *     bun test src/permissions.http.integration.test.ts
  */
-import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  mock,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import type { Database, PrimaryDatabase } from "@invoicewise/db/client";
 
 const testDatabaseUrl = process.env.PERMISSIONS_TEST_DATABASE_URL;
@@ -67,6 +75,10 @@ mock.module("@invoicewise/inbox/connector", () => ({
 }));
 
 const suite = testDatabaseUrl ? describe : describe.skip;
+
+// Every test signs users up and makes many real HTTP round trips, so Bun's 5s
+// default is too tight on a loaded machine.
+setDefaultTimeout(30_000);
 
 suite("workspace permissions over real HTTP", () => {
   let db: Database;
