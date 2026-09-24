@@ -1,0 +1,103 @@
+# Kamal deployment for app.invoicewise.uk and api.invoicewise.uk on hp-slice.
+# Read docs/deployment.md before changing anything here.
+service: invoicewise
+image: invoicewise
+
+servers:
+  # Next.js dashboard. Serves Better Auth (/api/auth) and document uploads.
+  web:
+    hosts:
+      - 100.90.24.83 # hp-slice over Tailscale
+    cmd: /app/scripts/deploy/web.sh
+    proxy:
+      host: app.invoicewise.uk
+      app_port: 3000
+      ssl: false
+      healthcheck:
+        path: /login
+        interval: 5
+        timeout: 10
+  # Bun API with the workflow runner in-process. Applies migrations on boot.
+  api:
+    hosts:
+      - 100.90.24.83
+    cmd: /app/scripts/deploy/api.sh
+    env:
+      clear:
+        PORT: 3003
+    proxy:
+      host: api.invoicewise.uk
+      app_port: 3003
+      ssl: false
+      healthcheck:
+        path: /health
+        interval: 5
+        timeout: 10
+
+# Kamal runs a registry on the deploying machine (127.0.0.1:5555) and tunnels
+# it to the builder and the host over SSH, so no external registry or token is
+# involved. The image never leaves the tailnet.
+registry:
+  server: localhost:5555
+
+builder:
+  arch: amd64
+  dockerfile: Dockerfile
+  context: .
+  # Build on hp-slice itself (amd64) instead of emulating on an arm64 laptop.
+  remote: ssh://root@100.90.24.83
+
+volumes:
+  # Local document storage shared by the dashboard (uploads) and the API
+  # (signed downloads, workflow processing).
+  - /mnt/ssd/invoicewise/storage:/data/storage
+
+env:
+  clear:
+    NODE_ENV: production
+    BETTER_AUTH_URL: https://app.invoicewise.uk
+    NEXT_PUBLIC_URL: https://app.invoicewise.uk
+    NEXT_PUBLIC_API_URL: https://api.invoicewise.uk
+    ALLOWED_API_ORIGINS: https://app.invoicewise.uk
+    BETTER_AUTH_COOKIE_DOMAIN: .invoicewise.uk
+    STORAGE_BACKEND: local
+    LOCAL_STORAGE_PATH: /data/storage
+    STORAGE_PUBLIC_URL: https://api.invoicewise.uk
+    REDIS_URL: redis://invoicewise-redis:6379
+    SMTP_HOST: smtp.purelymail.com
+    SMTP_PORT: 465
+    SMTP_USER: auth@invoicewise.uk
+    AUTH_EMAIL_FROM: InvoiceWise <auth@invoicewise.uk>
+    LOG_LEVEL: info
+  secret:
+    - DATABASE_PRIMARY_URL
+    - BETTER_AUTH_SECRET
+    - SMTP_PASS
+    - STORAGE_SIGNING_SECRET
+    - MIDDAY_ENCRYPTION_KEY
+
+ssh:
+  user: root
+
+accessories:
+  db:
+    image: pgvector/pgvector:0.8.1-pg17
+    host: 100.90.24.83
+    # Not published on the host: only reachable on the kamal Docker network as
+    # `invoicewise-db`.
+    env:
+      clear:
+        POSTGRES_USER: invoicewise
+        POSTGRES_DB: invoicewise
+      secret:
+        - POSTGRES_PASSWORD
+    directories:
+      - /mnt/ssd/invoicewise/postgres:/var/lib/postgresql/data
+    options:
+      shm-size: 256m
+  redis:
+    image: redis:7.4-alpine
+    host: 100.90.24.83
+    cmd: redis-server --appendonly yes
+    directories:
+      - /mnt/ssd/invoicewise/redis:/data

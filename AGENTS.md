@@ -99,8 +99,17 @@ resolve the conflicting object or data, then re-run `bun db:migrate`. There is n
 destructive reset and no fictional rollback for irreversible enum/schema changes; see
 `docs/development.md` for the documented procedure and the verification proof.
 
+## Production
+
+The app runs at `app.invoicewise.uk` (dashboard) and `api.invoicewise.uk` (API) on hp-slice,
+deployed with Kamal (`config/deploy.yml`) using secrets from the self-hosted Infisical
+project `invoicewise` (`prod`). Migrations apply when the API container boots. Deploy with
+`infisical run --env prod -- kamal deploy`; the full procedure is in `docs/deployment.md`.
+Transactional mail is Purelymail SMTP as `auth@invoicewise.uk`, never Resend.
+
 ## Links
 
-- **Product:** [invoicewise.uk](https://invoicewise.uk)
+- **App:** [app.invoicewise.uk](https://app.invoicewise.uk)
+- **Product:** [invoicewise.uk](https://invoicewise.uk) (separate Vercel marketing site)
 - **Upstream:** [github.com/midday-ai/midday](https://github.com/midday-ai/midday)
 - **TypeSafe:** [typesafe.ai](https://typesafe.ai)

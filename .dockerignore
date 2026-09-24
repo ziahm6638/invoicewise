@@ -1,0 +1,11 @@
+**/node_modules
+**/.next
+**/.turbo
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.verify-artifacts
+graft
+docs/agent-work
+**/*.log
