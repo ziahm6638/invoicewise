@@ -54,7 +54,8 @@ const round2 = (value: number) => Math.round(value * 100) / 100;
 
 /**
  * The extracted lines when every one has an amount and they add up to the
- * net total, else one line carrying the invoice's net total.
+ * net total, else one line carrying the invoice's net total. A line whose
+ * quantity times unit price is not its total is sent as one unit of the total.
  */
 const billLines = (bill: DraftBill) => {
   const lines = bill.lineItems
@@ -63,12 +64,12 @@ const billLines = (bill: DraftBill) => {
       const unitPrice =
         item.unitPrice ?? (item.total !== null ? item.total / quantity : null);
       if (unitPrice === null) return null;
-      return {
-        description: item.description ?? "Invoice line",
-        quantity,
-        unitPrice: round2(unitPrice),
-        total: round2(item.total ?? unitPrice * quantity),
-      };
+      const description = item.description ?? "Invoice line";
+      const total = round2(item.total ?? unitPrice * quantity);
+      if (round2(quantity * round2(unitPrice)) !== total) {
+        return { description, quantity: 1, unitPrice: total, total };
+      }
+      return { description, quantity, unitPrice: round2(unitPrice), total };
     })
     .filter((line) => line !== null);
   const linesTotal = lines.reduce((sum, line) => sum + line.total, 0);

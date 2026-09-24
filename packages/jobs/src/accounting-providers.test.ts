@@ -274,6 +274,41 @@ describe("Xero", () => {
     });
   });
 
+  const postedXeroLines = async (
+    lineItems: DraftBill["lineItems"],
+    netAmount: number,
+  ) => {
+    connectionConfig = { tenant_id: "tenant-1" };
+    await postProviderBill(
+      "xero",
+      config,
+      connection,
+      { ...bill, lineItems, netAmount },
+      null,
+    );
+    const create = calls.find((call) => call.path === "/api.xro/2.0/Invoices")!;
+    return (create.json as { Invoices: [{ LineItems: unknown[] }] }).Invoices[0]
+      .LineItems;
+  };
+
+  test("sends a line whose unit price disagrees with its total as one unit of the total", async () => {
+    expect(
+      await postedXeroLines(
+        [{ description: "Labour", quantity: null, unitPrice: 50, total: 250 }],
+        250,
+      ),
+    ).toEqual([{ Description: "Labour", Quantity: 1, UnitAmount: 250 }]);
+  });
+
+  test("sends a line whose rounded unit price misses its total as one unit of the total", async () => {
+    expect(
+      await postedXeroLines(
+        [{ description: "Labour", quantity: 3, unitPrice: null, total: 100 }],
+        100,
+      ),
+    ).toEqual([{ Description: "Labour", Quantity: 1, UnitAmount: 100 }]);
+  });
+
   test("refuses a connection without an organisation", async () => {
     connectionConfig = {};
     expect(
