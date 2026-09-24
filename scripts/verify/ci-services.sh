@@ -33,7 +33,9 @@ MINIO_PORT="${VERIFY_MINIO_PORT:-9000}"
 
 POSTGRES_IMAGE="pgvector/pgvector:0.8.1-pg17"
 REDIS_IMAGE="redis:7.4-alpine"
-MINIO_IMAGE="quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+# MinIO no longer publishes pullable images (quay.io/minio and Docker Hub now
+# refuse anonymous pulls), so this is Chainguard's build, pinned by digest.
+MINIO_IMAGE="cgr.dev/chainguard/minio@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1"
 
 OWNER_LABEL="invoicewise.verify.service"
 PREFIX_LABEL="invoicewise.verify.prefix"
