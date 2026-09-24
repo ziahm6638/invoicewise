@@ -433,6 +433,18 @@ describe("stored records", () => {
     expect(accountingReadiness(legacy, null)).toEqual(validation.accounting);
   });
 
+  test("any stored shape validates without throwing", () => {
+    for (const stored of [
+      null,
+      42,
+      "text",
+      {},
+      { bankDetails: null, lineItems: null, invoiceNumber: 7 },
+    ]) {
+      expect(validateInvoice(stored).status).toBe("invalid");
+    }
+  });
+
   test("the stored verdict is used while its rules are current, and recomputed after", () => {
     const stored = validateInvoice(invoice(), [
       { id: "earlier", extraction: invoice() },

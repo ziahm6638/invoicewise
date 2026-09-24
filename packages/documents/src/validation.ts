@@ -278,6 +278,9 @@ const EMPTY: Omit<InvoiceExtraction, "textSource" | "pageSources"> = {
   evidence: { fields: {}, lineItems: [] },
 };
 
+const textOrNull = (value: unknown) =>
+  typeof value === "string" && value.trim() !== "" ? value : null;
+
 const numberOrNull = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
@@ -293,6 +296,21 @@ const normalize = (extraction: unknown) => {
       record.documentType === "invoice" || record.documentType === "credit_note"
         ? (record.documentType as "invoice" | "credit_note")
         : null,
+    supplierName: textOrNull(merged.supplierName),
+    supplierVatNumber: textOrNull(merged.supplierVatNumber),
+    invoiceNumber: textOrNull(merged.invoiceNumber),
+    originalInvoiceNumber: textOrNull(merged.originalInvoiceNumber),
+    invoiceDate: textOrNull(merged.invoiceDate),
+    dueDate: textOrNull(merged.dueDate),
+    currency: textOrNull(merged.currency),
+    amountsIncludeTax:
+      typeof merged.amountsIncludeTax === "boolean"
+        ? merged.amountsIncludeTax
+        : null,
+    bankDetails: {
+      ...EMPTY.bankDetails,
+      iban: textOrNull(asRecord(record.bankDetails).iban),
+    },
     netAmount: numberOrNull(merged.netAmount),
     discountAmount: numberOrNull(merged.discountAmount),
     vatAmount: numberOrNull(merged.vatAmount),

@@ -451,7 +451,14 @@ async function verifyInputMatrix(
       taxType: row.taxType,
       type: row.type,
       extraction: row.extraction,
-      validation: row.validation,
+      // Issues differ by design: the same invoice sent again in another
+      // format is a duplicate of the first (asserted below).
+      validation: {
+        ...row.validation,
+        issues: [],
+        accounting: null,
+        identity: null,
+      },
       judgments: (row.judgments ?? []).map(
         (judgment) => `${judgment.source}:${judgment.questionId}`,
       ),
@@ -459,6 +466,20 @@ async function verifyInputMatrix(
   });
   if (!shapes.every((shape) => Bun.deepEquals(shape, shapes[0]))) {
     throw new Error("The input formats persisted different data shapes");
+  }
+  // One invoice is one identity whatever its format: a copy flagged as a
+  // duplicate points at another copy of the same invoice. (The copies are
+  // processed concurrently here, so which of them is flagged is not fixed.)
+  const copies = new Set(rows.map(({ row }) => row.id));
+  const duplicates = rows.map(
+    ({ row }) =>
+      (row.validation as { identity?: { duplicateOf?: string | null } } | null)
+        ?.identity?.duplicateOf ?? null,
+  );
+  if (duplicates.some((id) => id !== null && !copies.has(id))) {
+    throw new Error(
+      `A duplicate points outside the copies of this invoice: ${JSON.stringify(duplicates)}`,
+    );
   }
 
   // A failure after the extraction is saved (for example while emitting its
