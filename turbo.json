@@ -10,7 +10,8 @@
     "WORKFLOW_POLL_MS",
     "WORKFLOW_LEASE_MS",
     "WORKFLOW_RETRY_BASE_MS",
-    "WORKFLOW_RETRY_MAX_MS"
+    "WORKFLOW_RETRY_MAX_MS",
+    "WORKFLOW_RECONCILE_MS"
   ],
   "ui": "stream",
   "tasks": {

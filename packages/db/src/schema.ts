@@ -124,6 +124,7 @@ export const webhookDeliveryStatusEnum = pgEnum("webhook_delivery_status", [
   "delivering",
   "succeeded",
   "failed",
+  "cancelled",
 ]);
 export const accountingProviderEnum = pgEnum("accounting_provider", [
   "xero",
@@ -142,6 +143,8 @@ export const accountingPostStatusEnum = pgEnum("accounting_post_status", [
   "posted",
   "already_posted",
   "failed",
+  "queued",
+  "cancelled",
 ]);
 export const invoiceDeliveryTypeEnum = pgEnum("invoice_delivery_type", [
   "create",
@@ -2113,6 +2116,16 @@ export const inbox = pgTable(
       mode: "string",
     }),
     accountingIdempotencyKey: text("accounting_idempotency_key"),
+    // Whether a terminal accounting failure is worth an explicit retry
+    // (provider outage, exhausted retries) or needs a configuration change.
+    accountingPostRetryable: boolean("accounting_post_retryable"),
+    // The processing revision whose accounting intent is scheduled; the
+    // workflow key is derived from it.
+    accountingRevision: integer("accounting_revision"),
+    // Incremented in the same transaction that persists a processing result
+    // and schedules its deliveries, so (id, revision) names one accepted
+    // invoice revision across worker retries and replays.
+    processingRevision: integer("processing_revision").default(0).notNull(),
     status: inboxStatusEnum().default("new"),
     website: text(),
     displayName: text("display_name"),
@@ -2322,9 +2335,16 @@ export const webhookDeliveries = pgTable(
     invoiceId: uuid("invoice_id"),
     event: text("event").notNull(),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    // Logical event identity, shared by every endpoint that receives the
+    // event and stable across worker retries, so consumers can deduplicate.
+    eventId: uuid("event_id"),
+    // The invoice processing revision this delivery belongs to.
+    revision: integer("revision"),
     status: webhookDeliveryStatusEnum().default("queued").notNull(),
     attempts: integer("attempts").default(0).notNull(),
     lastError: text("last_error"),
+    // For a failed delivery: whether an explicit retry may succeed.
+    retryable: boolean("retryable"),
     deliveredAt: timestamp("delivered_at", {
       withTimezone: true,
       mode: "string",
@@ -2341,6 +2361,11 @@ export const webhookDeliveries = pgTable(
     index("webhook_deliveries_invoice_id_idx").on(table.invoiceId),
     index("webhook_deliveries_team_id_idx").on(table.teamId),
     index("webhook_deliveries_status_idx").on(table.status),
+    // One delivery per endpoint and logical event: rescheduling the same
+    // revision can never create a second delivery.
+    uniqueIndex("webhook_deliveries_endpoint_event_key")
+      .on(table.endpointId, table.eventId)
+      .where(sql`${table.eventId} is not null`),
     foreignKey({
       columns: [table.endpointId],
       foreignColumns: [webhookEndpoints.id],

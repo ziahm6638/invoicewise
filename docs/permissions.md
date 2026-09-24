@@ -9,7 +9,7 @@ expected to reach the same decision for the same actor.
 | Capability | Owner | Admin | Member |
 | --- | --- | --- | --- |
 | Read workspace, invoices, inbox, judgments, exports, MCP | yes | yes | yes |
-| Upload, process, retry, annotate invoices | yes | yes | yes |
+| Upload, process, retry, annotate invoices (including re-driving failed deliveries to configured destinations) | yes | yes | yes |
 | Manage workspace settings (name, logo, currency, email) | yes | yes | no |
 | Invite, remove and re-role members | yes | yes, except owners | no |
 | List and revoke pending invitations | yes | yes | no |

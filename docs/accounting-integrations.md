@@ -103,7 +103,16 @@ The same operations are REST endpoints for API clients:
 - `POST /accounting/invoices/:id/retry`
 
 `GET /invoices/:id/delivery-status` returns webhook deliveries plus the
-invoice's `accounting` posting status, provider ID, error and timestamps.
+invoice's `accounting` posting status, provider ID, error, retryability,
+revision and timestamps.
+
+A post is scheduled in the same transaction that completes processing, while
+an accounting connection is active. Its status is `queued` until it settles as
+`posted`, `already_posted`, `failed` (after the final attempt; earlier
+failures keep it `queued` with the last error) or `cancelled` (the connection
+was disconnected or the invoice deleted before it ran). Reprocessing an invoice
+never posts a second bill. See
+[Processing-to-delivery handoff](delivery.md#processing-to-delivery-handoff).
 
 ## Local proof (test-only stub)
 

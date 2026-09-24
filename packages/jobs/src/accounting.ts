@@ -2,21 +2,19 @@ import type { Database } from "@invoicewise/db/client";
 import {
   type AccountingProvider,
   disconnectAccountingConnectionRecord,
-  enqueueWorkflowJob,
   getAccountingPostInvoice,
   getActiveAccountingConnection,
   getActiveAccountingConnectionByProvider,
-  getWorkflowJobByKey,
   isValidDocumentBinding,
   recordAccountingAlreadyPosted,
+  recordAccountingPostCancelled,
   recordAccountingPostFailure,
   recordAccountingPostSuccess,
-  restartFailedWorkflowJob,
   upsertAccountingConnection,
 } from "@invoicewise/db/queries";
 import { Effect, Schema } from "effect";
 import { BillRejectedError, postProviderBill } from "./accounting-providers";
-import { workflowKey } from "./client";
+import { requeueAccountingIntent } from "./delivery";
 import {
   NangoRequestError,
   asRecord,
@@ -187,15 +185,38 @@ export async function disconnectAccountingConnection(
   return disconnectAccountingConnectionRecord(db, input);
 }
 
+/**
+ * Posts one draft bill for an invoice. The provider idempotency key is per
+ * invoice, so concurrent or repeated runs (an expired lease, a timeout after
+ * the provider already created the bill) resolve to one logical bill. A
+ * non-final failure keeps the intent queued; only the final attempt records a
+ * visible failure. Queued work for a deleted invoice or a disconnected
+ * connection is cancelled without posting.
+ */
 export const postAccountingDraft = (
   db: Database,
   storage: AttachmentStorage,
-  input: { invoiceId: string; teamId: string },
+  input: {
+    invoiceId: string;
+    teamId: string;
+    attempt?: number;
+    maxAttempts?: number;
+  },
   env = process.env,
 ) =>
   Effect.gen(function* () {
+    const target = { invoiceId: input.invoiceId, teamId: input.teamId };
+    const cancel = (reason: string) =>
+      Effect.tryPromise({
+        try: () => recordAccountingPostCancelled(db, { ...target, reason }),
+        catch: () =>
+          new AccountingPostError({
+            reason: "Unable to record cancelled accounting post",
+            retryable: true,
+          }),
+      });
     const invoice = yield* Effect.tryPromise({
-      try: () => getAccountingPostInvoice(db, input),
+      try: () => getAccountingPostInvoice(db, target),
       catch: () =>
         new AccountingPostError({
           reason: "Unable to load invoice for accounting",
@@ -211,6 +232,11 @@ export const postAccountingDraft = (
       );
     }
 
+    if (invoice.status === "deleted") {
+      yield* cancel("Invoice was deleted");
+      return { invoiceId: invoice.id, status: "cancelled" };
+    }
+
     const connection = yield* Effect.tryPromise({
       try: () => getActiveAccountingConnection(db, input.teamId),
       catch: () =>
@@ -219,11 +245,14 @@ export const postAccountingDraft = (
           retryable: true,
         }),
     });
-    if (!connection) return { invoiceId: invoice.id, status: "skipped" };
+    if (!connection) {
+      yield* cancel("No accounting connection is active");
+      return { invoiceId: invoice.id, status: "cancelled" };
+    }
 
     if (invoice.accountingProviderId) {
       yield* Effect.tryPromise({
-        try: () => recordAccountingAlreadyPosted(db, input),
+        try: () => recordAccountingAlreadyPosted(db, target),
         catch: () =>
           new AccountingPostError({
             reason: "Unable to record duplicate accounting post",
@@ -243,10 +272,15 @@ export const postAccountingDraft = (
       Effect.tryPromise({
         try: () =>
           recordAccountingPostFailure(db, {
-            ...input,
+            ...target,
             provider: connection.provider,
             idempotencyKey,
             error: error.reason,
+            final:
+              !error.retryable ||
+              input.attempt === undefined ||
+              input.attempt >= (input.maxAttempts ?? input.attempt),
+            retryable: error.retryable,
           }),
         catch: () =>
           new AccountingPostError({
@@ -350,7 +384,7 @@ export const postAccountingDraft = (
     yield* Effect.tryPromise({
       try: () =>
         recordAccountingPostSuccess(db, {
-          ...input,
+          ...target,
           provider: connection.provider,
           providerId: posted.right.providerId,
           idempotencyKey,
@@ -381,47 +415,32 @@ export const postAccountingDraft = (
     };
   });
 
-export async function enqueueAccountingPost(
-  db: Database,
-  input: { invoiceId: string; teamId: string },
-) {
-  if (!(await getActiveAccountingConnection(db, input.teamId))) return null;
-  return enqueueWorkflowJob(db, {
-    name: "post-accounting-draft",
-    teamId: input.teamId,
-    payload: input,
-    idempotencyKey: workflowKey.accounting(input.teamId, input.invoiceId),
-  });
-}
-
+/**
+ * Explicit accounting retry for one invoice. Re-drives a failed or cancelled
+ * intent on the workspace's active connection; see `retryInvoiceDelivery` for
+ * the full per-destination retry.
+ */
 export async function retryAccountingPost(
   db: Database,
   input: { invoiceId: string; teamId: string },
 ) {
   const invoice = await getAccountingPostInvoice(db, input);
-  if (!invoice) return null;
+  if (!invoice || invoice.status === "deleted") return null;
   if (invoice.accountingProviderId) {
-    return { status: "already_posted" as const, job: null };
+    return { status: "already_posted" as const };
   }
   if (!(await getActiveAccountingConnection(db, input.teamId))) {
     throw new Error("No accounting connection is active");
   }
-  const idempotencyKey = workflowKey.accounting(input.teamId, input.invoiceId);
-  const existing = await getWorkflowJobByKey(db, {
-    name: "post-accounting-draft",
-    idempotencyKey,
-    teamId: input.teamId,
-  });
-  if (existing?.status === "failed") {
-    return {
-      status: "queued" as const,
-      job: await restartFailedWorkflowJob(db, {
-        id: existing.id,
-        teamId: input.teamId,
-      }),
-    };
-  }
-  if (existing) return { status: existing.status, job: existing };
-  const created = await enqueueAccountingPost(db, input);
-  return { status: "queued" as const, job: created?.job ?? null };
+  const outcome = await db.transaction((tx) =>
+    requeueAccountingIntent(tx as unknown as Database, {
+      ...input,
+      // A never-scheduled invoice is treated like a failed one: posting it is
+      // what the caller explicitly asked for.
+      status: invoice.accountingPostStatus ?? "failed",
+      providerId: invoice.accountingProviderId,
+      revision: invoice.accountingRevision ?? invoice.processingRevision,
+    }),
+  );
+  return { status: outcome === "requeued" ? ("queued" as const) : outcome };
 }

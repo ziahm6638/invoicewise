@@ -35,6 +35,61 @@ import type { SQL } from "drizzle-orm/sql/sql";
 const visibleIntakeState = () =>
   or(isNull(inbox.intakeState), ne(inbox.intakeState, "reserved"))!;
 
+export type InvoiceDeliveryState =
+  | "none"
+  | "pending"
+  | "delivered"
+  | "failed"
+  | "cancelled";
+
+export type InvoiceDeliverySummary = {
+  state: InvoiceDeliveryState;
+  total: number;
+  succeeded: number;
+  pending: number;
+  failed: number;
+  cancelled: number;
+};
+
+/**
+ * Outcome of the destinations the current processing revision was delivered
+ * to: its webhook deliveries (not `delivery.failed` notifications) and the
+ * invoice's accounting post. "delivered" means at least one destination was
+ * configured and every one that was not cancelled succeeded. Legacy
+ * `inbox.status` values play no part.
+ */
+const invoiceDeliverySummary = () =>
+  sql<InvoiceDeliverySummary>`(
+    select json_build_object(
+      'state', case
+        when count(*) filter (where d.status = 'failed') > 0 then 'failed'
+        when count(*) filter (where d.status in ('queued', 'delivering')) > 0 then 'pending'
+        when count(*) filter (where d.status = 'succeeded') > 0 then 'delivered'
+        when count(*) > 0 then 'cancelled'
+        else 'none'
+      end,
+      'total', count(*),
+      'succeeded', count(*) filter (where d.status = 'succeeded'),
+      'pending', count(*) filter (where d.status in ('queued', 'delivering')),
+      'failed', count(*) filter (where d.status = 'failed'),
+      'cancelled', count(*) filter (where d.status = 'cancelled')
+    )
+    from (
+      select wd.status::text as status
+      from webhook_deliveries wd
+      where wd.invoice_id = ${inbox.id}
+        and wd.team_id = ${inbox.teamId}
+        and wd.revision = ${inbox.processingRevision}
+        and wd.event <> 'delivery.failed'
+      union all
+      select case
+        when ${inbox.accountingPostStatus} in ('posted', 'already_posted') then 'succeeded'
+        else ${inbox.accountingPostStatus}::text
+      end
+      where ${inbox.accountingPostStatus} is not null
+    ) d
+  )`;
+
 // Scoring functions for suggestion ranking
 function calculateAmountScore(
   item1: { amount: number | null },
@@ -180,6 +235,8 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       extraction: inbox.extraction,
       judgments: inbox.judgments,
       processingError: inbox.processingError,
+      processingRevision: inbox.processingRevision,
+      delivery: invoiceDeliverySummary(),
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
         id: inboxAccounts.id,
@@ -261,6 +318,8 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       extraction: inbox.extraction,
       judgments: inbox.judgments,
       processingError: inbox.processingError,
+      processingRevision: inbox.processingRevision,
+      delivery: invoiceDeliverySummary(),
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
         id: inboxAccounts.id,
@@ -2045,6 +2104,89 @@ export type UpdateInboxWithProcessedDataParams = {
     | "done"
     | "deleted";
 };
+
+/**
+ * Persists a processing result as the next revision, but only while the
+ * record is still `processing`. Two workers that raced on one document (an
+ * expired lease) cannot both complete it: the loser gets no row back and
+ * schedules nothing.
+ */
+export async function completeInboxProcessing(
+  db: Pick<Database, "update">,
+  params: Omit<UpdateInboxWithProcessedDataParams, "status"> & {
+    teamId: string;
+  },
+) {
+  const { id, teamId, ...updateData } = params;
+  const [result] = await db
+    .update(inbox)
+    .set({
+      ...updateData,
+      status: "pending",
+      processingRevision: sql`${inbox.processingRevision} + 1`,
+    })
+    .where(
+      and(
+        eq(inbox.id, id),
+        eq(inbox.teamId, teamId),
+        eq(inbox.status, "processing"),
+      ),
+    )
+    .returning({
+      id: inbox.id,
+      teamId: inbox.teamId,
+      fileName: inbox.fileName,
+      filePath: inbox.filePath,
+      displayName: inbox.displayName,
+      transactionId: inbox.transactionId,
+      amount: inbox.amount,
+      currency: inbox.currency,
+      contentType: inbox.contentType,
+      date: inbox.date,
+      status: inbox.status,
+      createdAt: inbox.createdAt,
+      website: inbox.website,
+      description: inbox.description,
+      referenceId: inbox.referenceId,
+      size: inbox.size,
+      taxAmount: inbox.taxAmount,
+      taxRate: inbox.taxRate,
+      taxType: inbox.taxType,
+      type: inbox.type,
+      extraction: inbox.extraction,
+      judgments: inbox.judgments,
+      processingRevision: inbox.processingRevision,
+      accountingPostStatus: inbox.accountingPostStatus,
+      accountingProviderId: inbox.accountingProviderId,
+    });
+  return result;
+}
+
+/**
+ * Locks an invoice row for a delivery retry so concurrent retries and a
+ * finishing worker serialize on it.
+ */
+export async function getInvoiceForDeliveryUpdate(
+  db: Pick<Database, "select">,
+  params: { id: string; teamId: string },
+) {
+  const [result] = await db
+    .select({
+      id: inbox.id,
+      teamId: inbox.teamId,
+      status: inbox.status,
+      intakeState: inbox.intakeState,
+      processingRevision: inbox.processingRevision,
+      accountingPostStatus: inbox.accountingPostStatus,
+      accountingProviderId: inbox.accountingProviderId,
+      accountingRevision: inbox.accountingRevision,
+    })
+    .from(inbox)
+    .where(and(eq(inbox.id, params.id), eq(inbox.teamId, params.teamId)))
+    .for("update")
+    .limit(1);
+  return result;
+}
 
 export async function updateInboxWithProcessedData(
   db: Database,

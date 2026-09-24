@@ -13,9 +13,9 @@ import {
   completeAccountingConnection,
   createAccountingConnectSession,
   disconnectAccountingConnection,
-  enqueueAccountingPost,
   postAccountingDraft,
 } from "./accounting";
+import { scheduleAccountingPost } from "./delivery";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
 
 const required = (name: string) => {
@@ -282,10 +282,15 @@ async function main() {
 
     const postedInvoice = await createInvoice("POST-ONCE");
     if (!postedInvoice) throw new Error("Unable to persist posted invoice");
-    const postedJob = await enqueueAccountingPost(database.db, {
-      invoiceId: postedInvoice.id,
-      teamId,
-    });
+    const schedule = (invoiceId: string) =>
+      scheduleAccountingPost(database.db, {
+        invoiceId,
+        teamId: teamId!,
+        revision: 0,
+        status: null,
+        providerId: null,
+      });
+    const postedJob = await schedule(postedInvoice.id);
     if (!postedJob) throw new Error("Accounting post was not queued");
     await runBatch();
     const postedStatus = await getInvoiceAccountingStatus(database.db, {
@@ -309,10 +314,7 @@ async function main() {
 
     const retryInvoice = await createInvoice("FAIL-RETRY");
     if (!retryInvoice) throw new Error("Unable to persist retry invoice");
-    const retryJob = await enqueueAccountingPost(database.db, {
-      invoiceId: retryInvoice.id,
-      teamId,
-    });
+    const retryJob = await schedule(retryInvoice.id);
     if (!retryJob) throw new Error("Retry accounting post was not queued");
     await runBatch();
     const failedStatus = await getInvoiceAccountingStatus(database.db, {
@@ -320,7 +322,7 @@ async function main() {
       teamId,
     });
     const queued = await getWorkflowJob(database.db, {
-      id: retryJob.job.id,
+      id: retryJob.id,
       teamId,
     });
     if (!queued) throw new Error("Unable to load retry workflow");
@@ -329,7 +331,7 @@ async function main() {
     );
     await runBatch();
     const retriedJob = await getWorkflowJob(database.db, {
-      id: retryJob.job.id,
+      id: retryJob.id,
       teamId,
     });
     const retriedStatus = await getInvoiceAccountingStatus(database.db, {
@@ -346,7 +348,10 @@ async function main() {
       postedStatus?.status !== "posted" ||
       duplicate.status !== "already_posted" ||
       !duplicateRefused ||
-      failedStatus?.status !== "failed" ||
+      // A failed attempt with retries left keeps the intent queued; only the
+      // final attempt is a terminal failure.
+      failedStatus?.status !== "queued" ||
+      failedStatus.lastError !== "Forced provider timeout" ||
       retriedJob?.status !== "succeeded" ||
       retriedJob.attempts !== 2 ||
       retriedStatus?.status !== "posted" ||
@@ -379,6 +384,7 @@ async function main() {
             duplicateRefused,
           },
           retry: {
+            afterFirstAttempt: failedStatus.status,
             failedWith: failedStatus.lastError,
             attempts: retriedJob.attempts,
             finalStatus: retriedStatus.status,

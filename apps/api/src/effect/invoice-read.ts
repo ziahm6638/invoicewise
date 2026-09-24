@@ -106,9 +106,12 @@ export const DeliveryStatusItem = Schema.Struct({
   endpointId: Schema.String,
   endpointUrl: Schema.String,
   event: Schema.String,
+  eventId: Schema.NullOr(Schema.String),
+  revision: Schema.NullOr(Schema.Number),
   status: Schema.String,
   attempts: Schema.Number,
   lastError: Schema.NullOr(Schema.String),
+  retryable: Schema.NullOr(Schema.Boolean),
   deliveredAt: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
 });
@@ -116,10 +119,12 @@ export const DeliveryStatus = Schema.Struct({
   data: Schema.Array(DeliveryStatusItem),
   accounting: Schema.NullOr(
     Schema.Struct({
-      provider: Schema.String,
+      provider: Schema.NullOr(Schema.String),
       status: Schema.String,
       providerId: Schema.NullOr(Schema.String),
       lastError: Schema.NullOr(Schema.String),
+      retryable: Schema.NullOr(Schema.Boolean),
+      revision: Schema.NullOr(Schema.Number),
       postedAt: Schema.NullOr(Schema.String),
       idempotencyKey: Schema.NullOr(Schema.String),
     }),

@@ -2,13 +2,12 @@ import type { Database } from "@invoicewise/db/client";
 import {
   getProcessedInvoiceHistory,
   getUserQuestions,
-  updateInboxWithProcessedData,
 } from "@invoicewise/db/queries";
 import {
   DocumentClient,
   type InvoiceJudgmentQuestion,
 } from "@invoicewise/documents";
-import { emitInvoiceProcessedWebhooks } from "./webhooks";
+import { completeInvoiceProcessing } from "./delivery";
 
 export async function processDocumentAttachment(
   db: Database,
@@ -82,8 +81,11 @@ export async function processDocumentAttachment(
         .map(({ question }) => question),
   });
 
-  const record = await updateInboxWithProcessedData(db, {
+  // The result, its revision and every destination's delivery intent commit
+  // together; null means another worker already completed this document.
+  const completion = await completeInvoiceProcessing(db, {
     id: input.inboxId,
+    teamId: input.teamId,
     amount: result.amount,
     currency: result.currency,
     displayName: result.name,
@@ -97,10 +99,7 @@ export async function processDocumentAttachment(
     extraction: result.extraction,
     judgments: result.judgments,
     processingError: null,
-    status: "pending",
   });
 
-  if (record) await emitInvoiceProcessedWebhooks(db, record);
-
-  return { record, result };
+  return { completion, result };
 }
