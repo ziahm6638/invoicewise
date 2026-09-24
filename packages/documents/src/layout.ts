@@ -218,9 +218,7 @@ const splitColumns = (
   // the other lacks. A table fills its right side mostly with numbers, and a
   // label/value list pairs most rows with a "Label:" on the left.
   const independent =
-    sides.some(
-      (side) => side.left.length === 0 || side.right.length === 0,
-    ) &&
+    sides.some((side) => side.left.length === 0 || side.right.length === 0) &&
     wordyRights.length * 2 > rights.length &&
     labelled.length * 2 <= paired.length;
   if (!independent) return null;

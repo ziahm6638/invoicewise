@@ -67,7 +67,9 @@ export const candidateRow = (
   const own = span
     ? line.segments.filter((segment) => overlaps(segment, span))
     : [];
-  return own.length > 0 ? own.map((segment) => segment.text).join("  ") : line.text;
+  return own.length > 0
+    ? own.map((segment) => segment.text).join("  ")
+    : line.text;
 };
 
 /** The segment directly below `segment`, within the next two rows. */

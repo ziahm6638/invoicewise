@@ -209,7 +209,8 @@ Enforced before any provider work, in `packages/documents/src/intake.ts`:
   image-only export) is rendered at up to 300 DPI and OCR'd with `tesseract`,
   which runs under the same supervisor: minimal environment, wall-clock, RSS
   and output budgets, bounded admission. PNG and JPEG uploads are OCR'd
-  directly. At most 10 pages per document are OCR'd. The production image and
+  directly after being turned upright from their EXIF orientation (tesseract
+  ignores it, so a sideways-stored phone photo would read rotated). At most 10 pages per document are OCR'd. The production image and
   CI install `tesseract-ocr`; locally, `brew install tesseract` (or
   `apt-get install tesseract-ocr`) is needed for the scanned-invoice test. Render geometry is checked against the
   **scaled** viewport, so `scale: 2` cannot turn a bounded page into an
