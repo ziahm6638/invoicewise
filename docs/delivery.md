@@ -196,7 +196,8 @@ completion commit with one destination's job lost; a crash after a webhook
 endpoint answered 2xx; a crash after the provider created a bill; concurrent
 completion and two concurrent workers; a lost job and an unrecorded final
 failure; a first destination succeeding while the second fails, then the retry;
-and a disabled endpoint, a disconnected accounting connection, a deleted
+the `delivery.failed` notification of a terminal failure, a new one after a
+retry fails again, and none for a failed notification; and a disabled endpoint, a disconnected accounting connection, a deleted
 invoice and a deleted workspace. It then reconciles every accepted revision
 against the events the consumer received and the bills the provider created.
 Observed on 2026-09-24:
