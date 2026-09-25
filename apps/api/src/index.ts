@@ -9,6 +9,7 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { Config, Effect, Logger } from "effect";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
+import { handleSaltEdgeCallbackRequest } from "./bank-payments/callback";
 import { invoiceHttp } from "./effect/invoice-http";
 import { handleInboundEmail } from "./inbound-email/http";
 import { registerHealthRoutes } from "./ops/route";
@@ -65,6 +66,11 @@ app.post("/inbound/email", (c) =>
     secret: process.env.INBOUND_EMAIL_SECRET?.trim() || undefined,
     domain: inboundEmailDomain(),
   }),
+);
+
+// Salt Edge callbacks for optional bank payments, signed by Salt Edge.
+app.post("/webhooks/saltedge/:type", (c) =>
+  handleSaltEdgeCallbackRequest(c.req.raw, c.req.param("type"), { db }),
 );
 
 app.doc("/openapi", {

@@ -13,6 +13,7 @@ import {
   type RetainedSourceText,
 } from "@invoicewise/documents";
 import { completeAndSchedule } from "./delivery";
+import { schedulePaymentMatchingForRevision } from "./payment-matching";
 import { scheduleInvoiceMatch } from "./source-matching";
 import {
   loadJudgmentHistory,
@@ -206,6 +207,13 @@ export async function saveProcessedDocument(
     // TypeSafe), queued with the revision so it cannot be lost.
     if (completion) {
       await scheduleInvoiceMatch(executor, {
+        teamId: input.teamId,
+        invoiceId: input.id,
+        revision: completion.revision,
+      });
+      // Bank payments (optional): the revision is matched to the
+      // workspace's bank transactions in its own job.
+      await schedulePaymentMatchingForRevision(executor, {
         teamId: input.teamId,
         invoiceId: input.id,
         revision: completion.revision,

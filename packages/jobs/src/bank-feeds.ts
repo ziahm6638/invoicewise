@@ -19,6 +19,7 @@ import {
   getBankFeedConnection,
   getBankFeedConnectionByProviderId,
   getBankPaymentSettings,
+  getUnattachedBankFeedConnection,
   hasActiveBankFeedConnection,
   listAccountTransactions,
   listBankFeedAccounts,
@@ -1226,17 +1227,10 @@ export async function handleSaltEdgeCallback(
   if (!team && input.type === "fail" && typeof customFields.connection === "string") {
     // A failure before the connection existed carries only our own row id;
     // it may only mark that row, which is still pending.
-    const [pending] = await db
-      .select()
-      .from((await import("@invoicewise/db/schema")).bankFeedConnections)
-      .where(
-        (await import("drizzle-orm")).eq(
-          (await import("@invoicewise/db/schema")).bankFeedConnections.id,
-          customFields.connection,
-        ),
-      )
-      .limit(1);
-    if (pending?.status === "pending" && !pending.providerConnectionId) {
+    const pending = /^[0-9a-f-]{36}$/i.test(customFields.connection)
+      ? await getUnattachedBankFeedConnection(db, customFields.connection)
+      : null;
+    if (pending) {
       await updateBankFeedConnection(db, {
         teamId: pending.teamId,
         connectionId: pending.id,

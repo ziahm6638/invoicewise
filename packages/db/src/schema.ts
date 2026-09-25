@@ -1598,6 +1598,14 @@ export type DeletionConnection =
       accountId: string;
       refreshToken: string | null;
       revokedAt?: string;
+    }
+  | {
+      // The workspace's Salt Edge customer: removing it removes every bank
+      // connection under it and revokes their consent.
+      kind: "bank_feed";
+      provider: "saltedge";
+      customerId: string;
+      revokedAt?: string;
     };
 
 /**

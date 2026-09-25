@@ -191,6 +191,28 @@ export async function getPendingBankFeedConnection(db: Database, teamId: string)
   return row ?? null;
 }
 
+/**
+ * A connect attempt that has not reached the provider yet, by our own id.
+ * Only a provider failure callback uses it, to mark that attempt failed.
+ */
+export async function getUnattachedBankFeedConnection(
+  db: Database,
+  connectionId: string,
+) {
+  const [row] = await db
+    .select()
+    .from(bankFeedConnections)
+    .where(
+      and(
+        eq(bankFeedConnections.id, connectionId),
+        eq(bankFeedConnections.status, "pending"),
+        isNull(bankFeedConnections.providerConnectionId),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
 export async function createBankFeedConnection(
   db: Database,
   params: {

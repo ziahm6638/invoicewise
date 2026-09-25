@@ -19,6 +19,13 @@ export const RESOURCES = [
     ],
   },
   {
+    key: "payments",
+    name: "Bank payments",
+    description:
+      "Invoice payment status with the bank transactions and evidence behind it (owners and admins)",
+    scopes: [{ scope: "payments.read", type: "read", label: "Read" }],
+  },
+  {
     key: "teams",
     name: "Teams",
     description: "Access to team data",

@@ -2,6 +2,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { protectedMiddleware, withRequiredTeam } from "../middleware";
 import { accountingRouter } from "./accounting";
 import { authorizationSourcesRouter } from "./authorization-sources";
+import { bankPaymentsRouter } from "./bank-payments";
 import { deliveryPolicyRouter } from "./delivery-policy";
 import { inboxRouter } from "./inbox";
 import { invoicesRouter } from "./invoices";
@@ -26,6 +27,7 @@ for (const path of [
   "/accounting",
   "/authorization-sources",
   "/delivery-policy",
+  "/bank-payments",
 ]) {
   routers.use(path, withRequiredTeam);
   routers.use(`${path}/*`, withRequiredTeam);
@@ -40,5 +42,6 @@ routers.route("/webhooks", webhooksRouter);
 routers.route("/accounting", accountingRouter);
 routers.route("/authorization-sources", authorizationSourcesRouter);
 routers.route("/delivery-policy", deliveryPolicyRouter);
+routers.route("/bank-payments", bankPaymentsRouter);
 
 export { routers };

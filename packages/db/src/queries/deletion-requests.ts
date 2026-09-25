@@ -2,11 +2,21 @@ import type { Database, PrimaryDatabase } from "@db/client";
 import {
   type DeletionConnection,
   accountingConnections,
+  bankPaymentSettings,
   deletionRequests,
   inboxAccounts,
   workflowJobs,
 } from "@db/schema";
-import { and, desc, eq, inArray, isNull, max, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  max,
+  sql,
+} from "drizzle-orm";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
@@ -63,7 +73,26 @@ export async function snapshotWorkspaceConnections(
     .from(inboxAccounts)
     .where(eq(inboxAccounts.teamId, teamId));
 
+  const [bankFeed] = await tx
+    .select({ customerId: bankPaymentSettings.providerCustomerId })
+    .from(bankPaymentSettings)
+    .where(
+      and(
+        eq(bankPaymentSettings.teamId, teamId),
+        isNotNull(bankPaymentSettings.providerCustomerId),
+      ),
+    );
+
   return [
+    ...(bankFeed?.customerId
+      ? [
+          {
+            kind: "bank_feed",
+            provider: "saltedge",
+            customerId: bankFeed.customerId,
+          } satisfies DeletionConnection,
+        ]
+      : []),
     ...accounting.map(
       (connection): DeletionConnection => ({
         kind: "accounting",

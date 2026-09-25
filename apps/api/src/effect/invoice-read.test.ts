@@ -95,6 +95,38 @@ const invoice = {
     reason: null,
     decidedAt: "2026-09-21T10:00:00.000Z",
   },
+  paymentMatch: {
+    id: "5a7d2c10-9e3b-4f1a-8c6d-7e8f9a0b1c2d",
+    sequence: 1,
+    status: "matched",
+    paymentStatus: "paid",
+    origin: "automatic",
+    action: "automatic",
+    needsConfirmation: false,
+    currency: "GBP",
+    paid: "120.00",
+    remaining: "0.00",
+    allocations: [
+      {
+        kind: "payment",
+        transactionId: "6b8e3d21-0f4c-4a2b-9d7e-8f9a0b1c2d3e",
+        creditInboxId: null,
+        amount: "120.00",
+        currency: "GBP",
+      },
+    ],
+    candidates: [
+      {
+        transactionId: "6b8e3d21-0f4c-4a2b-9d7e-8f9a0b1c2d3e",
+        description: "BACS NJ-10457 NORTHWIND",
+        amount: "-120.00",
+        currency: "GBP",
+        evidence: [],
+      },
+    ],
+    reason: null,
+    decidedAt: "2026-09-22T10:00:00.000Z",
+  },
   deliveryDecision: {
     id: "7f4c2b2e-2a51-4a0a-8f0e-4f7a4d2b9c10",
     revision: 1,
@@ -265,6 +297,14 @@ describe("Effect invoice read HTTP slice", () => {
           supplierId: invoice.supplierId,
           supplierChecks: invoice.supplierChecks,
           sourceMatch: invoice.sourceMatch,
+          paymentMatch: {
+            status: "matched",
+            paymentStatus: "paid",
+            needsConfirmation: false,
+            currency: "GBP",
+            paid: "120.00",
+            remaining: "0.00",
+          },
           deliveryDecision: invoice.deliveryDecision,
           processingError: null,
           inboundEmail: invoice.inboundEmail,
@@ -417,5 +457,46 @@ describe("Effect invoice read HTTP slice", () => {
       await read("/invoices", ["inbox.read", "sources.read"])
     ).json()) as { data: Record<string, unknown>[] };
     expect(withSourcesPage.data[0]!.sourceMatch).toEqual(invoice.sourceMatch);
+  });
+
+  test("shows bank-payment evidence only to a credential with payments.read", async () => {
+    const read = (path: string, scopes: string[]) =>
+      handler(
+        invoiceReadRequest(
+          new Request(`http://localhost${path}`, {
+            headers: { "x-invoicewise-payment-details": "full" },
+          }),
+          { teamId: "team-123", scopes },
+        ),
+      );
+    const summary = {
+      status: "matched",
+      paymentStatus: "paid",
+      needsConfirmation: false,
+      currency: "GBP",
+      paid: "120.00",
+      remaining: "0.00",
+    };
+    for (const path of [`/invoices/${invoice.id}`, `/inbox/${invoice.id}`]) {
+      const inboxOnly = (await (
+        await read(path, ["inbox.read", "sources.read"])
+      ).json()) as Record<string, unknown>;
+      expect(inboxOnly.paymentMatch).toEqual(summary);
+      // Payment details never widen what sources.read shows, or the reverse.
+      expect(inboxOnly.sourceMatch).toEqual(invoice.sourceMatch);
+
+      const withPayments = (await (
+        await read(path, ["inbox.read", "payments.read"])
+      ).json()) as Record<string, unknown>;
+      expect(withPayments.paymentMatch).toEqual(invoice.paymentMatch);
+      expect((withPayments.sourceMatch as { status: string }).status).toBe(
+        "matched",
+      );
+      expect(withPayments.sourceMatch).not.toEqual(invoice.sourceMatch);
+    }
+    const page = (await (
+      await read("/invoices", ["inbox.read"])
+    ).json()) as { data: Record<string, unknown>[] };
+    expect(page.data[0]!.paymentMatch).toEqual(summary);
   });
 });

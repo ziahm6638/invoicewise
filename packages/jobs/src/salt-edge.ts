@@ -601,3 +601,36 @@ export function createSaltEdgeClient(
     },
   };
 }
+
+/**
+ * Removes a deleted workspace's Salt Edge customer. Uses the app credentials
+ * even when bank payments were since switched off on this deployment; with no
+ * credentials at all the removal cannot happen and the cleanup retries.
+ */
+export async function revokeBankFeedCustomer(
+  customerId: string,
+  env: NodeJS.ProcessEnv = process.env,
+  fetcher: typeof fetch = fetch,
+) {
+  const appId = env.SALT_EDGE_APP_ID?.trim();
+  const secret = env.SALT_EDGE_SECRET?.trim();
+  if (!appId || !secret) {
+    throw new SaltEdgeError(
+      "SALT_EDGE_APP_ID and SALT_EDGE_SECRET are needed to remove the bank data customer",
+      0,
+      null,
+    );
+  }
+  await createSaltEdgeClient(
+    {
+      appId,
+      secret,
+      privateKey: env.SALT_EDGE_PRIVATE_KEY?.trim() || null,
+      baseUrl: (env.SALT_EDGE_BASE_URL?.trim() || SALT_EDGE_DEFAULT_BASE_URL).replace(
+        /\/+$/,
+        "",
+      ),
+    },
+    fetcher,
+  ).removeCustomer(customerId);
+}

@@ -70,6 +70,18 @@ export const InvoiceItem = Schema.Struct({
    */
   sourceMatch: Schema.optional(Schema.NullOr(Schema.Unknown)),
   /**
+   * The current bank-payment decision, only for a workspace that uses the
+   * optional bank payments: `status` (`matched`, `pending`, `proposed`,
+   * `ambiguous`, `unmatched`, `insufficient_evidence`), `paymentStatus`
+   * (`unpaid`, `pending`, `partially_paid`, `paid`, `overpaid`, `applied`),
+   * `paid`, `remaining`, the `allocations` counted (payment, fee, credit),
+   * every `candidates` transaction with its evidence, and who decided.
+   * Separate from `sourceMatch`. A credential without `payments.read` gets
+   * only `status`, `paymentStatus`, `needsConfirmation`, `paid`, `remaining`
+   * and `currency`.
+   */
+  paymentMatch: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  /**
    * The delivery rules' decision for the current revision: the policy
    * version it was made under, `outcome` (`deliver` or `hold`), the
    * `reasons` it was held, what each destination was told and how a hold
@@ -130,6 +142,9 @@ export type SourceDetails = typeof SourceDetails.Type;
 export const InvoiceHeaders = Schema.Struct({
   "x-invoicewise-team-id": Schema.String,
   "x-invoicewise-source-details": Schema.optionalWith(SourceDetails, {
+    default: () => "summary",
+  }),
+  "x-invoicewise-payment-details": Schema.optionalWith(SourceDetails, {
     default: () => "summary",
   }),
 });
@@ -248,16 +263,19 @@ export class InvoiceRead extends Context.Tag("invoicewise/InvoiceRead")<
       teamId: string,
       query: InvoiceListQuery,
       sourceDetails: SourceDetails,
+      paymentDetails?: SourceDetails,
     ) => Effect.Effect<InvoicePage, InvoiceReadError>;
     readonly findById: (
       id: string,
       teamId: string,
       sourceDetails: SourceDetails,
+      paymentDetails?: SourceDetails,
     ) => Effect.Effect<InvoiceItem, InvoiceNotFound | InvoiceReadError>;
     readonly detail: (
       id: string,
       teamId: string,
       sourceDetails: SourceDetails,
+      paymentDetails?: SourceDetails,
     ) => Effect.Effect<InvoiceDetail, InvoiceNotFound | InvoiceReadError>;
     readonly deliveryStatus: (
       id: string,
@@ -403,13 +421,38 @@ export const summarizeSourceMatch = (value: unknown) => {
   };
 };
 
-const withSourceDetails = <T extends { sourceMatch?: unknown }>(
+/**
+ * The payment decision as a credential without `payments.read` sees it: the
+ * outcome and amounts, never the bank transactions or the evidence.
+ */
+export const summarizePaymentMatch = (value: unknown) => {
+  if (value === null || value === undefined) return value;
+  const match = record(value);
+  return {
+    status: match.status,
+    paymentStatus: match.paymentStatus,
+    needsConfirmation: match.needsConfirmation,
+    currency: match.currency ?? null,
+    paid: match.paid ?? null,
+    remaining: match.remaining ?? null,
+  };
+};
+
+const withSourceDetails = <
+  T extends { sourceMatch?: unknown; paymentMatch?: unknown },
+>(
   item: T,
   sourceDetails: SourceDetails,
-): T =>
-  sourceDetails === "full"
-    ? item
-    : { ...item, sourceMatch: summarizeSourceMatch(item.sourceMatch) };
+  paymentDetails: SourceDetails = "summary",
+): T => {
+  const sourced =
+    sourceDetails === "full"
+      ? item
+      : { ...item, sourceMatch: summarizeSourceMatch(item.sourceMatch) };
+  return paymentDetails === "full" || !("paymentMatch" in item)
+    ? sourced
+    : { ...sourced, paymentMatch: summarizePaymentMatch(item.paymentMatch) };
+};
 
 const csvCell = (value: unknown) => {
   const text = value === null || value === undefined ? "" : String(value);
@@ -506,13 +549,14 @@ export const InvoiceReadLayer = Layer.effect(
       teamId: string,
       query: InvoiceListQuery,
       sourceDetails: SourceDetails,
+      paymentDetails: SourceDetails = "summary",
     ): Effect.Effect<InvoicePage, InvoiceReadError> =>
       Effect.gen(function* () {
         const result = yield* repository.list({ teamId, ...query });
         return yield* decode(InvoicePage, {
           ...result,
           data: result.data.map((item) =>
-            withSourceDetails(item, sourceDetails),
+            withSourceDetails(item, sourceDetails, paymentDetails),
           ),
         });
       });
@@ -521,6 +565,7 @@ export const InvoiceReadLayer = Layer.effect(
       id: string,
       teamId: string,
       sourceDetails: SourceDetails,
+      paymentDetails: SourceDetails = "summary",
     ): Effect.Effect<InvoiceItem, InvoiceNotFound | InvoiceReadError> =>
       Effect.gen(function* () {
         const result = yield* repository.findById(id, teamId);
@@ -531,7 +576,7 @@ export const InvoiceReadLayer = Layer.effect(
         }
         return yield* decode(
           InvoiceItem,
-          withSourceDetails(result, sourceDetails),
+          withSourceDetails(result, sourceDetails, paymentDetails),
         );
       });
 
@@ -539,6 +584,7 @@ export const InvoiceReadLayer = Layer.effect(
       id: string,
       teamId: string,
       sourceDetails: SourceDetails,
+      paymentDetails: SourceDetails = "summary",
     ): Effect.Effect<InvoiceDetail, InvoiceNotFound | InvoiceReadError> =>
       Effect.gen(function* () {
         const item = yield* repository.findById(id, teamId);
@@ -564,7 +610,7 @@ export const InvoiceReadLayer = Layer.effect(
         });
         const extraction = record(item.extraction);
         return yield* decode(InvoiceDetail, {
-          ...withSourceDetails(item, sourceDetails),
+          ...withSourceDetails(item, sourceDetails, paymentDetails),
           lineItems: Array.isArray(extraction.lineItems)
             ? extraction.lineItems
             : [],

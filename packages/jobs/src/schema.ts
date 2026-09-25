@@ -110,6 +110,16 @@ export const MatchInvoicePayload = Schema.Struct({
 });
 export type MatchInvoicePayload = typeof MatchInvoicePayload.Type;
 
+export const SyncBankConnectionPayload = Schema.Struct({
+  teamId: Schema.String,
+  /** The workspace's own connection row; re-read scoped to `teamId`. */
+  connectionId: Schema.String,
+});
+export type SyncBankConnectionPayload = typeof SyncBankConnectionPayload.Type;
+
+export const MatchPaymentsPayload = Schema.Struct({ teamId: Schema.String });
+export type MatchPaymentsPayload = typeof MatchPaymentsPayload.Type;
+
 export const ApplyRetentionPayload = Schema.Struct({
   /** The hourly slot this run belongs to; the next slot is queued after it. */
   slot: Schema.String,
@@ -176,6 +186,14 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("match-invoice"),
     payload: MatchInvoicePayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("sync-bank-connection"),
+    payload: SyncBankConnectionPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("match-payments"),
+    payload: MatchPaymentsPayload,
   }),
 );
 export type WorkflowRequest = typeof WorkflowRequest.Type;

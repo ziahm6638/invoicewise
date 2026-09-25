@@ -101,6 +101,7 @@ const InvoiceReadHandlers = HttpApiBuilder.group(
             headers["x-invoicewise-team-id"],
             urlParams,
             headers["x-invoicewise-source-details"],
+            headers["x-invoicewise-payment-details"],
           ),
         )
         .handle("findById", ({ headers, path }) =>
@@ -108,6 +109,7 @@ const InvoiceReadHandlers = HttpApiBuilder.group(
             path.id,
             headers["x-invoicewise-team-id"],
             headers["x-invoicewise-source-details"],
+            headers["x-invoicewise-payment-details"],
           ),
         )
         .handle("attachmentUrl", ({ headers, path, urlParams }) =>
@@ -122,6 +124,7 @@ const InvoiceReadHandlers = HttpApiBuilder.group(
             headers["x-invoicewise-team-id"],
             urlParams,
             headers["x-invoicewise-source-details"],
+            headers["x-invoicewise-payment-details"],
           ),
         )
         .handle("exportInvoices", ({ headers }) =>
@@ -132,6 +135,7 @@ const InvoiceReadHandlers = HttpApiBuilder.group(
             path.id,
             headers["x-invoicewise-team-id"],
             headers["x-invoicewise-source-details"],
+            headers["x-invoicewise-payment-details"],
           ),
         )
         .handle("invoiceDeliveryStatus", ({ headers, path }) =>
@@ -155,8 +159,9 @@ export const invoiceHttp = makeInvoiceHttpHandler(InvoiceReadLive);
 
 /**
  * The request the invoice read slice answers for an authenticated caller: its
- * workspace, and full source-match details only when its credential holds
- * `sources.read` (client-sent values of either header are replaced).
+ * workspace, full source-match details only when its credential holds
+ * `sources.read`, and full payment details only with `payments.read`
+ * (client-sent values of these headers are replaced).
  */
 export const invoiceReadRequest = (
   request: Request,
@@ -167,6 +172,10 @@ export const invoiceReadRequest = (
   headers.set(
     "x-invoicewise-source-details",
     caller.scopes?.includes("sources.read") ? "full" : "summary",
+  );
+  headers.set(
+    "x-invoicewise-payment-details",
+    caller.scopes?.includes("payments.read") ? "full" : "summary",
   );
   return new Request(request, { headers });
 };

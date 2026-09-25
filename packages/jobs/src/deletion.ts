@@ -7,6 +7,7 @@ import {
 import type { DeletionConnection } from "@invoicewise/db/schema";
 import { decrypt } from "@invoicewise/encryption";
 import { revokeAccountingConnection } from "./accounting";
+import { revokeBankFeedCustomer } from "./salt-edge";
 
 const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 
@@ -75,6 +76,12 @@ export const revokeDeletionConnection = async (
 ) => {
   if (connection.kind === "accounting") {
     await revokeAccountingConnection(connection, env);
+    return;
+  }
+
+  if (connection.kind === "bank_feed") {
+    // Removing the customer removes its connections and revokes their consent.
+    await revokeBankFeedCustomer(connection.customerId, env);
     return;
   }
 

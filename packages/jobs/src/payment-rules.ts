@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 
 /** Bumped whenever a rule changes, so stored results can be recomputed. */
-export const PAYMENT_MATCHING_VERSION = 1;
+export const PAYMENT_MATCHING_VERSION = 1 as const;
 
 export const PAYMENT_MATCH_RULES = {
   /** A payment may be made this many days before the invoice date. */

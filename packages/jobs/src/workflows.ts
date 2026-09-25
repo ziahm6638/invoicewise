@@ -5,6 +5,7 @@ import {
   type WorkflowJob,
   enqueueWorkflowJob,
   finishQuestionRun,
+  getBankFeedConnection,
   getExistingInboxAttachments,
   getInboxAccountInfo,
   getTeamById,
@@ -94,6 +95,8 @@ import {
   type InitialInboxSetupPayload,
   type InviteTeamMembersPayload,
   type MatchInvoicePayload,
+  type MatchPaymentsPayload,
+  type SyncBankConnectionPayload,
   type OnboardTeamPayload,
   type PostAccountingDraftPayload,
   type ProcessAttachmentPayload,
@@ -105,6 +108,15 @@ import {
   type UpdateAccountingBillPayload,
   WorkflowRequest,
 } from "./schema";
+import {
+  BANK_FEED_LIMITS,
+  scheduleBankSync,
+  syncBankConnection,
+} from "./bank-feeds";
+import {
+  matchWorkspacePayments,
+  schedulePaymentMatching,
+} from "./payment-matching";
 import { matchInvoice } from "./source-matching";
 import {
   WebhookDeliveryRepository,
@@ -1219,6 +1231,74 @@ export const WorkflowHandlerLive = Layer.effect(
           "Unable to match invoice to authorization sources",
         );
       });
+    const syncBankConnectionJob = (
+      job: WorkflowJob,
+      payload: SyncBankConnectionPayload,
+    ) =>
+      Effect.gen(function* () {
+        yield* ensureTeam(job, payload.teamId);
+        const now = new Date();
+        const outcome = yield* attempt(
+          () =>
+            syncBankConnection(db, {
+              teamId: payload.teamId,
+              connectionId: payload.connectionId,
+              finalAttempt: job.attempts >= job.maxAttempts,
+            }),
+          "Unable to sync the bank connection",
+        ).pipe(
+          // The scheduled pull is a chain like the inbox sync: the next slot
+          // is queued whatever this run did, keyed by the slot, and a
+          // connection that is no longer active ends it there.
+          Effect.ensuring(
+            attempt(async () => {
+              const connection = await getBankFeedConnection(db, {
+                teamId: payload.teamId,
+                connectionId: payload.connectionId,
+              });
+              if (connection?.status !== "active") return;
+              const slotMs = BANK_FEED_LIMITS.syncIntervalHours * 3_600_000;
+              const slot = new Date(
+                (Math.floor(now.getTime() / slotMs) + 1) * slotMs,
+              );
+              await scheduleBankSync(db, {
+                teamId: payload.teamId,
+                connectionId: payload.connectionId,
+                key: `scheduled:${slot.toISOString()}`,
+                runAt: slot,
+              });
+            }, "Unable to schedule the next bank sync").pipe(
+              Effect.catchAll((error) =>
+                Effect.logError("bank_sync_schedule_failed").pipe(
+                  Effect.annotateLogs({
+                    event: "bank_sync_schedule_failed",
+                    error: error.reason,
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+        if (outcome.outcome === "synced" || outcome.outcome === "disconnected") {
+          yield* attempt(
+            () =>
+              schedulePaymentMatching(db, {
+                teamId: payload.teamId,
+                key: `sync:${job.id}`,
+              }),
+            "Unable to queue payment matching",
+          );
+        }
+        return outcome as unknown as Record<string, unknown>;
+      });
+    const matchPaymentsJob = (job: WorkflowJob, payload: MatchPaymentsPayload) =>
+      Effect.gen(function* () {
+        yield* ensureTeam(job, payload.teamId);
+        return yield* attempt(
+          () => matchWorkspacePayments(db, { teamId: payload.teamId }),
+          "Unable to match bank payments",
+        );
+      });
     const postAccountingDraftJob = (
       job: WorkflowJob,
       payload: PostAccountingDraftPayload,
@@ -1338,6 +1418,10 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* applyRetention(job, request.payload);
             case "match-invoice":
               return yield* matchInvoiceJob(job, request.payload);
+            case "sync-bank-connection":
+              return yield* syncBankConnectionJob(job, request.payload);
+            case "match-payments":
+              return yield* matchPaymentsJob(job, request.payload);
           }
         }) as Effect.Effect<Record<string, unknown>, WorkflowExecutionError>,
     };

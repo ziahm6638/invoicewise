@@ -6,6 +6,7 @@ import {
   inboxAccounts,
   inboxEmbeddings,
   inboxRedeliveries,
+  invoicePaymentMatches,
   invoiceSourceMatches,
   suppliers,
   transactionAttachments,
@@ -358,6 +359,32 @@ const currentSourceMatch = () =>
     where m.id = ${inbox.sourceMatchId}
   )`;
 
+/**
+ * The invoice's current bank-payment decision (optional feature): payment
+ * status, what counts and the evidence for each transaction considered.
+ * Null when the workspace does not use bank payments or nothing was decided.
+ */
+const currentPaymentMatch = () =>
+  sql<Record<string, unknown> | null>`(
+    select m.result || jsonb_build_object(
+      'id', m.id,
+      'sequence', m.sequence,
+      'status', m.status,
+      'paymentStatus', m.payment_status,
+      'origin', m.origin,
+      'action', m.action,
+      'currency', m.currency,
+      'dueAmount', m.due_amount::text,
+      'paidAmount', m.paid_amount::text,
+      'reason', m.reason,
+      'processingRevision', m.processing_revision,
+      'rulesVersion', m.rules_version,
+      'decidedAt', m.created_at
+    )
+    from ${invoicePaymentMatches} m
+    where m.id = ${inbox.paymentMatchId}
+  )`;
+
 const inboundEmailSource = {
   id: inboundEmails.id,
   messageId: inboundEmails.messageId,
@@ -460,6 +487,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       supplierId: inbox.supplierId,
       supplierChecks: inbox.supplierChecks,
       sourceMatch: currentSourceMatch(),
+      paymentMatch: currentPaymentMatch(),
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
@@ -557,6 +585,7 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       supplierId: inbox.supplierId,
       supplierChecks: inbox.supplierChecks,
       sourceMatch: currentSourceMatch(),
+      paymentMatch: currentPaymentMatch(),
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
