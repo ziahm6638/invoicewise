@@ -8,11 +8,13 @@ import {
   inboxRedeliveries,
   invoiceReconciliations,
   invoiceSourceMatches,
+  questionAnswers,
   suppliers,
   transactionAttachments,
   transactionEmbeddings,
   transactionMatchSuggestions,
   transactions,
+  userQuestions,
 } from "@db/schema";
 import { remove as removeStoredFile } from "@db/storage";
 import { buildSearchQuery } from "@invoicewise/db/utils/search-query";
@@ -698,6 +700,262 @@ export function getInvoiceExportRows(db: Database, teamId: string) {
       ),
     )
     .orderBy(desc(inbox.createdAt));
+}
+
+/**
+ * Where a record stands in the public API (`/v1`): still being read,
+ * read (whatever validation and delivery then made of it), or failed to read.
+ */
+export const PUBLIC_INVOICE_STATUSES = [
+  "processing",
+  "processed",
+  "failed",
+] as const;
+
+export type PublicInvoiceStatus = (typeof PUBLIC_INVOICE_STATUSES)[number];
+
+const publicStatusCondition = (status: PublicInvoiceStatus): SQL => {
+  switch (status) {
+    case "processing":
+      return stateCondition("processing");
+    case "failed":
+      return sql`(${extractionFailed()})`;
+    case "processed":
+      return sql`(coalesce(${inbox.status}::text, '') not in ('new', 'processing', 'analyzing')
+        and not coalesce(${extractionFailed()}, false))`;
+  }
+};
+
+/** The columns the public API reads for an invoice. */
+const publicInvoiceColumns = () => ({
+  id: inbox.id,
+  fileName: inbox.fileName,
+  displayName: inbox.displayName,
+  contentType: inbox.contentType,
+  size: inbox.size,
+  contentHash: inbox.contentHash,
+  referenceId: inbox.referenceId,
+  inboxAccountId: inbox.inboxAccountId,
+  inboundEmailId: inbox.inboundEmailId,
+  amount: inbox.amount,
+  currency: inbox.currency,
+  status: inbox.status,
+  createdAt: inbox.createdAt,
+  extraction: inbox.extraction,
+  judgments: inbox.judgments,
+  validation: inbox.validation,
+  supplierId: inbox.supplierId,
+  supplierChecks: inbox.supplierChecks,
+  processingError: inbox.processingError,
+  processingRevision: inbox.processingRevision,
+  processingStalled: processingStalledSql(),
+  delivery: invoiceDeliverySummary(),
+  judgmentsRerunStatus: inbox.judgmentsRerunStatus,
+  judgmentsRerunError: inbox.judgmentsRerunError,
+  correctionCount: correctionCount(),
+  accountingProvider: inbox.accountingProvider,
+  accountingPostStatus: inbox.accountingPostStatus,
+  accountingProviderId: inbox.accountingProviderId,
+});
+
+/** Position of the last record of a page: its creation time and id. */
+export type PublicInvoiceCursor = { createdAt: string; id: string };
+
+export type ListPublicInvoicesParams = {
+  teamId: string;
+  cursor?: PublicInvoiceCursor | null;
+  order?: "asc" | "desc";
+  limit: number;
+  status?: PublicInvoiceStatus | null;
+  state?: InvoiceStateFilter | null;
+  q?: string | null;
+  createdFrom?: string | null;
+  createdTo?: string | null;
+  supplierId?: string | null;
+};
+
+/**
+ * Invoices for the public API, paged by keyset on (created_at, id) so a
+ * document accepted while a client pages cannot shift or repeat a page.
+ * Returns one page and the cursor of its last record when more follow.
+ */
+export async function listPublicInvoices(
+  db: Database,
+  params: ListPublicInvoicesParams,
+) {
+  const order = params.order ?? "desc";
+  const conditions: SQL[] = [
+    eq(inbox.teamId, params.teamId),
+    ne(inbox.status, "deleted"),
+    visibleIntakeState(),
+  ];
+  if (params.status) conditions.push(publicStatusCondition(params.status));
+  if (params.state) conditions.push(stateCondition(params.state));
+  if (params.supplierId)
+    conditions.push(eq(inbox.supplierId, params.supplierId));
+  if (params.createdFrom) {
+    conditions.push(sql`${inbox.createdAt} >= ${params.createdFrom}::date`);
+  }
+  if (params.createdTo) {
+    conditions.push(
+      sql`${inbox.createdAt} < (${params.createdTo}::date + interval '1 day')`,
+    );
+  }
+  if (params.q) {
+    conditions.push(
+      sql`(${inbox.displayName} ILIKE '%' || ${params.q} || '%'
+        OR ${inbox.fileName} ILIKE '%' || ${params.q} || '%'
+        OR ${inbox.extraction} ->> 'supplierName' ILIKE '%' || ${params.q} || '%'
+        OR ${inbox.extraction} ->> 'invoiceNumber' ILIKE '%' || ${params.q} || '%')`,
+    );
+  }
+  if (params.cursor) {
+    conditions.push(
+      order === "desc"
+        ? sql`(${inbox.createdAt}, ${inbox.id}) < (${params.cursor.createdAt}::timestamptz, ${params.cursor.id}::uuid)`
+        : sql`(${inbox.createdAt}, ${inbox.id}) > (${params.cursor.createdAt}::timestamptz, ${params.cursor.id}::uuid)`,
+    );
+  }
+
+  const rows = await db
+    .select(publicInvoiceColumns())
+    .from(inbox)
+    .where(and(...conditions))
+    .orderBy(
+      order === "desc" ? desc(inbox.createdAt) : asc(inbox.createdAt),
+      order === "desc" ? desc(inbox.id) : asc(inbox.id),
+    )
+    .limit(params.limit + 1);
+
+  const page = rows.slice(0, params.limit);
+  const last = page.at(-1);
+  return {
+    data: page,
+    next:
+      rows.length > params.limit && last
+        ? { createdAt: last.createdAt, id: last.id }
+        : null,
+  };
+}
+
+export type PublicInvoiceRow = Awaited<
+  ReturnType<typeof listPublicInvoices>
+>["data"][number];
+
+/** One invoice of the workspace in the public API's shape, or undefined. */
+export async function getPublicInvoice(
+  db: Database,
+  params: { teamId: string; id: string },
+): Promise<PublicInvoiceRow | undefined> {
+  if (!isUuid(params.id)) return undefined;
+  const rows = await db
+    .select(publicInvoiceColumns())
+    .from(inbox)
+    .where(
+      and(
+        eq(inbox.id, params.id),
+        eq(inbox.teamId, params.teamId),
+        ne(inbox.status, "deleted"),
+        visibleIntakeState(),
+      ),
+    )
+    .limit(1);
+  return rows[0];
+}
+
+const isUuid = (value: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+
+/**
+ * The invoice a public-API idempotency key already names in this workspace,
+ * either as the document it created or as a re-delivery it was recorded as,
+ * with that document's content hash.
+ */
+export async function findIntakeByReference(
+  db: Pick<Database, "select">,
+  params: { teamId: string; referenceId: string },
+): Promise<{ inboxId: string; contentHash: string | null } | null> {
+  const [own] = await db
+    .select({ inboxId: inbox.id, contentHash: inbox.contentHash })
+    .from(inbox)
+    .where(
+      and(
+        eq(inbox.teamId, params.teamId),
+        eq(inbox.referenceId, params.referenceId),
+      ),
+    )
+    .limit(1);
+  if (own) return own;
+  const [redelivery] = await db
+    .select({ inboxId: inbox.id, contentHash: inbox.contentHash })
+    .from(inboxRedeliveries)
+    .innerJoin(
+      inbox,
+      and(
+        eq(inbox.id, inboxRedeliveries.inboxId),
+        eq(inbox.teamId, inboxRedeliveries.teamId),
+      ),
+    )
+    .where(
+      and(
+        eq(inboxRedeliveries.teamId, params.teamId),
+        eq(inboxRedeliveries.referenceId, params.referenceId),
+      ),
+    )
+    .limit(1);
+  return redelivery ?? null;
+}
+
+/**
+ * Every question key the workspace has ever defined, in key order. The
+ * export's question columns come from it, so they are the same on every page.
+ */
+export async function listWorkspaceQuestionKeys(
+  db: Pick<Database, "selectDistinct">,
+  teamId: string,
+): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ questionKey: userQuestions.questionKey })
+    .from(userQuestions)
+    .where(eq(userQuestions.teamId, teamId))
+    .orderBy(asc(userQuestions.questionKey));
+  return rows.map((row) => row.questionKey);
+}
+
+/**
+ * The deliberate rerun answers recorded on these invoices of the workspace,
+ * oldest first, with the question revision each one asked.
+ */
+export async function listQuestionAnswerHistory(
+  db: Pick<Database, "select">,
+  params: { teamId: string; invoiceIds: string[] },
+) {
+  if (params.invoiceIds.length === 0) return [];
+  return db
+    .select({
+      id: questionAnswers.id,
+      invoiceId: questionAnswers.invoiceId,
+      runId: questionAnswers.runId,
+      questionKey: questionAnswers.questionKey,
+      questionVersionId: questionAnswers.questionVersionId,
+      questionVersion: userQuestions.version,
+      invoiceRevision: questionAnswers.invoiceRevision,
+      judgment: questionAnswers.judgment,
+      previous: questionAnswers.previous,
+      createdAt: questionAnswers.createdAt,
+    })
+    .from(questionAnswers)
+    .leftJoin(
+      userQuestions,
+      eq(userQuestions.id, questionAnswers.questionVersionId),
+    )
+    .where(
+      and(
+        eq(questionAnswers.teamId, params.teamId),
+        inArray(questionAnswers.invoiceId, params.invoiceIds),
+      ),
+    )
+    .orderBy(asc(questionAnswers.createdAt), asc(questionAnswers.id));
 }
 
 export type DeleteInboxParams = {

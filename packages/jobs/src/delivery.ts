@@ -533,11 +533,18 @@ export type DeliveryRetryResult = {
  * intent is left as it is and reported as `admin_required`. A post the
  * delivery rules hold for the current revision is never re-driven here: it
  * is sent by an owner's or admin's release. Returns null for an unknown or
- * deleted invoice.
+ * deleted invoice. With `expectedRevision`, a caller who saw an earlier
+ * revision is refused with a conflict instead of re-driving a revision it
+ * has not seen.
  */
 export async function retryInvoiceDelivery(
   db: Database,
-  input: { invoiceId: string; teamId: string; teamRole: TeamRole | null },
+  input: {
+    invoiceId: string;
+    teamId: string;
+    teamRole: TeamRole | null;
+    expectedRevision?: number;
+  },
 ): Promise<DeliveryRetryResult | null> {
   return db.transaction(async (tx) => {
     const executor = asDatabase(tx);
@@ -554,6 +561,15 @@ export async function retryInvoiceDelivery(
       return null;
     }
     const revision = invoice.processingRevision;
+    if (
+      input.expectedRevision !== undefined &&
+      input.expectedRevision !== revision
+    ) {
+      throw new InvoiceActionError(
+        "conflict",
+        "This invoice changed since you read it. Read it again before retrying its delivery.",
+      );
+    }
 
     let requeued = 0;
     let skipped = 0;

@@ -5,7 +5,17 @@ read-only MCP server, signed webhooks, and CSV. All REST requests use the API
 key's workspace; no delivery route accepts a workspace identifier from the
 caller.
 
-## REST and CSV
+The customer contract is the versioned API: [InvoiceWise API (v1)](api.md)
+covers programmatic submission with idempotency, polling, retrieval, paged
+formula-safe CSV exports, deliberate retries, the stdio MCP server's
+install and authentication, errors, rate limits and the clean-room smoke
+check. It is
+implemented in `apps/api/src/effect/public-api.ts` (domain, schemas),
+`apps/api/src/effect/public-api-http.ts` (`HttpApi`, published contract) and
+`apps/api/src/rest/v1.ts` (bearer-only authentication, scopes, rate limit).
+The unversioned routes below remain served for existing clients.
+
+## REST and CSV (unversioned)
 
 Create an API key in **Settings → Developer**, then send it as a bearer token:
 
@@ -25,7 +35,7 @@ Available read routes are:
 | `GET /invoices` | Cursor-paginated invoices; supports `cursor`, `pageSize`, `status`, `q`, `sort`, and `order` |
 | `GET /invoices/:id` | Extraction (with per-value evidence), validation, line items, judgments, and a five-minute signed document URL |
 | `GET /invoices/:id/delivery-status` | Webhook deliveries (logical event ID, revision, status, attempts, last error, whether a retry may succeed) plus the Nango accounting post status, provider ID, failure reason and retryability |
-| `GET /invoices/export.csv` | Workspace invoices with document type, validation status, accounting readiness and issues, and a `judgment:<questionId>` column for every judgment |
+| `GET /invoices/export.csv` | Workspace invoices with document type, validation status, accounting readiness and issues, and a `judgment:<questionId>` column for every judgment; formula-like text is prefixed with `'` (`apps/api/src/effect/csv.ts`) |
 | `GET /delivery-policy` | The [delivery rules](#delivery-rules) in force: `version` (0 for the built-in defaults), `policy` and the `alwaysHeld` checks |
 
 An invoice outside the API key's workspace is returned as `404`, so the route
@@ -61,18 +71,12 @@ delivery rules held.
 
 ## MCP
 
-The Effect MCP server exposes only three read-only tools:
-
-- `list_invoices`
-- `get_invoice`
-- `get_invoice_judgments`
-
-The server calls the REST API with `INVOICEWISE_API_KEY`, so authentication,
-scopes, and workspace isolation are identical to direct REST access. Tool
-arguments do not contain a workspace field, and the server exposes no mutation
-tools.
-
-Run it locally with:
+The MCP tools are read-only and call `/v1` with the caller's own key:
+`list_invoices`, `get_invoice`, `get_invoice_judgments` and
+`get_invoice_delivery` (`apps/api/src/mcp/invoice-tools.ts`). They are served
+over stdio (`apps/api/src/mcp/server.ts`) with identical authentication,
+scopes and workspace isolation to REST, and no tool takes a workspace
+argument. Client setup is in [API: MCP](api.md#mcp); from a checkout:
 
 ```bash
 cd apps/api
@@ -80,28 +84,6 @@ INVOICEWISE_API_URL=https://api.invoicewise.uk \
 INVOICEWISE_API_KEY=mid_... \
 bun run mcp
 ```
-
-For an MCP client that supports stdio server configuration, point the client at
-the repository's API workspace. For example:
-
-```json
-{
-  "mcpServers": {
-    "invoicewise": {
-      "command": "bun",
-      "args": ["run", "mcp"],
-      "cwd": "/absolute/path/to/invoicewise/apps/api",
-      "env": {
-        "INVOICEWISE_API_URL": "https://api.invoicewise.uk",
-        "INVOICEWISE_API_KEY": "mid_..."
-      }
-    }
-  }
-}
-```
-
-Keep the API key in the client's secret/environment configuration rather than
-committing it to a shared config file.
 
 ## Webhooks
 
