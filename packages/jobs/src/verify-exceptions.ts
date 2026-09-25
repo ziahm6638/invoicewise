@@ -16,6 +16,7 @@ import {
   listInvoiceCorrections,
 } from "@invoicewise/db/queries";
 import {
+  accountingConnections,
   inbox,
   invoiceCorrections,
   teams,
@@ -972,6 +973,55 @@ async function main() {
         rerun: rerunSuperseded.judgmentsRerunStatus,
         staleRetry,
         superseded: superseded.delivery,
+      },
+    );
+
+    // A bill update cancelled because the connection went away is unfinished
+    // work, never delivered; with no connection an update cannot be asked for.
+    const connected = (disconnectedAt: string | null) =>
+      db
+        .update(accountingConnections)
+        .set({ disconnectedAt })
+        .where(eq(accountingConnections.teamId, teamId!));
+    await correctInvoice(db, {
+      invoiceId: invalid,
+      teamId,
+      expectedRevision: superseded.processingRevision,
+      ...admin,
+      reason: "Due date moved again",
+      changes: { dueDate: "2026-10-22" },
+      accountingOutcome: "update_bill",
+    });
+    await connected(new Date().toISOString());
+    await drain(db, workspace);
+    const cancelledUpdate = await read(invalid);
+    const [cancelledEntry] = await listInvoiceCorrections(db, {
+      invoiceId: invalid,
+      teamId,
+    });
+    const disconnectedUpdate = await refusal(
+      correctInvoice(db, {
+        invoiceId: invalid,
+        teamId,
+        expectedRevision: cancelledUpdate.processingRevision,
+        ...admin,
+        reason: "Due date moved again",
+        changes: { dueDate: "2026-10-29" },
+        accountingOutcome: "update_bill",
+      }),
+    );
+    await connected(null);
+    check(
+      "a cancelled bill update reads as a delivery failure, and no update is queued without a connection",
+      cancelledEntry?.updateStatus === "cancelled" &&
+        cancelledUpdate.delivery?.state === "failed" &&
+        (await listed("delivery_failed")).includes(invalid) &&
+        !(await listed("delivered")).includes(invalid) &&
+        disconnectedUpdate === "conflict",
+      {
+        update: cancelledEntry?.updateStatus,
+        delivery: cancelledUpdate.delivery,
+        disconnectedUpdate,
       },
     );
 

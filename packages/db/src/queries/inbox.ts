@@ -94,11 +94,13 @@ const invoiceDeliverySummary = () =>
       where ${inbox.accountingPostStatus} is not null
       union all
       -- The in-place update of a posted bill the newest correction asked
-      -- for: an update still queued is not delivered, and a failed one needs
-      -- retrying. A later correction supersedes an earlier update.
+      -- for: an update still queued is not delivered, and a failed or
+      -- cancelled one needs retrying. A later correction supersedes an
+      -- earlier update.
       select * from (
         select case c.update_status
           when 'updated' then 'succeeded'
+          when 'cancelled' then 'failed'
           else c.update_status
         end as status
         from invoice_corrections c

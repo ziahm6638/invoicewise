@@ -1,5 +1,6 @@
 "use client";
 
+import { useTeamPermissions } from "@/hooks/use-team";
 import { useTRPC } from "@/trpc/client";
 import type { RouterOutputs } from "@api/trpc/routers/_app";
 import {
@@ -142,7 +143,8 @@ export function InvoiceWorkflow({
   const trpc = useTRPC();
   const { toast } = useToast();
   const invalidate = useInvalidateInvoice();
-  const stages = describeInvoiceWorkflow(invoice);
+  const permissions = useTeamPermissions();
+  const stages = describeInvoiceWorkflow(invoice, permissions);
   const state = getInvoiceState(invoice);
   const provider = invoice.accountingProvider
     ? PROVIDER_NAME[invoice.accountingProvider]

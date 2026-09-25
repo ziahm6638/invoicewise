@@ -388,8 +388,10 @@ What happens to the bill:
   was kept) or `update_bill` (admin only): the same bill is updated in place
   by the `update-accounting-bill` job with the extraction as approved, under a
   per-correction key, never created again. It is refused when the corrected
-  invoice could not be posted (validation blockers) or would move the bill to
-  a number another document's bill holds; a changed number also claims the
+  invoice could not be posted (validation blockers), when the bill's provider
+  is not connected, or would move the bill to a number another document's
+  bill holds. An update cancelled because the connection went away reads as
+  a failed delivery until it is retried; a changed number also claims the
   new number, keeping the old claim, so neither can become a second bill. A
   new correction waits until a queued update settles, and the newest
   correction decides the bill: a later correction supersedes an earlier

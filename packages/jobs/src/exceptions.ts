@@ -6,6 +6,7 @@ import {
   claimAdditionalPostingKey,
   clearJudgmentsRerun,
   enqueueWorkflowJob,
+  getActiveAccountingConnection,
   getPendingBillUpdate,
   getTeamById,
   insertInvoiceCorrection,
@@ -233,6 +234,18 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
           "forbidden",
           `Only an admin can change the bill in ${provider}. Keep the bill as it is, or ask an admin.`,
         );
+      }
+      if (input.accountingOutcome === "update_bill") {
+        const connection = await getActiveAccountingConnection(
+          executor,
+          input.teamId,
+        );
+        if (connection?.provider !== invoice.accountingProvider) {
+          throw refuse(
+            "conflict",
+            `${provider} is not connected, so the bill cannot be updated. Reconnect ${provider} first, or keep the bill as it is.`,
+          );
+        }
       }
       outcome = input.accountingOutcome;
     }

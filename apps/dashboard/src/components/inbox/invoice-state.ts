@@ -130,6 +130,7 @@ const issuesOf = (validation: Record<string, unknown> | null | undefined) =>
  */
 export function describeInvoiceWorkflow(
   invoice: WorkflowRecord,
+  viewer: { postToAccounting: boolean },
 ): WorkflowStage[] {
   const state = getInvoiceState(invoice);
   const corrections = invoice.correctionCount ?? 0;
@@ -283,7 +284,9 @@ export function describeInvoiceWorkflow(
           next:
             invoice.accountingPostStatus === "failed" &&
             validationStatus === "invalid"
-              ? "Correct the invoice; once it validates it is sent again."
+              ? viewer.postToAccounting
+                ? "Correct the invoice; once it validates it is sent again."
+                : "Correct the invoice; once it validates an admin must send it again."
               : "Retry delivery for the failed destinations below.",
         }
       : summary?.state === "pending"

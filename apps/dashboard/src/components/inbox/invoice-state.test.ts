@@ -69,7 +69,11 @@ describe("invoice workflow", () => {
   const stage = (
     invoice: Parameters<typeof describeInvoiceWorkflow>[0],
     key: string,
-  ) => describeInvoiceWorkflow(invoice).find((entry) => entry.key === key)!;
+    viewer = { postToAccounting: true },
+  ) =>
+    describeInvoiceWorkflow(invoice, viewer).find(
+      (entry) => entry.key === key,
+    )!;
   const extracted = {
     status: "pending",
     extraction: { grossAmount: 120 },
@@ -123,6 +127,11 @@ describe("invoice workflow", () => {
     });
     expect(stage(invalid, "delivery").next).toBe(
       "Correct the invoice; once it validates it is sent again.",
+    );
+    expect(
+      stage(invalid, "delivery", { postToAccounting: false }).next,
+    ).toBe(
+      "Correct the invoice; once it validates an admin must send it again.",
     );
   });
 
