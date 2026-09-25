@@ -10,6 +10,8 @@ import {
   completeDataExport,
   documentBindingIssue,
   getAuthorizationSourcesForExport,
+  getBankFeedForExport,
+  getPaymentMatchesForExport,
   getSourceMatchesForExport,
   getWorkspaceExportData,
   recordDataExportObject,
@@ -431,6 +433,40 @@ export async function removeStaleExportTempFiles(
 }
 
 /**
+ * Bank payments (optional): the workspace's bank connections (no provider
+ * ids), accounts and transactions, and every payment decision about an
+ * exported invoice with what it counted.
+ */
+async function exportBankPayments(
+  deps: DataExportDeps,
+  teamId: string,
+  invoiceIds: ReadonlySet<string>,
+) {
+  const [feed, decisions] = await Promise.all([
+    getBankFeedForExport(deps.db, teamId),
+    getPaymentMatchesForExport(deps.db, teamId),
+  ]);
+  const matches = decisions.matches
+    .filter(({ match }) => invoiceIds.has(match.inboxId))
+    .map(({ match, current }) => {
+      const { teamId: _team, fingerprint: _fingerprint, inboxId, ...rest } =
+        match;
+      return {
+        ...rest,
+        invoiceId: inboxId,
+        current,
+        allocations: decisions.allocations
+          .filter((allocation) => allocation.matchId === match.id)
+          .map(
+            ({ teamId: _t, matchId: _m, inboxId: _i, ...allocation }) =>
+              allocation,
+          ),
+      };
+    });
+  return { feed, matches };
+}
+
+/**
  * Every decision about which authorization sources an exported invoice bills,
  * oldest first per invoice, with its links and allocations and whether it is
  * the invoice's current decision.
@@ -721,6 +757,11 @@ export async function buildDataExport(
       params.teamId,
       new Set(records.invoices.map((invoice) => String(invoice.id))),
     );
+    const bankPayments = await exportBankPayments(
+      deps,
+      params.teamId,
+      new Set(records.invoices.map((invoice) => String(invoice.id))),
+    );
     const dataFiles: { path: string; records: number; content: string }[] = [
       { path: "workspace.json", records: 1, content: json(records.workspace) },
       {
@@ -757,6 +798,19 @@ export async function buildDataExport(
         path: "source-matches.json",
         records: sourceMatches.length,
         content: json(sourceMatches),
+      },
+      {
+        path: "bank-feed.json",
+        records:
+          bankPayments.feed.connections.length +
+          bankPayments.feed.accounts.length +
+          bankPayments.feed.transactions.length,
+        content: json(bankPayments.feed),
+      },
+      {
+        path: "payment-matches.json",
+        records: bankPayments.matches.length,
+        content: json(bankPayments.matches),
       },
       {
         path: "questions.json",

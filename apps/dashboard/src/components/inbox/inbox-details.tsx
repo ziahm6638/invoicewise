@@ -30,6 +30,7 @@ import { InboxStatus } from "./inbox-status";
 import { InvoiceHistory } from "./invoice-history";
 import { InvoiceWorkflow } from "./invoice-workflow";
 import { JudgmentResults } from "./judgment-results";
+import { PaymentMatch } from "./payment-match";
 import { SourceMatch } from "./source-match";
 import { SupplierHistory } from "./supplier-history";
 import { ValidationResults, uncertainFields } from "./validation-results";
@@ -268,6 +269,8 @@ export function InboxDetails() {
                     }))}
                   />
                 </section>
+
+                <PaymentMatch inboxId={data.id} />
 
                 <section>
                   <h3 className="text-sm font-semibold">Extracted fields</h3>

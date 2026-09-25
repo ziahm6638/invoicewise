@@ -71,6 +71,12 @@ export type PaymentInvoice = {
   invoiceDatePrinted: boolean;
   /** Credit notes applied to this invoice (never to a credit note). */
   credits: { creditInboxId: string; invoiceNumber: string | null; amountMinor: number }[];
+  /**
+   * The references of the workspace's other invoices (as
+   * `invoicePaymentReferences` gives them). A transaction printing one of
+   * them is that invoice's payment and is never proposed for this one.
+   */
+  otherReferences?: ReadonlySet<string>;
 };
 
 export type PaymentTransaction = {
@@ -274,6 +280,7 @@ type Assessed = {
   transaction: PaymentTransaction;
   candidate: PaymentCandidate;
   printedReference: boolean;
+  printsOtherReference: boolean;
   supplierNamed: boolean;
   amountExact: boolean;
   nearDate: boolean;
@@ -304,6 +311,20 @@ export function assessTransaction(
       printed.length >= PAYMENT_MATCH_RULES.strongNumericReferenceLength ||
       supplierNamed);
 
+  const otherPrinted = printed
+    ? undefined
+    : [...(invoice.otherReferences ?? [])].find(
+        (reference) =>
+          !references.includes(reference) &&
+          printsReference(textValue, reference),
+      );
+  if (otherPrinted) {
+    evidence.push({
+      kind: "reference",
+      outcome: "conflicts",
+      message: `Prints ${otherPrinted}, another invoice's reference.`,
+    });
+  }
   if (printed) {
     evidence.push({
       kind: "reference",
@@ -423,6 +444,7 @@ export function assessTransaction(
   return {
     transaction,
     printedReference: printed !== undefined,
+    printsOtherReference: otherPrinted !== undefined,
     supplierNamed,
     amountExact: amountExact && available >= dueMinor,
     nearDate:
@@ -655,11 +677,16 @@ export function decidePayment(input: {
       }
     }
     const count = allocations.length;
+    const credited =
+      base.creditedMinor > 0
+        ? ` ${money(base.creditedMinor, currency)} is settled by the credit note${invoice.credits.length === 1 ? "" : "s"} applied to it.`
+        : "";
     return finish(
       "matched",
-      remaining === 0
+      (remaining === 0
         ? `Paid by ${count} bank transaction${count === 1 ? "" : "s"} that print${count === 1 ? "s" : ""} the invoice reference.`
-        : `Part paid: ${money(dueMinor - remaining, currency)} of ${money(dueMinor, currency)} by transactions that print the invoice reference.`,
+        : `Part paid: ${money(dueMinor - remaining, currency)} of ${money(dueMinor, currency)} by transactions that print the invoice reference.`) +
+        credited,
       { allocations, pending, unallocated },
     );
   }
@@ -677,7 +704,8 @@ export function decidePayment(input: {
     (item) =>
       item.candidate.eligible &&
       item.transaction.status === "posted" &&
-      item.amountExact,
+      item.amountExact &&
+      !item.printsOtherReference,
   );
   const named = exact.filter(
     (item) => item.supplierNamed || item.printedReference,
@@ -710,7 +738,14 @@ export function decidePayment(input: {
       `${pool.length} transactions could pay this invoice; an owner or admin chooses. None is counted until then.`,
     );
   }
-  if (candidates.some((candidate) => candidate.eligible)) {
+  if (
+    assessed.some(
+      (item) =>
+        item.candidate.eligible &&
+        !item.printsOtherReference &&
+        (item.printedReference || item.supplierNamed || item.amountExact),
+    )
+  ) {
     return finish(
       "insufficient_evidence",
       "Some transactions relate to this invoice, but none is clear enough to count.",

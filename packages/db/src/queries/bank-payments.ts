@@ -606,6 +606,23 @@ export type PaymentInvoiceRow = {
   createdAt: string;
 };
 
+/** Every live invoice's printed number and payment reference in the workspace. */
+export async function listWorkspaceInvoiceReferences(
+  db: Database,
+  teamId: string,
+) {
+  return db
+    .select({
+      id: inbox.id,
+      invoiceNumber: sql<string | null>`${inbox.extraction}->>'invoiceNumber'`,
+      paymentReference: sql<
+        string | null
+      >`${inbox.extraction}->>'paymentReference'`,
+    })
+    .from(inbox)
+    .where(and(liveInvoice(teamId), isNotNull(inbox.extraction)));
+}
+
 /** The workspace's processed invoices, oldest first, bounded. */
 export async function listInvoicesForPaymentMatching(
   db: Database,

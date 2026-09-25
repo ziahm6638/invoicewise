@@ -147,6 +147,17 @@ describe("decidePayment", () => {
     expect(result.proposed[0]?.transactionId).toBe(named.id);
   });
 
+  test("a transaction printing another invoice's number is never proposed", () => {
+    const result = decide([tx({ description: "INV-2026-0099" })], {
+      otherReferences: new Set(["INV20260099"]),
+    });
+    expect(result.status).toBe("unmatched");
+    expect(result.proposed).toEqual([]);
+    expect(
+      result.candidates.flatMap((row) => row.evidence.map((item) => item.message)),
+    ).toContain("Prints INV20260099, another invoice's reference.");
+  });
+
   test("two plausible transactions are ambiguous and assert nothing", () => {
     const result = decide([
       tx({ description: "ACME SUPPLIES" }),

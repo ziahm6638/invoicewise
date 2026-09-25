@@ -25,6 +25,7 @@ import {
   listInvoicesForPaymentMatching,
   listPaymentCandidateTransactions,
   listPaymentMatchHistory,
+  listWorkspaceInvoiceReferences,
   lockInvoiceForPayment,
   lockWorkspacePayments,
   recordPaymentMatch,
@@ -40,6 +41,7 @@ import {
   appliedCreditResult,
   decidePayment,
   fromMinor,
+  invoicePaymentReferences,
   manualPaymentResult,
   paymentMatchFingerprint,
   toMinor,
@@ -162,6 +164,22 @@ async function transactionsFor(
     : [];
   return [...window, ...extra].map(transactionOf);
 }
+
+/** The references of every other invoice of the workspace, by invoice. */
+async function referencesByInvoice(db: Database, teamId: string) {
+  const rows = await listWorkspaceInvoiceReferences(db, teamId);
+  return new Map(
+    rows.map((row) => [row.id, invoicePaymentReferences(row)] as const),
+  );
+}
+
+const otherReferencesOf = (
+  all: ReadonlyMap<string, string[]>,
+  invoiceId: string,
+) =>
+  new Set(
+    [...all].flatMap(([id, references]) => (id === invoiceId ? [] : references)),
+  );
 
 /** Credit notes of this workspace applied to `invoiceId`. */
 async function creditsFor(db: Database, teamId: string, invoiceId: string) {
@@ -318,6 +336,7 @@ export async function matchWorkspacePayments(
     teamId: input.teamId,
     limit: SWEEP_LIMIT,
   });
+  const references = await referencesByInvoice(db, input.teamId);
   const ordered = rows
     .map((row) => ({ row, invoice: paymentInvoiceOf(row) }))
     .sort(
@@ -334,6 +353,7 @@ export async function matchWorkspacePayments(
       teamId: input.teamId,
       invoiceId: row.id,
       now: input.now,
+      references,
     });
     if (result === "recorded") outcome.recorded += 1;
     else if (result === "unchanged") outcome.unchanged += 1;
@@ -346,7 +366,13 @@ export async function matchWorkspacePayments(
 /** Decides one invoice's payment and records it when it changed. */
 export async function matchInvoicePayment(
   db: Database,
-  input: { teamId: string; invoiceId: string; now?: Date },
+  input: {
+    teamId: string;
+    invoiceId: string;
+    now?: Date;
+    /** Every invoice's references; read here when not given. */
+    references?: ReadonlyMap<string, string[]>;
+  },
 ): Promise<"skipped" | "recorded" | "unchanged" | "kept" | "reversed"> {
   const asOf = (input.now ?? new Date()).toISOString();
   return db.transaction(async (tx) => {
@@ -366,7 +392,12 @@ export async function matchInvoicePayment(
         })
       : null;
     const credits = await creditsFor(executor, input.teamId, row.id);
-    const invoice = paymentInvoiceOf(row, credits);
+    const references =
+      input.references ?? (await referencesByInvoice(executor, input.teamId));
+    const invoice = {
+      ...paymentInvoiceOf(row, credits),
+      otherReferences: otherReferencesOf(references, row.id),
+    };
 
     if (keepsPersonDecision(current)) {
       return carryForward(executor, {
@@ -587,7 +618,15 @@ async function lockForDecision(
       })
     : null;
   const credits = await creditsFor(db, input.teamId, row.id);
-  return { row, current, invoice: paymentInvoiceOf(row, credits) };
+  const references = await referencesByInvoice(db, input.teamId);
+  return {
+    row,
+    current,
+    invoice: {
+      ...paymentInvoiceOf(row, credits),
+      otherReferences: otherReferencesOf(references, row.id),
+    },
+  };
 }
 
 const inTransaction = <T>(db: Database, work: (tx: Database) => Promise<T>) =>

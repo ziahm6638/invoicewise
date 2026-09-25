@@ -720,12 +720,14 @@ const dayDiff = (from: string, to: string) =>
   Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 
 /**
- * Whether `entry` reverses `original`: the exact opposite amount in the same
- * currency on the same account, shortly after, described as a reversal, and
- * naming the same counterparty or repeating the original's words. An opposite
- * amount alone (a supplier's refund, say) is never taken for a reversal.
+ * How strongly `entry` reverses `original`, or null when it does not: the
+ * exact opposite amount in the same currency on the same account, shortly
+ * after, described as a reversal, and naming the same counterparty or
+ * repeating the original's words. An opposite amount alone (a supplier's
+ * refund, say) is never taken for a reversal. The score (0-1) prefers the
+ * original whose words the reversal repeats most.
  */
-export const reverses = (
+export const reversalScore = (
   entry: Pick<
     BankFeedTransactionRow,
     "amount" | "currency" | "madeOn" | "description" | "counterparty" | "reference"
@@ -734,17 +736,17 @@ export const reverses = (
     BankFeedTransactionRow,
     "amount" | "currency" | "madeOn" | "description" | "counterparty" | "reference"
   >,
-) => {
-  if (entry.currency !== original.currency) return false;
+): number | null => {
+  if (entry.currency !== original.currency) return null;
   if (amountOf(entry) !== -amountOf(original) || amountOf(entry) === 0) {
-    return false;
+    return null;
   }
   const days = dayDiff(original.madeOn, entry.madeOn);
-  if (days < 0 || days > BANK_FEED_LIMITS.reversalWindowDays) return false;
+  if (days < 0 || days > BANK_FEED_LIMITS.reversalWindowDays) return null;
   const entryText = normalizedText(
     [entry.description, entry.counterparty, entry.reference].join(" "),
   );
-  if (!REVERSAL_WORDS.test(entryText)) return false;
+  if (!REVERSAL_WORDS.test(entryText)) return null;
   const sameCounterparty =
     Boolean(entry.counterparty && original.counterparty) &&
     normalizedText(entry.counterparty) === normalizedText(original.counterparty);
@@ -752,11 +754,18 @@ export const reverses = (
     [original.description, original.reference].join(" "),
   );
   const entryWords = new Set(entryText.split(" "));
-  const repeated =
-    words.length > 0 &&
-    words.filter((word) => entryWords.has(word)).length * 2 >= words.length;
-  return sameCounterparty || repeated;
+  const share =
+    words.length > 0
+      ? words.filter((word) => entryWords.has(word)).length / words.length
+      : 0;
+  if (!sameCounterparty && share < 0.5) return null;
+  return Math.max(share, sameCounterparty ? 0.5 : 0);
 };
+
+export const reverses = (
+  entry: Parameters<typeof reversalScore>[0],
+  original: Parameters<typeof reversalScore>[1],
+) => reversalScore(entry, original) !== null;
 
 const toRow = (transaction: SaltEdgeTransaction) => ({
   providerTransactionId: transaction.id,
@@ -1151,13 +1160,16 @@ async function reconcileAccount(
   for (const entry of open) {
     if (used.has(entry.id)) continue;
     const original = open
-      .filter(
-        (candidate) =>
-          candidate.id !== entry.id &&
-          !used.has(candidate.id) &&
-          reverses(entry, candidate),
+      .filter((candidate) => candidate.id !== entry.id && !used.has(candidate.id))
+      .map((candidate) => ({ candidate, score: reversalScore(entry, candidate) }))
+      .filter((item): item is { candidate: BankFeedTransactionRow; score: number } =>
+        item.score !== null,
       )
-      .sort((a, b) => b.madeOn.localeCompare(a.madeOn))[0];
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          b.candidate.madeOn.localeCompare(a.candidate.madeOn),
+      )[0]?.candidate;
     if (!original) continue;
     used.add(entry.id);
     used.add(original.id);
