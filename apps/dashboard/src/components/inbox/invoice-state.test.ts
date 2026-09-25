@@ -104,6 +104,27 @@ describe("invoice workflow", () => {
     expect(stage(failed, "delivery").status).toBe("not_started");
   });
 
+  test("a failed re-read keeps the previous reading and its delivery", () => {
+    const rereadFailed = {
+      ...extracted,
+      processingError: "TypeSafe is unavailable. Try again shortly.",
+      accountingProviderId: "xero-bill-1",
+      delivery: { state: "delivered", total: 1, succeeded: 1 },
+    };
+    expect(stage(rereadFailed, "extraction")).toMatchObject({
+      status: "failed",
+      summary:
+        "The last re-read failed: TypeSafe is unavailable. Try again shortly. The previous reading is kept.",
+      next: "Re-extract the document, or upload a clearer copy.",
+    });
+    expect(stage(rereadFailed, "validation").status).toBe("done");
+    expect(stage(rereadFailed, "questions").summary).toBe("1 question answered.");
+    expect(stage(rereadFailed, "delivery")).toMatchObject({
+      status: "done",
+      summary: "Delivered to 1 destination, including the accounting bill.",
+    });
+  });
+
   test("invalid totals name the error and the correction as the next step", () => {
     const invalid = {
       ...extracted,

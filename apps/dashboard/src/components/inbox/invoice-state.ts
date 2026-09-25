@@ -134,7 +134,11 @@ export function describeInvoiceWorkflow(
 ): WorkflowStage[] {
   const state = getInvoiceState(invoice);
   const corrections = invoice.correctionCount ?? 0;
-  const extracted = state !== "processing" && state !== "failed";
+  // A failed re-read keeps the previous reading, so the later stages still
+  // describe that reading and whatever was delivered from it.
+  const keptReading = state === "failed" && Boolean(invoice.extraction);
+  const extracted =
+    state !== "processing" && (state !== "failed" || keptReading);
 
   const extraction: WorkflowStage =
     state === "processing"
@@ -150,10 +154,12 @@ export function describeInvoiceWorkflow(
             key: "extraction",
             label: "Extraction",
             status: "failed",
-            summary: invoice.processingStalled
-              ? STALLED_PROCESSING_REASON
-              : (invoice.processingError ??
-                "No invoice details could be read from this document."),
+            summary: `${keptReading ? "The last re-read failed: " : ""}${
+              invoice.processingStalled
+                ? STALLED_PROCESSING_REASON
+                : (invoice.processingError ??
+                  "No invoice details could be read from this document.")
+            }${keptReading ? " The previous reading is kept." : ""}`,
             next: "Re-extract the document, or upload a clearer copy.",
           }
         : {
