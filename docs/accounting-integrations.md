@@ -140,8 +140,10 @@ Xero and QuickBooks request shapes, idempotency and error handling) and
 stub. It stores a workspace-bound connection, posts a Xero draft bill through
 the proxy with its attachment, refuses a duplicate, retries an ambiguous
 timeout with the same idempotency key and gets the original bill, refuses an
-invoice whose total does not reconcile without calling the provider, then
-disconnects. Verification pins `NANGO_BASE_URL` to loopback, so it can never
+invoice whose total does not reconcile without calling the provider, sends
+exactly one bill for copies of one invoice (processed out of order, posting
+concurrently, or read with and without the VAT number), holds another
+supplier's same-numbered invoice for review, then disconnects. Verification pins `NANGO_BASE_URL` to loopback, so it can never
 reach a real Nango.
 
 ## Sandbox proof
