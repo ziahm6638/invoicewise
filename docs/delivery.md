@@ -27,6 +27,7 @@ Available read routes are:
 | `GET /invoices/:id/delivery-status` | Webhook deliveries (logical event ID, revision, status, attempts, last error, whether a retry may succeed) plus the Nango accounting post status, provider ID, failure reason and retryability |
 | `GET /invoices/:id/activity` | The invoice's [activity trace](#activity-trace) |
 | `GET /invoices/export.csv` | Workspace invoices with document type, validation status, accounting readiness and issues, and a `judgment:<questionId>` column for every judgment |
+| `GET /delivery-policy` | The [delivery rules](#delivery-rules) in force: `version` (0 for the built-in defaults), `policy` and the `alwaysHeld` checks |
 
 An invoice outside the API key's workspace is returned as `404`, so the route
 does not reveal whether another workspace owns that identifier.
@@ -45,9 +46,15 @@ only the status and the linked source IDs). It is decided after processing, so t
 `invoice.processed` payload does not include it; subscribe to
 `invoice.matched`. See [matching](authorization-matching.md).
 
+Every invoice read also carries `deliveryDecision`: the
+[delivery rules](#delivery-rules)' decision for its current revision, with
+the reasons it was held and how a hold was resolved.
+
 `POST /invoices/:id/delivery/retry` (scope `inbox.write`) is the recovery
 action for failed or cancelled destinations; see
 [Processing-to-delivery handoff](#processing-to-delivery-handoff).
+`POST /invoices/:id/delivery/release` and `/dismiss` resolve an invoice the
+delivery rules held.
 
 ### Activity trace
 
@@ -183,7 +190,10 @@ decision](authorization-matching.md), automatic or a person's; its `data` is
 }
 ```
 
-`version` (also the `invoicewise-webhook-version` header) changes only for a
+The `data` of `invoice.processed` and `invoice.judgments.attached` carries
+`deliveryDecision` (policy and rules version, outcome, reasons, what each
+destination was told, and any release), so a consumer sees why an invoice
+reached it. `version` (also the `invoicewise-webhook-version` header) changes only for a
 breaking payload change. `invoiceId` and `revision` identify the exact invoice
 revision the event describes; a reprocessed invoice is a new revision with
 new event IDs. A [question rerun](#question-reruns) sends a further
@@ -280,15 +290,151 @@ Local development and the verification suites (any `NODE_ENV` other than
 `production`) also allow loopback and private destinations, over plain HTTP,
 so a local listener can receive events. Production refuses them.
 
+## Delivery rules
+
+Automatic delivery is the normal path: an eligible invoice goes to every
+enabled destination without a manual step. Each workspace has a small
+delivery policy that decides which invoices are eligible and explains every
+one it holds. It is exception handling, not an approval step, and not a rules
+engine: a fixed set of checks over the validation, supplier-history checks
+and question answers each invoice already has, plus at most ten conditions
+of two shapes (`packages/documents/src/delivery-policy.ts`). Everyone in the
+workspace can read it in **Settings → Delivery rules**, tRPC
+`deliveryRules.get` or `GET /delivery-policy`; owners and admins change it.
+
+| Check | Default | Holds when |
+| --- | --- | --- |
+| Missing required fields | always held | the supplier, invoice number, invoice date, currency or gross total was not found |
+| Invalid financial data | always held | any [validation](document-intake.md#validation) error: totals, VAT or lines that do not add up, mixed currencies, a negative total, a due date before the invoice date |
+| Duplicate or revised invoice | always held | the same type and number from the same supplier was received before: a copy (`duplicate`), or a revised invoice with a different date or total (`revised_invoice`) |
+| Possible duplicate | held | an earlier invoice from the supplier has the same date and total under another number |
+| Changed bank details | held | the bank account differs from the supplier's most recent one (shown masked) |
+| Uncertain reading | held | the supplier, invoice number, a date, the currency or an amount was read with low confidence |
+| New or unidentified supplier | delivered | the supplier's first invoice, or the supplier could not be identified |
+| Other validation warnings | delivered | no VAT shown, VAT without a VAT number, failed VAT-number or IBAN check digits and the like |
+| Required questions | none | a required question's answer is `unknown`, `not_applicable`, `failed`, `low_confidence`, `incomplete_input` or missing |
+| Conditions (up to 10) | none | a question's answer *is*/*is not* a yes/no or choice value, or is *above*/*below* a number or score level; or the gross total is above an amount in a named currency |
+
+An answer that is not a confident answer never counts as no or zero: a
+condition over it holds the invoice as *could not be checked*, and so does an
+amount limit on an invoice in another currency (amounts are never
+converted). The three *always held* checks cannot be switched off, because a
+bill could not safely carry them. A credit note is not held; it is not
+posted either, because a draft bill cannot represent it.
+
+**Destinations.** *Accounting* on or off: whether eligible invoices are
+posted as draft bills. *Webhooks*: `eligible` (the default) sends invoice
+events only for eligible or released invoices; `all` sends every processed
+invoice, each carrying its decision, for a consumer that runs its own review.
+
+**Decisions.** Each invoice revision is decided once, in the transaction that
+schedules its deliveries (`decideRevision` in
+`packages/jobs/src/delivery-rules.ts`), and stored in `delivery_decisions`
+with the policy version and settings it was made under, the rules version,
+the outcome, every reason (with whether a release may clear it) and what
+each destination was told: `accounting` is `deliver`, `held`, `off`,
+`not_connected`, `not_applicable`, `already_posted` or `not_scheduled` (the
+rules would let it through but the revision schedules no post: a question
+rerun of an invoice that was not held, or a correction that posts nothing),
+`webhooks` is `deliver` or `held`. A destination is scheduled only when its decision lets
+it through, so every webhook delivery and bill has the decision it was sent
+under (the delivery's revision, or the invoice's `accounting_revision`), and
+webhook payloads carry it as `data.deliveryDecision`. A held invoice reads as
+*Held* in the dashboard, is listed under *Held* and *Needs attention*, and its
+**Delivery** panel shows each reason and the next step.
+
+**Resolving a held invoice.** Every path names the revision the person saw
+and is refused as a conflict when the invoice has changed:
+
+- **Release** (owner or admin, with a reason): records who released it, when
+  and why on the decision, then schedules the destinations that were held, under
+  the same event ids and bill key they would have had. It is refused while an
+  *always held* reason stands. Two releases at once produce one; the other
+  is a conflict.
+- **Dismiss** (owner or admin, with a reason): records that nothing is sent;
+  the invoice reads as *Not delivered* and leaves *Needs attention*.
+- **Correct** or **re-extract**: the new revision is decided afresh. A
+  member's correction of a held invoice is held again for an owner's or
+  admin's release (`awaiting_approval`), so a member cannot clear a hold by
+  editing values.
+- **Rerun questions**: the new revision is decided afresh; when the previous
+  revision's bill was held and the new answers make it eligible, the bill is
+  posted then (a rerun otherwise never posts). An unresolved
+  `awaiting_approval` hold is carried to the new revision, so only a release
+  clears it.
+
+*Retry delivery* and `POST /accounting/invoices/:id/retry` never bypass a
+hold: while the current revision's decision is held and not released, the
+accounting part answers `held` (or `dismissed`) and leaves the post as it is,
+even when an earlier revision's post failed, and the dashboard offers no
+accounting retry. A question rerun sends no `invoice.judgments.attached`
+for an invoice whose webhooks are held.
+
+| Surface | Release / dismiss |
+| --- | --- |
+| Dashboard | the invoice's **Delivery** panel |
+| tRPC | `inbox.releaseDelivery`, `inbox.dismissDelivery` (`id`, `revision`, `reason`) |
+| REST | `POST /invoices/:id/delivery/release` and `/dismiss` with `{"revision": n, "reason": "..."}` (scope `inbox.write`): `403` for a member, `404` for another workspace's invoice, `409` for a changed invoice or a resolved hold, `400` for a hold only a correction clears |
+
+**Changing the rules.** Saving writes a new, immutable version
+(`delivery_policies`); the caller names the version they edited, so a stale
+save is refused (`409`). Decisions already made keep the version they were
+made under: nothing is re-decided or re-sent, and an invoice held before the
+change stays held until someone resolves it. Revisions completed afterwards
+are decided under the new version.
+
+```bash
+curl --fail --silent -X PUT \
+  -H "Authorization: Bearer $INVOICEWISE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"expectedVersion":0,"policy":{"destinations":{"accounting":true,"webhooks":"eligible"},"rules":{"possible_duplicate":"hold","bank_details_changed":"hold","uncertain_reading":"hold","new_supplier":"deliver","validation_warnings":"deliver"},"requiredQuestions":[],"conditions":[{"kind":"gross_above","amount":5000,"currency":"GBP"}]}}' \
+  "$INVOICEWISE_API_URL/delivery-policy"
+```
+
+**Business idempotency.** A revision has one decision (a replay returns it);
+a release or dismissal is a single conditional transition under the invoice
+row lock; events are keyed by invoice, revision and type, and bills by one
+key and claim per invoice number, so concurrent jobs, retries and releases
+converge on one delivery per endpoint and one bill. A revision of an invoice
+(a correction, re-extraction or rerun) keeps the invoice's one bill; a
+document from the same supplier with a number already received is a
+duplicate or revised invoice, never a new invoice. A later copy processed
+before its original is still stopped by the accounting job's claim (see
+[accounting integrations](accounting-integrations.md#what-each-provider-receives)).
+
+**Proof.** `bun run verify:delivery-rules` in `packages/jobs` (part of
+`bun run verify`) drives the real queue, worker batches and Postgres against
+loopback Nango/Xero and webhook stubs: a valid invoice posted and sent with
+its decision; a copy held as a duplicate, refused on release and on both
+retry routes, dismissed with its reason; a revised invoice held as a
+revision; changed bank details held, refused to a member and to a stale tab,
+then released by two admins at once into one bill and one event; a missing
+number, a low-confidence total and an unknown required answer held; and a
+policy update that leaves held invoices held and re-sends nothing while a
+new invoice is decided under the new version. Observed on 2026-09-25:
+
+```text
+eligible:      decision=deliver, policyVersion=0, accounting=posted, delivery=delivered
+duplicate:     reasons=[duplicate], release refused, resolution=dismissed
+revised:       reasons=[revised_invoice]
+bank details:  "…has account ending 4321, …most recent invoice HP-1001 had account ending 5678…"
+               releases=[fulfilled, rejected], bills=1, processed events=1, delivery=delivered
+evidence:      missing number=[missing_required_fields, …], low confidence=[uncertain_reading],
+               unknown required answer=[required_answer_uncertain]
+policy update: version=2, held invoice stays under version 0, re-sent=0, new invoice under version 2
+```
+
 ## Processing-to-delivery handoff
 
 Every accepted invoice revision reaches each destination the workspace had
-configured when it completed, or ends in a visible terminal state.
+configured when it completed and the [delivery rules](#delivery-rules) let
+through, or ends in a visible state (held, dismissed or a terminal outcome).
 
-- **One transaction.** The processing result, the next `processing_revision`
-  and one durable intent per destination (a `webhook_deliveries` row per
-  subscribed active endpoint and event, and the invoice's accounting post) are
-  written together with the workflow jobs that carry them out
+- **One transaction.** The processing result, the next `processing_revision`,
+  its delivery decision and one durable intent per destination the decision
+  lets through (a `webhook_deliveries` row per subscribed active endpoint and
+  event, and the invoice's accounting post) are written together with the
+  workflow jobs that carry them out
   (`completeInvoiceProcessing` in `packages/jobs/src/delivery.ts`). If any
   enqueue fails, all of it rolls back and the processing job retries; after
   the commit no destination can be lost. Only a record still in `processing`
@@ -328,12 +474,14 @@ configured when it completed, or ends in a visible terminal state.
   role, as `POST /accounting/invoices/:id/retry` does, and for a member the
   accounting intent is left unchanged and reported as `admin_required` (see
   [permissions](permissions.md)). A retry cannot change which destinations
-  exist.
-- **Delivered state.** The dashboard shows *Delivering*, *Delivered* or
-  *Delivery failed* from the current revision's destination outcomes: any
-  failure is *Delivery failed*, any queued work is *Delivering*, and
-  *Delivered* needs at least one successful destination with the rest
-  succeeded or cancelled. The legacy `done` inbox status plays no part.
+  exist or clear a [delivery-rules](#delivery-rules) hold.
+- **Delivered state.** The dashboard shows *Held*, *Delivering*,
+  *Delivered*, *Delivery failed* or *Not delivered* from the current
+  revision's decision and destination outcomes: an unresolved hold is
+  *Held*, any failure is *Delivery failed*, a dismissed hold is *Not
+  delivered*, any queued work is *Delivering*, and *Delivered* needs at least
+  one successful destination with the rest succeeded or cancelled. The legacy
+  `done` inbox status plays no part.
 
 ### Fault-injection proof
 

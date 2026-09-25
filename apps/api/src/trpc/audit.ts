@@ -153,6 +153,28 @@ export const TRPC_AUDIT: Record<string, AuditSpec | null> = {
       };
     },
   },
+  "inbox.releaseDelivery": {
+    action: "delivery.release",
+    target: invoice,
+    // The reason is kept with the delivery decision itself.
+    detail: (input) => ({ reasonGiven: !!str(field(input, "reason")) }),
+  },
+  "inbox.dismissDelivery": {
+    action: "delivery.dismiss",
+    target: invoice,
+    detail: (input) => ({ reasonGiven: !!str(field(input, "reason")) }),
+  },
+  "deliveryRules.update": {
+    action: "delivery_rules.update",
+    target: () => ({ type: "delivery_policy", id: null }),
+    detail: (input) => ({
+      expectedVersion: num(field(input, "expectedVersion")),
+      settings: Object.keys(asObject(field(input, "policy")) ?? {}),
+    }),
+    result: (result) => ({
+      detail: { version: num(field(asObject(result), "version")) },
+    }),
+  },
   "inbox.bulkAction": {
     action: "invoice.bulk_action",
     detail: (input) => ({ bulkAction: str(field(input, "action")) }),

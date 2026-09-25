@@ -18,6 +18,7 @@ export default async function Layout({
     { path: "/settings", label: "General" },
     { path: "/settings/email", label: "Email" },
     { path: "/settings/data", label: "Data" },
+    { path: "/settings/delivery", label: "Delivery rules" },
     ...(permissions?.manageBilling
       ? [{ path: "/settings/billing", label: "Billing" }]
       : []),

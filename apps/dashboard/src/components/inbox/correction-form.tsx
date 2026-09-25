@@ -134,6 +134,7 @@ const outcomeMessage: Record<string, string> = {
   not_scheduled: "Nothing was sent to accounting.",
   admin_required:
     "Sending it to accounting again needs an admin: ask one to retry delivery.",
+  held: "The delivery rules hold the corrected invoice; the reasons are under Delivery.",
   bill_kept: "The bill in your accounting software was left as it was.",
   bill_update_queued:
     "The same bill in your accounting software is being updated. No new bill is created.",

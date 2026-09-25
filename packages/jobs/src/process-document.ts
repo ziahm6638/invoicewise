@@ -176,10 +176,24 @@ export async function saveProcessedDocument(
       extraction: input.extraction,
       supplierId: supplier.supplierId,
     });
-    const completion = await completeAndSchedule(executor, {
-      ...processed,
-      validation,
-    });
+    // The supplier-history checks are recorded before the deliveries are
+    // scheduled, because the delivery decision reads them.
+    let supplierChecks: Awaited<
+      ReturnType<typeof recordSupplierChecks>
+    > | null = null;
+    const completion = await completeAndSchedule(
+      executor,
+      { ...processed, validation },
+      async () => {
+        supplierChecks = await recordSupplierChecks(executor, {
+          teamId: input.teamId,
+          documentId: input.id,
+          extraction: input.extraction,
+          validation,
+          supplier,
+        });
+      },
+    );
     if (completion && sourceText) {
       await saveDocumentText(executor, {
         inboxId: input.id,
@@ -197,15 +211,6 @@ export async function saveProcessedDocument(
         revision: completion.revision,
       });
     }
-    const supplierChecks = completion
-      ? await recordSupplierChecks(executor, {
-          teamId: input.teamId,
-          documentId: input.id,
-          extraction: input.extraction,
-          validation,
-          supplier,
-        })
-      : null;
     if (completion && input.extraction.invoiceNumber) {
       await reevaluateLaterDocuments(executor, input.teamId, input.id, [
         input.extraction.invoiceNumber,

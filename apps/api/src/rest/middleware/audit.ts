@@ -75,6 +75,24 @@ export const REST_AUDIT_ROUTES: RestAuditRoute[] = [
   },
   {
     method: "POST",
+    pattern: /^\/invoices\/([^/]+)\/delivery\/release$/,
+    action: "delivery.release",
+    target: id("invoice"),
+  },
+  {
+    method: "POST",
+    pattern: /^\/invoices\/([^/]+)\/delivery\/dismiss$/,
+    action: "delivery.dismiss",
+    target: id("invoice"),
+  },
+  {
+    method: "PUT",
+    pattern: /^\/delivery-policy\/?$/,
+    action: "delivery_rules.update",
+    target: created("delivery_policy"),
+  },
+  {
+    method: "POST",
     pattern: /^\/accounting\/connect-sessions$/,
     action: "accounting.connect_start",
   },

@@ -16,7 +16,8 @@
     "verify:suppliers": "bun run src/verify-suppliers.ts",
     "verify:authorization-sources": "bun run src/verify-authorization-sources.ts",
     "verify:questions": "bun run src/verify-questions.ts",
-    "verify:source-matching": "bun run src/verify-source-matching.ts"
+    "verify:source-matching": "bun run src/verify-source-matching.ts",
+    "verify:delivery-rules": "bun run src/verify-delivery-rules.ts"
   },
   "exports": {
     ".": "./src/client.ts",
@@ -34,6 +35,7 @@
     "./source-matching": "./src/source-matching.ts",
     "./deletion": "./src/deletion.ts",
     "./delivery": "./src/delivery.ts",
+    "./delivery-rules": "./src/delivery-rules.ts",
     "./exceptions": "./src/exceptions.ts",
     "./webhooks": "./src/webhooks.ts",
     "./data-export": "./src/data-export.ts",

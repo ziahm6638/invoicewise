@@ -8,6 +8,7 @@ import {
   type WebhookEndpointForDelivery,
   type WebhookEvent,
   canPostToAccounting,
+  canResolveHeldDeliveries,
   completeInboxProcessing,
   createWebhookDelivery,
   enqueueWorkflowJob,
@@ -15,6 +16,8 @@ import {
   failWebhookDelivery,
   getActiveAccountingConnection,
   getActiveWebhookEndpointForDelivery,
+  getCompletedInvoiceForUpdate,
+  getDeliveryDecision,
   getInvoiceForDeliveryUpdate,
   getLatestBillUpdate,
   getRevisionWebhookDeliveries,
@@ -29,9 +32,19 @@ import {
   requeueBillUpdate,
   requeueFinishedWorkflowJob,
   requeueWebhookDelivery,
+  resolveDeliveryDecision,
   supersedeBillUpdates,
 } from "@invoicewise/db/queries";
+import { DELIVERY_POLICY_LIMITS } from "@invoicewise/documents";
+import { InvoiceActionError } from "./action-error";
+
+export { InvoiceActionError } from "./action-error";
 import { workflowKey } from "./client";
+import {
+  decideRevision,
+  decisionHeld,
+  decisionSummary,
+} from "./delivery-rules";
 
 /**
  * Handoff from processing to delivery.
@@ -107,34 +120,28 @@ export type CompletedInvoice = NonNullable<
 >;
 
 /**
- * Durable intents for every destination the workspace has configured when the
- * revision completes. Must run inside the completion transaction. A user
- * revision that cannot change the bill (a question rerun) or that decides the
- * bill itself (a correction) passes `accounting: false`; `data` adds to what
- * the webhook events carry.
+ * The revision's `invoice.processed` event, and `invoice.judgments.attached`
+ * when it has judgments, to every subscribed endpoint. The event ids derive
+ * from the invoice, revision and type, so scheduling a revision again (a
+ * release after a hold) reaches each endpoint once.
  */
-export async function scheduleInvoiceDeliveries(
+async function scheduleRevisionEvents(
   db: Database,
-  invoice: CompletedInvoice,
-  options: { accounting?: boolean; data?: Record<string, unknown> } = {},
+  invoice: CompletedInvoice & { teamId: string },
+  data: Record<string, unknown>,
 ) {
-  if (!invoice.teamId) return { webhooks: 0, accounting: false };
-  const teamId = invoice.teamId;
   const revision = invoice.processingRevision;
   const createdAt = new Date().toISOString();
-  const { accountingPostStatus, accountingProviderId, ...record } = invoice;
-  const data = { ...record, ...options.data };
   const event = (type: WebhookEvent["type"]): WebhookEvent => ({
     id: logicalEventId(invoice.id, revision, type),
     type,
     version: WEBHOOK_PAYLOAD_VERSION,
     createdAt,
-    teamId,
+    teamId: invoice.teamId,
     invoiceId: invoice.id,
     revision,
     data,
   });
-
   let webhooks = await scheduleWebhookEvent(db, event("invoice.processed"));
   if (invoice.judgments?.length) {
     webhooks += await scheduleWebhookEvent(
@@ -142,16 +149,63 @@ export async function scheduleInvoiceDeliveries(
       event("invoice.judgments.attached"),
     );
   }
+  return webhooks;
+}
 
-  if (options.accounting === false) return { webhooks, accounting: false };
+/** The record a revision's webhook events carry. */
+const eventRecord = (invoice: CompletedInvoice) => {
+  const { accountingPostStatus, accountingProviderId, ...record } = invoice;
+  return record;
+};
+
+/**
+ * Decides the revision under the workspace's delivery rules and writes a
+ * durable intent for every destination the decision lets through. Must run
+ * inside the transaction that commits the revision. A user revision that
+ * cannot change the bill (a question rerun) or that decides the bill itself
+ * (a correction) passes `accounting: false`; `data` adds to what the webhook
+ * events carry; `approval` holds the revision for an admin's release.
+ */
+export async function scheduleInvoiceDeliveries(
+  db: Database,
+  invoice: CompletedInvoice,
+  options: {
+    accounting?: boolean;
+    data?: Record<string, unknown>;
+    approval?: string | null;
+  } = {},
+) {
+  if (!invoice.teamId) {
+    return { webhooks: 0, accounting: false, decision: null };
+  }
+  const teamId = invoice.teamId;
+  const decision = await decideRevision(
+    db,
+    { ...invoice, teamId },
+    { approval: options.approval, accounting: options.accounting },
+  );
+  const data = {
+    ...eventRecord(invoice),
+    ...options.data,
+    deliveryDecision: decisionSummary(decision),
+  };
+
+  const webhooks =
+    decision.webhooks === "deliver"
+      ? await scheduleRevisionEvents(db, { ...invoice, teamId }, data)
+      : 0;
+
+  if (decision.accounting !== "deliver") {
+    return { webhooks, accounting: false, decision };
+  }
   const accounting = await scheduleAccountingPost(db, {
     invoiceId: invoice.id,
     teamId,
-    revision,
-    status: accountingPostStatus,
-    providerId: accountingProviderId,
+    revision: invoice.processingRevision,
+    status: invoice.accountingPostStatus,
+    providerId: invoice.accountingProviderId,
   });
-  return { webhooks, accounting: accounting !== null };
+  return { webhooks, accounting: accounting !== null, decision };
 }
 
 /**
@@ -220,10 +274,13 @@ type CompleteInvoiceParams = Omit<
 /**
  * The body of `completeInvoiceProcessing` for a caller that already holds the
  * transaction the completion must share (document validation, for one).
+ * `beforeSchedule` records what the delivery decision reads beyond the
+ * completed record (the supplier-history checks) once the revision exists.
  */
 export async function completeAndSchedule(
   executor: Database,
   params: CompleteInvoiceParams,
+  beforeSchedule?: (invoice: CompletedInvoice) => Promise<void>,
 ) {
   const invoice = await completeInboxProcessing(executor, params);
   if (!invoice) return null;
@@ -231,6 +288,7 @@ export async function completeAndSchedule(
     invoiceId: invoice.id,
     teamId: params.teamId,
   });
+  await beforeSchedule?.(invoice);
   const scheduled = await scheduleInvoiceDeliveries(executor, invoice);
   return { invoice, revision: invoice.processingRevision, scheduled };
 }
@@ -377,7 +435,11 @@ export type DeliveryRetryResult = {
     | "in_progress"
     | "no_active_connection"
     | "not_scheduled"
-    | "admin_required";
+    | "admin_required"
+    /** The current revision's delivery decision holds it: release it instead. */
+    | "held"
+    /** The current revision's hold was dismissed: nothing is sent. */
+    | "dismissed";
   /** The in-place update of a posted bill after a correction, if one failed. */
   billUpdate:
     | "requeued"
@@ -394,8 +456,10 @@ export type DeliveryRetryResult = {
  * is skipped, never recreated, and destinations added after the revision
  * completed are not included. Re-posting to the accounting provider keeps the
  * admin role it requires everywhere else: for a lower role the accounting
- * intent is left as it is and reported as `admin_required`. Returns null for
- * an unknown or deleted invoice.
+ * intent is left as it is and reported as `admin_required`. A post the
+ * delivery rules hold for the current revision is never re-driven here: it
+ * is sent by an owner's or admin's release. Returns null for an unknown or
+ * deleted invoice.
  */
 export async function retryInvoiceDelivery(
   db: Database,
@@ -474,6 +538,7 @@ export async function retryInvoiceDelivery(
         status: invoice.accountingPostStatus,
         providerId: invoice.accountingProviderId,
         revision: invoice.accountingRevision ?? revision,
+        currentRevision: revision,
         permitted,
       }),
     };
@@ -622,7 +687,10 @@ async function requeueFailedBillUpdate(
   return "requeued";
 }
 
-/** Re-drives a failed or cancelled accounting intent on the active connection. */
+/**
+ * Re-drives a failed or cancelled accounting intent on the active connection,
+ * unless the delivery rules hold the invoice's current revision.
+ */
 export async function requeueAccountingIntent(
   db: Database,
   input: {
@@ -630,7 +698,10 @@ export async function requeueAccountingIntent(
     teamId: string;
     status: string | null;
     providerId: string | null;
+    /** The revision the intent posts. */
     revision: number;
+    /** The invoice's current revision, whose delivery decision applies. */
+    currentRevision: number;
     /** Whether the caller may re-post to the accounting provider. */
     permitted: boolean;
   },
@@ -643,6 +714,14 @@ export async function requeueAccountingIntent(
     return "already_posted";
   }
   if (input.status === "queued") return "in_progress";
+  const decision = await getDeliveryDecision(db, {
+    invoiceId: input.invoiceId,
+    teamId: input.teamId,
+    revision: input.currentRevision,
+  });
+  if (decision?.outcome === "hold" && decision.resolution !== "released") {
+    return decision.resolution === "dismissed" ? "dismissed" : "held";
+  }
   if (
     input.status !== "failed" &&
     input.status !== "cancelled" &&
@@ -683,4 +762,181 @@ export async function requeueAccountingIntent(
     });
   }
   return "requeued";
+}
+
+// --- Held deliveries -------------------------------------------------------------
+
+export type HeldDeliveryInput = {
+  invoiceId: string;
+  teamId: string;
+  actorId: string;
+  teamRole: TeamRole | null;
+  /** The processing revision whose decision the user saw. */
+  expectedRevision: number;
+  reason: string;
+};
+
+const refuse = (code: InvoiceActionError["code"], message: string) =>
+  new InvoiceActionError(code, message);
+
+/**
+ * The invoice at the revision the user saw, locked, with that revision's
+ * held and unresolved decision. Refuses anything else as the user would
+ * need to know: a changed invoice, a decision already resolved, or one
+ * that held nothing.
+ */
+async function lockHeldDecision(db: Database, input: HeldDeliveryInput) {
+  if (!canResolveHeldDeliveries(input.teamRole)) {
+    throw refuse(
+      "forbidden",
+      "Only workspace owners and admins can release or dismiss a held invoice.",
+    );
+  }
+  const reason = input.reason.trim();
+  if (
+    reason.length < 3 ||
+    reason.length > DELIVERY_POLICY_LIMITS.maxResolutionReasonLength
+  ) {
+    throw new InvoiceActionError(
+      "invalid",
+      `Give a reason (3 to ${DELIVERY_POLICY_LIMITS.maxResolutionReasonLength} characters); it is kept in the invoice's history.`,
+      [{ field: "reason", message: "Give a reason" }],
+    );
+  }
+  const invoice = await getCompletedInvoiceForUpdate(db, {
+    id: input.invoiceId,
+    teamId: input.teamId,
+  });
+  if (
+    !invoice?.teamId ||
+    invoice.status === "deleted" ||
+    (invoice.intakeState !== null && invoice.intakeState !== "accepted")
+  ) {
+    throw refuse("not_found", "Invoice not found");
+  }
+  if (
+    invoice.status === "processing" ||
+    invoice.processingRevision !== input.expectedRevision
+  ) {
+    throw refuse(
+      "conflict",
+      "This invoice changed since you opened it. Reload it to see its current decision, then try again.",
+    );
+  }
+  const decision = await getDeliveryDecision(db, {
+    invoiceId: invoice.id,
+    teamId: input.teamId,
+    revision: invoice.processingRevision,
+  });
+  if (!decision || decision.outcome !== "hold" || !decisionHeld(decision)) {
+    throw refuse("conflict", "This invoice is not held.");
+  }
+  if (decision.resolution) {
+    throw refuse(
+      "conflict",
+      `This invoice was already ${decision.resolution} by another user.`,
+    );
+  }
+  const { intakeState, processingError, ...record } = invoice;
+  return { invoice: { ...record, teamId: invoice.teamId }, decision, reason };
+}
+
+/**
+ * Releases an invoice the delivery rules held: the owner's or admin's
+ * decision, with its reason, is recorded on the revision's decision and the
+ * destinations it held are scheduled now, under the same event ids and bill
+ * key they would have had. A hold only a corrected or re-read invoice can
+ * clear (missing fields, invalid totals, a duplicate) is refused.
+ */
+export async function releaseHeldDelivery(
+  db: Database,
+  input: HeldDeliveryInput,
+) {
+  return db.transaction(async (tx) => {
+    const executor = asDatabase(tx);
+    const { invoice, decision, reason } = await lockHeldDecision(
+      executor,
+      input,
+    );
+    const locked = (
+      decision.reasons as { locked?: unknown; message?: unknown }[]
+    )
+      .filter((held) => held.locked === true)
+      .map((held) => String(held.message));
+    if (locked.length > 0) {
+      throw new InvoiceActionError(
+        "invalid",
+        `This invoice cannot be released: ${locked.join(" ")} Correct or re-extract it, or dismiss it.`,
+      );
+    }
+    const released = await resolveDeliveryDecision(executor, {
+      id: decision.id,
+      teamId: input.teamId,
+      resolution: "released",
+      reason,
+      resolvedBy: input.actorId,
+    });
+    if (!released) {
+      throw refuse("conflict", "This invoice was already resolved.");
+    }
+    const webhooks =
+      released.webhooks === "held"
+        ? await scheduleRevisionEvents(executor, invoice, {
+            ...eventRecord(invoice),
+            deliveryDecision: decisionSummary(released),
+          })
+        : 0;
+    const accounting =
+      released.accounting === "held"
+        ? (await scheduleAccountingPost(executor, {
+            invoiceId: invoice.id,
+            teamId: input.teamId,
+            revision: invoice.processingRevision,
+            status: invoice.accountingPostStatus,
+            providerId: invoice.accountingProviderId,
+          }))
+          ? ("queued" as const)
+          : ("not_scheduled" as const)
+        : ("not_held" as const);
+    return {
+      invoiceId: invoice.id,
+      revision: invoice.processingRevision,
+      decisionId: released.id,
+      webhooks,
+      accounting,
+    };
+  });
+}
+
+/**
+ * Dismisses an invoice the delivery rules held: nothing is delivered for
+ * this revision, and the decision records who decided so and why. A
+ * correction or re-extraction later is decided afresh.
+ */
+export async function dismissHeldDelivery(
+  db: Database,
+  input: HeldDeliveryInput,
+) {
+  return db.transaction(async (tx) => {
+    const executor = asDatabase(tx);
+    const { invoice, decision, reason } = await lockHeldDecision(
+      executor,
+      input,
+    );
+    const dismissed = await resolveDeliveryDecision(executor, {
+      id: decision.id,
+      teamId: input.teamId,
+      resolution: "dismissed",
+      reason,
+      resolvedBy: input.actorId,
+    });
+    if (!dismissed) {
+      throw refuse("conflict", "This invoice was already resolved.");
+    }
+    return {
+      invoiceId: invoice.id,
+      revision: invoice.processingRevision,
+      decisionId: dismissed.id,
+    };
+  });
 }

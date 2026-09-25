@@ -61,6 +61,7 @@ const TARGET: Record<string, string> = {
   oauth_application: "Application",
   mailbox: "Mailbox",
   data_export: "Export",
+  delivery_policy: "Delivery rules",
   workspace: "Workspace",
   job: "Job",
 };

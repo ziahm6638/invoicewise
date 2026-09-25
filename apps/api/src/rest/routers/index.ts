@@ -3,6 +3,7 @@ import { protectedMiddleware, withRequiredTeam } from "../middleware";
 import { withRestAuditTrail } from "../middleware/audit";
 import { accountingRouter } from "./accounting";
 import { authorizationSourcesRouter } from "./authorization-sources";
+import { deliveryPolicyRouter } from "./delivery-policy";
 import { inboxRouter } from "./inbox";
 import { invoicesRouter } from "./invoices";
 import oauthRouter from "./oauth";
@@ -28,7 +29,9 @@ for (const path of [
   "/webhooks",
   "/accounting",
   "/authorization-sources",
+  "/delivery-policy",
 ]) {
+  routers.use(path, withRequiredTeam);
   routers.use(`${path}/*`, withRequiredTeam);
 }
 
@@ -40,5 +43,6 @@ routers.route("/invoices", invoicesRouter);
 routers.route("/webhooks", webhooksRouter);
 routers.route("/accounting", accountingRouter);
 routers.route("/authorization-sources", authorizationSourcesRouter);
+routers.route("/delivery-policy", deliveryPolicyRouter);
 
 export { routers };

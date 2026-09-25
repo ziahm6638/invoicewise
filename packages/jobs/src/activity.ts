@@ -31,6 +31,18 @@ export const AUDIT_ACTIONS = {
     category: "delivery",
     label: "Retried the accounting post",
   },
+  "delivery.release": {
+    category: "delivery",
+    label: "Released a held delivery",
+  },
+  "delivery.dismiss": {
+    category: "delivery",
+    label: "Dismissed a held delivery",
+  },
+  "delivery_rules.update": {
+    category: "delivery",
+    label: "Changed the delivery rules",
+  },
   "webhook.redeliver": {
     category: "delivery",
     label: "Redelivered a webhook event",

@@ -863,6 +863,17 @@ async function workflowAndStorageVerifiers() {
     timeoutMs: 10 * 60 * 1000,
   });
 
+  await v.runStep("verify:jobs-delivery-rules", {
+    command: "bun",
+    args: ["--no-env-file", "run", "verify:delivery-rules"],
+    cwd: ws(JOBS_DIR),
+    env: env({
+      DATABASE_PRIMARY_URL: databaseUrl(JOBS_DATABASE),
+      LOCAL_STORAGE_PATH: join(v.tmpDir, "jobs-storage"),
+    }),
+    timeoutMs: 10 * 60 * 1000,
+  });
+
   await v.runStep("verify:jobs-authorization-sources", {
     command: "bun",
     args: ["--no-env-file", "run", "verify:authorization-sources"],

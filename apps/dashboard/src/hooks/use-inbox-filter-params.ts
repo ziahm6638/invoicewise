@@ -13,6 +13,7 @@ export const inboxFilterParamsSchema = {
     "failed",
     "invalid",
     "needs_review",
+    "held",
     "delivering",
     "delivery_failed",
     "delivered",

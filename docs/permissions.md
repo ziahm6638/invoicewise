@@ -12,6 +12,8 @@ expected to reach the same decision for the same actor.
 | Read an invoice's activity trace (receipt, runs, actions, destinations; `inbox.activity`, `GET /invoices/:id/activity`) | yes | yes | yes |
 | Upload, process, retry, annotate invoices (including re-driving failed webhook deliveries, re-extracting, rerunning questions and correcting extracted fields, keeping a posted bill as it is) | yes | yes | yes |
 | Re-post an invoice to the accounting provider (`POST /accounting/invoices/:id/retry`, and the accounting part of `inbox.retryDelivery` and `POST /invoices/:id/delivery/retry`, which report `admin_required` to a member), re-send it after a correction, or update a posted bill in place after a correction (`inbox.correct` with `update_bill`, refused to a member) | yes | yes | no |
+| Read the delivery rules and why an invoice was held ([delivery rules](delivery.md#delivery-rules)) | yes | yes | yes |
+| Change the delivery rules (`deliveryRules.update`, `PUT /delivery-policy`); release or dismiss an invoice they held (`inbox.releaseDelivery`/`inbox.dismissDelivery`, `POST /invoices/:id/delivery/release`/`dismiss`) | yes | yes | no |
 | Manage workspace settings (name, logo, currency, email) | yes | yes | no |
 | Invite, remove and re-role members | yes | yes, except owners | no |
 | List and revoke pending invitations | yes | yes | no |
@@ -82,9 +84,11 @@ membership from the primary database on every request, so deletion and
 demotion take effect on the next call. Effective scopes are intersected with
 what the caller's current role allows. `withRequiredTeamRole` guards the
 privileged routes (team settings, accounting, webhooks, authorization-source
-writes), and `withRequiredTeam` returns `403` for inbox, invoice, webhook,
-accounting and authorization-source routes when the caller has no active
-workspace.
+writes, delivery-rule changes), and `withRequiredTeam` returns `403` for inbox,
+invoice, webhook, accounting, authorization-source and delivery-policy routes
+when the caller has no active workspace. Releasing or dismissing a held
+invoice is refused to a member inside `releaseHeldDelivery` and
+`dismissHeldDelivery`, so tRPC and REST give the same answer.
 
 **API keys and OAuth grants.** Granting API access is the "manage
 integrations" capability: creating a key, consenting to an OAuth application

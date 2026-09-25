@@ -35,7 +35,11 @@ import {
   retryInvoiceDelivery,
 } from "./delivery";
 import { acceptIntakeUpload } from "./intake";
-import { required, startTypeSafeStub } from "./verify-support";
+import {
+  deliverPossibleDuplicates,
+  required,
+  startTypeSafeStub,
+} from "./verify-support";
 
 type Receipt = {
   endpoint: "a" | "b" | "c";
@@ -362,6 +366,9 @@ async function main() {
         .returning({ id: users.id });
       if (!user) throw new Error("Unable to create verification user");
       userIds.push(user.id);
+      // Its invoices share a date and total; this proves the handoff, not
+      // the delivery rules' possible-duplicate hold.
+      await deliverPossibleDuplicates(db, team.id);
       return { teamId: team.id, userId: user.id };
     };
     const main = await createTeam("Handoff verification");

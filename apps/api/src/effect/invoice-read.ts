@@ -69,6 +69,13 @@ export const InvoiceItem = Schema.Struct({
    * `needsConfirmation` and the linked `sourceIds`.
    */
   sourceMatch: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  /**
+   * The delivery rules' decision for the current revision: the policy
+   * version it was made under, `outcome` (`deliver` or `hold`), the
+   * `reasons` it was held, what each destination was told and how a hold
+   * was resolved. Null for invoices processed before delivery rules existed.
+   */
+  deliveryDecision: Schema.optional(Schema.NullOr(Schema.Unknown)),
   /** Why extraction failed, when it did; null while processing or once processed. */
   processingError: Schema.optional(Schema.NullOr(Schema.String)),
   /**
