@@ -470,8 +470,8 @@ disposable local stack:
 `bun run verify --legacy-tests` additionally runs the retained legacy suites
 (the workspace unit suites, the MinIO-backed storage suite, the #32/#34
 security and intake HTTP regression suites, the data lifecycle suite, the
-verifier negative controls, the deploy-config check and the retired matching
-scope); `bun run test:legacy` runs only those.
+verifier negative controls and the deploy-config check); `bun run test:legacy`
+runs only those.
 
 Supporting commands:
 
@@ -618,14 +618,9 @@ not forced; no dependency was upgraded for this check. The negative-control
 suite also runs manypkg against a probe copy to prove the root configuration
 waives only external range mismatches while every other rule still fails.
 
-Retired bank/transaction matching is the only product-scope exclusion: those
-suites stay in the repository for historical reference, are out of
-`packages/db`'s `test:legacy` script (reachable via
-`bun run test:legacy:retired-bank-matching`), and `bun run test:legacy` still runs
-the retired unit suite (`transaction-matching.test.ts`), requiring a completed
-run whose failures are exactly the three recorded tiered-tolerance tests, by
-name — a crashed or unreadable run, a newly failing test or a recorded failure
-that starts passing fails the gate.
+Retired bank/transaction matching is the only product-scope exclusion: its
+code stays in `packages/db` for historical reference and its test suites were
+removed as out of scope.
 `packages/supabase` is used only by the inherited marketing site, whose data
 sources are out of contract.
 

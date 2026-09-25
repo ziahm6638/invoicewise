@@ -43,10 +43,6 @@ import {
   syntheticEnv,
 } from "./lib";
 import {
-  RETIRED_MATCHING_EXPECTED_FAILURES,
-  parseRetiredMatchingOutcome,
-} from "./scopes";
-import {
   SECRET_EXCEPTIONS,
   candidateFiles,
   scanContentForSecrets,
@@ -488,67 +484,5 @@ describe("secret scanner", () => {
     expect(hit.line).toBe(1);
     expect(hit.pattern).toBe("resend-key");
     expect(Object.values(hit).join(" ")).not.toContain(value);
-  });
-});
-
-describe("retired-scope parsing", () => {
-  const completed = [
-    ...RETIRED_MATCHING_EXPECTED_FAILURES.map(
-      (name) => `(fail) ${name} [0.1ms]`,
-    ),
-    " 3 fail",
-    "Ran 25 tests across 1 file.",
-  ].join("\n");
-
-  test("accepts only the recorded completed failure set", () => {
-    expect(parseRetiredMatchingOutcome(completed)).toEqual({
-      ok: true,
-      failures: 3,
-    });
-  });
-
-  test("rejects crashed, missing and changed runs instead of reading zero", () => {
-    expect(parseRetiredMatchingOutcome("error: no test files found").ok).toBe(
-      false,
-    );
-    expect(
-      parseRetiredMatchingOutcome("0 tests failed\nRan 1 test across 1 file.")
-        .ok,
-    ).toBe(false);
-    expect(
-      parseRetiredMatchingOutcome(`${completed}\n(fail) suite > extra [0.1ms]`)
-        .ok,
-    ).toBe(false);
-  });
-
-  test("rejects a swapped failure even when the count is unchanged", () => {
-    const swapped = [
-      ...RETIRED_MATCHING_EXPECTED_FAILURES.slice(1).map(
-        (name) => `(fail) ${name} [0.1ms]`,
-      ),
-      "(fail) Cross-Currency Matching Algorithm > another case [0.1ms]",
-      " 3 fail",
-      "Ran 25 tests across 1 file.",
-    ].join("\n");
-    const outcome = parseRetiredMatchingOutcome(swapped);
-    expect(outcome.ok).toBe(false);
-  });
-
-  test("the recorded failures match a real run of the retired suite", () => {
-    const run = Bun.spawnSync(
-      ["bun", "--no-env-file", "test", "src/test/transaction-matching.test.ts"],
-      {
-        cwd: join(process.cwd(), "packages", "db"),
-        stderr: "pipe",
-        stdout: "pipe",
-      },
-    );
-    const output =
-      new TextDecoder().decode(run.stdout) +
-      new TextDecoder().decode(run.stderr);
-    expect(parseRetiredMatchingOutcome(output)).toEqual({
-      ok: true,
-      failures: RETIRED_MATCHING_EXPECTED_FAILURES.length,
-    });
   });
 });

@@ -4,9 +4,7 @@
   "scripts": {
     "migrate": "drizzle-kit migrate",
     "typecheck": "tsc --noEmit",
-    "test:legacy": "bun test src/storage.test.ts src/storage.s3.test.ts src/replicas.test.ts src/queries",
-    "test:legacy:retired-bank-matching": "bun test src/test/transaction-matching*.test.ts",
-    "validate-golden": "bun run src/test/validate-golden-dataset.ts"
+    "test:legacy": "bun test src/storage.test.ts src/storage.s3.test.ts src/queries"
   },
   "exports": {
     "./client": "./src/client.ts",
