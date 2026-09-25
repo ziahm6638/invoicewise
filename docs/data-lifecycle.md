@@ -19,10 +19,9 @@ members see the same schedule under Settings → Data, rendered from
 | Failed uploads and deleted invoices | 30 days after upload | hourly retention job | `RETENTION_FAILED_UPLOAD_DAYS` |
 | Source email reference | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
 | Job and webhook payloads | 30 days after the job or delivery finished | hourly retention job | `RETENTION_JOB_PAYLOAD_DAYS` |
-| Application logs | 30 days (target, see below) | Docker log rotation on the host | `RETENTION_LOG_DAYS` (display only) |
+| Application logs | rotated by size: 5 files of 50 MB per container; time-based 30-day expiry not yet enforced | Docker log rotation on the host | `logging` in `config/deploy.yml` |
 | Database backups | 30 days | `ops/backup` on hp-slice | `INVOICEWISE_BACKUP_RETAIN_DAYS` on the host, `RETENTION_BACKUP_DAYS` in the app |
 | Data export downloads | 24 hours | download route refuses at once; hourly retention job removes the archive | `EXPORT_LINK_TTL_HOURS` |
-| Completed deletion records | the backup period after completion | hourly retention job | follows `RETENTION_BACKUP_DAYS` |
 
 Settings are whole numbers of days (hours for the export link) in the API
 container's environment; the API renders them and the in-process workflow
@@ -59,19 +58,19 @@ What each row means precisely:
   touched.
 - **Application logs.** Container logs rotate by size (`logging` in
   `config/deploy.yml`: 5 files of 50 MB per container). Size rotation bounds
-  what is kept but does not guarantee removal at 30 days on a quiet host, so
-  the 30-day period is a target, not yet enforced by time. Old containers, and
-  their logs, go when Kamal prunes earlier releases.
+  what is kept but does not remove logs after any fixed time, so the 30-day
+  period recorded for logs is not yet enforced; time-based expiry is a
+  follow-up. Old containers, and their logs, go when Kamal prunes earlier
+  releases.
 - **Backups.** Nightly dumps of the InvoiceWise and Nango databases older than
   the period are deleted by `ops/backup/invoicewise-backup`. A change to the
   period takes effect on the host only after `ops/backup/install.sh` is run;
-  keep `RETENTION_BACKUP_DAYS` equal to it, because completed deletion records
-  are removed after that many days (see below).
-- **Deletion records.** A completed `deletion_requests` row holds only ids and
-  timestamps, never a name, email address or provider reference. It is kept
-  while a backup taken before the deletion can still exist, because after a
-  restore it is the list of subjects to re-delete; after that it is removed.
-  Pending and failed requests are never removed.
+  keep `RETENTION_BACKUP_DAYS` equal to it so the schedule shown in Settings
+  matches the host.
+- **Deletion records.** Completed `deletion_requests` rows hold only ids and
+  timestamps, never a name, email address or provider reference. They are the
+  operator audit trail (after a restore, the list of subjects to re-delete) and
+  are kept; no retention job removes them.
 
 ### The retention job
 

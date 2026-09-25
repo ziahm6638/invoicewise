@@ -82,7 +82,6 @@ describe("retention policy", () => {
       failedUploadDays: 30,
       sourceEmailDays: 90,
       jobPayloadDays: 30,
-      logDays: 30,
       backupDays: 30,
       exportLinkHours: 24,
     });
@@ -111,7 +110,6 @@ describe("retention policy", () => {
       "logs",
       "backups",
       "exports",
-      "deletion-requests",
     ]);
     expect(entries.find((entry) => entry.key === "exports")?.period).toBe(
       "24 hours",

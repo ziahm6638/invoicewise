@@ -549,7 +549,7 @@ suite("data lifecycle (integration)", () => {
         createdAt: ago(40).toISOString(),
       },
     ]);
-    // Deletion records: settled past the backup window go, pending stay.
+    // Deletion records are the operator audit trail and are never removed.
     const [settled, pending] = await primaryDb
       .insert(schema.deletionRequests)
       .values([
@@ -672,7 +672,7 @@ suite("data lifecycle (integration)", () => {
       teamId: neighbourTeam,
       inboxId: recentEmail.id,
     });
-    expect(await queries.getDeletionRequest(db, settled!.id)).toBeUndefined();
+    expect(await queries.getDeletionRequest(db, settled!.id)).toBeDefined();
     expect(await queries.getDeletionRequest(db, pending!.id)).toBeDefined();
     expect(
       await queries.getDataExport(db, {

@@ -1,10 +1,5 @@
 import type { Database, PrimaryDatabase } from "@db/client";
-import {
-  deletionRequests,
-  inbox,
-  webhookDeliveries,
-  workflowJobs,
-} from "@db/schema";
+import { inbox, webhookDeliveries, workflowJobs } from "@db/schema";
 import {
   and,
   eq,
@@ -140,31 +135,4 @@ export async function redactFinishedWebhookPayloads(
     .set({ payload: {} })
     .where(and(inArray(webhookDeliveries.id, candidates), due))
     .returning({ id: webhookDeliveries.id, teamId: webhookDeliveries.teamId });
-}
-
-/**
- * Removes completed deletion requests once no backup taken before the
- * deletion can still exist. Until then the request is what tells an operator
- * which subjects to re-delete after a restore; afterwards nothing is kept
- * that names the deleted workspace or account. Pending and failed requests
- * are never removed.
- */
-export async function deleteSettledDeletionRequests(
-  db: Db,
-  params: { before: Date; limit: number },
-) {
-  const due = and(
-    eq(deletionRequests.status, "completed"),
-    lt(deletionRequests.completedAt, params.before.toISOString()),
-  );
-  const candidates = db
-    .select({ id: deletionRequests.id })
-    .from(deletionRequests)
-    .where(due)
-    .limit(params.limit);
-
-  return db
-    .delete(deletionRequests)
-    .where(and(inArray(deletionRequests.id, candidates), due))
-    .returning({ id: deletionRequests.id });
 }

@@ -2,7 +2,6 @@ import type { Database } from "@invoicewise/db/client";
 import {
   clearExpiredEmailReferences,
   deleteExpiredCancelledIntake,
-  deleteSettledDeletionRequests,
   listExpiredDataExports,
   markDataExportExpired,
   redactFinishedJobPayloads,
@@ -26,8 +25,7 @@ export type RetentionStep =
   | "failed-upload-records"
   | "source-email"
   | "job-payloads"
-  | "webhook-payloads"
-  | "deletion-requests";
+  | "webhook-payloads";
 
 export type RetentionDeps = {
   db: Database;
@@ -86,7 +84,6 @@ export async function runRetentionSweep(
       "source-email": 0,
       "job-payloads": 0,
       "webhook-payloads": 0,
-      "deletion-requests": 0,
     },
     failures: [],
     refused: [],
@@ -207,14 +204,6 @@ export async function runRetentionSweep(
   await drain("webhook-payloads", () =>
     redactFinishedWebhookPayloads(deps.db, {
       before: before(deps.policy.jobPayloadDays),
-      limit: batchSize,
-    }),
-  );
-
-  // 5. Deletion records, once no backup could restore what they deleted.
-  await drain("deletion-requests", () =>
-    deleteSettledDeletionRequests(deps.db, {
-      before: before(deps.policy.backupDays),
       limit: batchSize,
     }),
   );

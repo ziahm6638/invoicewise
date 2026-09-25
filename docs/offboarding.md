@@ -118,8 +118,8 @@ operator keeps (disk snapshots, copies of the dumps) follows its own retention.
 A restore brings deleted subjects back. After restoring a dump, re-delete every
 account and workspace whose deletion was requested after the dump was taken;
 save the live `deletion_requests` rows before restoring, because they list
-them. A completed request is kept for the backup period after it completes and
-then removed by the retention job, so every dump still on disk is covered.
+them. Completed requests are kept as the operator audit trail, so every dump
+still on disk is covered.
 
 ## Known limits
 

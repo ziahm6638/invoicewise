@@ -16,8 +16,6 @@ export type RetentionPolicy = {
   sourceEmailDays: number;
   /** Payloads, results and errors of finished jobs and webhook deliveries. */
   jobPayloadDays: number;
-  /** Application logs on the production host. */
-  logDays: number;
   /** Nightly database dumps (ops/backup). */
   backupDays: number;
   /** How long a finished data export can be downloaded. */
@@ -28,7 +26,6 @@ export const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
   failedUploadDays: 30,
   sourceEmailDays: 90,
   jobPayloadDays: 30,
-  logDays: 30,
   backupDays: 30,
   exportLinkHours: 24,
 };
@@ -37,7 +34,6 @@ const ENV_NAMES: Record<keyof RetentionPolicy, string> = {
   failedUploadDays: "RETENTION_FAILED_UPLOAD_DAYS",
   sourceEmailDays: "RETENTION_SOURCE_EMAIL_DAYS",
   jobPayloadDays: "RETENTION_JOB_PAYLOAD_DAYS",
-  logDays: "RETENTION_LOG_DAYS",
   backupDays: "RETENTION_BACKUP_DAYS",
   exportLinkHours: "EXPORT_LINK_TTL_HOURS",
 };
@@ -112,9 +108,9 @@ export function describeRetentionPolicy(
     {
       key: "logs",
       label: "Application logs",
-      period: days(policy.logDays),
+      period: "Rotated by size: 5 files of 50 MB per container",
       appliedBy:
-        "Operating target for host logs. Logs are rotated by size today, so this period is not yet enforced by time.",
+        "Docker rotates each container's logs once they reach this size. Time-based 30-day expiry is not yet enforced.",
     },
     {
       key: "backups",
@@ -129,13 +125,6 @@ export function describeRetentionPolicy(
       period: hours(policy.exportLinkHours),
       appliedBy:
         "The archive stops downloading when it expires and is removed by the hourly retention job.",
-    },
-    {
-      key: "deletion-requests",
-      label: "Deletion records",
-      period: `${days(policy.backupDays)} after completion`,
-      appliedBy:
-        "Kept only while a backup could restore the deleted data, and never with names or email addresses; then removed.",
     },
   ];
 }
