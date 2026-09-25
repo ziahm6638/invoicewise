@@ -167,15 +167,12 @@ describe("inbound email endpoint", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("a malformed signature or a missing or oversized length is refused before the body is read", async () => {
+  test("a malformed signature or an oversized declared length is refused before the body is read", async () => {
     const { deps, calls } = depsWith(accepted);
     const cases: [Request, number][] = [
       [await signedRequest({ signature: "v1=abc" }), 401],
       [await signedRequest({ signature: `sha256=${"0".repeat(64)}` }), 401],
       [await signedRequest({ signature: `v1=${"G".repeat(64)}` }), 401],
-      [await signedRequest({ contentLength: null }), 411],
-      [await signedRequest({ contentLength: "-1" }), 411],
-      [await signedRequest({ contentLength: "12abc" }), 411],
       [
         await signedRequest({ contentLength: String(20 * 1024 * 1024 + 1) }),
         413,
@@ -188,6 +185,43 @@ describe("inbound email endpoint", () => {
       expect(pulled()).toBe(false);
     }
     expect(calls).toHaveLength(0);
+  });
+
+  test("a chunked body without a declared length is read with the same bound", async () => {
+    const chunked = (signed: Request, body: Uint8Array) => {
+      const headers = new Headers(signed.headers);
+      headers.delete("content-length");
+      const half = Math.floor(body.byteLength / 2);
+      return new Request(signed.url, {
+        method: "POST",
+        headers,
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(body.subarray(0, half));
+            controller.enqueue(body.subarray(half));
+            controller.close();
+          },
+        }),
+      });
+    };
+
+    const { deps, calls } = depsWith(accepted);
+    const signed = await signedRequest({ contentLength: null });
+    expect(signed.headers.get("content-length")).toBeNull();
+    const response = await handleInboundEmail(chunked(signed, RAW), deps);
+    expect(response.status).toBe(202);
+    expect(calls).toHaveLength(1);
+    expect(new TextDecoder().decode(calls[0]!.raw)).toBe(
+      new TextDecoder().decode(RAW),
+    );
+
+    const oversized = new Uint8Array(20 * 1024 * 1024 + 1);
+    const tooLarge = await handleInboundEmail(
+      chunked(await signedRequest({ body: oversized }), oversized),
+      deps,
+    );
+    expect(tooLarge.status).toBe(413);
+    expect(calls).toHaveLength(1);
   });
 
   test("an unset secret fails closed and temporarily", async () => {

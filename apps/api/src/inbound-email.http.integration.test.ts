@@ -769,10 +769,11 @@ suite("dedicated receiving address over real HTTP", () => {
       subject: "Genuine",
       extraHeaders: [
         "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=google.com header.s=20230601",
+        "Received: from mail-sor-f41.google.com by mx.cloudflare.net",
       ],
     });
     // Spoofed From with no authentication, and with a forged google.com pass
-    // below the result Cloudflare added for the real signer.
+    // below the receiving hop's Received header, where the sender put it.
     const unsigned = buildMessage({
       to: address,
       from,
@@ -785,7 +786,9 @@ suite("dedicated receiving address over real HTTP", () => {
       subject: "Forged",
       extraHeaders: [
         "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=evil.example",
+        "Received: from mx.evil.example by mx.cloudflare.net",
         "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=google.com",
+        "ARC-Authentication-Results: i=1; mx.cloudflare.net; dkim=pass header.d=google.com",
       ],
       attachments: [
         {

@@ -66,9 +66,10 @@ own workspace.
 
 The body is the raw RFC 5322 message. Before any of it is read, the request
 must carry a well-formed `v1=<64 hex>` signature and a current timestamp
-(else `401`) and a `content-length` (else `411`) of at most 20 MiB (else
-`413`); the Worker always sends a fixed-length body. The body is then read
-with the same bound whatever the header claimed. The signature covers the envelope and
+(else `401`), and a declared `content-length` over 20 MiB is refused (`413`).
+A body without a declared length (for example re-chunked on the way through
+the tunnel or proxy) is accepted for reading. Either way the body is read with
+the same 20 MiB bound whatever the header claimed. The signature covers the envelope and
 the exact bytes, so neither the recipient nor the content can be changed in
 transit. Nothing about the network path is trusted: production traffic
 arrives through the Cloudflare Tunnel and kamal-proxy, where any
@@ -89,7 +90,6 @@ construction on both sides.
 | `413` | over 20 MiB | `setReject` | permanent rejection |
 | `400` | empty message | `setReject` | permanent rejection |
 | `401` | bad signature (for example a secret mismatch after rotation) | retries, then throws | temporary failure; the sending server retries later |
-| `411` | no `content-length` (never sent by the Worker) | retries, then throws | temporary failure |
 | `503` / network error | database, storage or API unavailable | retries 3 times (1 s, 4 s back-off, 20 s per attempt), then throws | temporary failure; the sending server retries later |
 
 - **Accepted mail is durable before it is acknowledged.** The row (with the
@@ -146,12 +146,15 @@ Email lists the recent messages with their status and reasons.
   "No PDF, JPEG or PNG attachment was found in this message."
 - **Only rejected attachments**: `processed` with "No attachment in this
   message could be read as an invoice."
-- **Gmail forwarding confirmation** (`forwarding-noreply@google.com`, and the
-  topmost `Authentication-Results`, the one Cloudflare adds on receipt as
-  `mx.cloudflare.net`, shows `dkim=pass header.d=google.com`): the
-  confirmation text, including its link and code, is shown as the message's
-  detail so the workspace can finish setting up Gmail forwarding. The same
-  From without that DKIM pass is ordinary mail.
+- **Gmail forwarding confirmation** (`forwarding-noreply@google.com`, and an
+  `Authentication-Results` or `ARC-Authentication-Results: i=1` from
+  `mx.cloudflare.net` showing `dkim=pass header.d=google.com` in the receiving
+  hop's block, above the first `Received` header): the confirmation text,
+  including its link and code, is shown as the message's detail so the
+  workspace can finish setting up Gmail forwarding. Such headers below the
+  first `Received` header are sender-controlled and ignored; without the pass
+  the message is ordinary mail. This relies on Cloudflare's header layout,
+  which the live proof must record (step 7).
 - **Unreadable MIME**: `failed` at once ("This message could not be read as
   email."), not retried.
 - **Transient intake failure** (storage, parser capacity): the job retries; on
@@ -232,7 +235,8 @@ Every customer-facing mention of the mailbox waits for one setting,
   redeploy the site after changing it.
 
 Set it to `true` in both only after the Cloudflare setup above and the live
-proof below pass.
+proof below pass, including a recorded Cloudflare header layout that matches
+what the Gmail confirmation check trusts (step 7).
 
 ## Live proof
 
@@ -257,17 +261,28 @@ Settings → Email once to provision the address, then read it with
    `503`, a test message is deferred by the sending server (temporary failure)
    rather than bounced; this confirms the Cloudflare behaviour for a thrown
    Worker.
+7. Record here the headers Cloudflare puts at the top of a received message
+   (read `inbound_emails.raw` of a test message before it is processed, since
+   processing clears it, or of a failed message): which of `Authentication-Results` /
+   `ARC-Authentication-Results` it adds, with authserv-id `mx.cloudflare.net`,
+   and that they sit above its first `Received` header. If the layout differs
+   from what `isGoogleSigned` (`packages/jobs/src/inbound-email.ts`) trusts,
+   fix the check before turning `INBOUND_EMAIL_LIVE` on.
+
+   Observed layout: _not yet recorded._
 
 ## Tests
 
 - `apps/inbound-email/src/worker.test.ts` — signing, permanent vs temporary
   answers, size cap, retries.
 - `apps/api/src/inbound-email/http.test.ts` — signature, clock window, body
-  bound, cheap refusals before the body is read, fail-closed secret, status
-  mapping, and the real Worker against the real handler.
+  bound (declared or chunked), cheap refusals before the body is read,
+  fail-closed secret, status mapping, and the real Worker against the real
+  handler.
 - `packages/jobs/src/inbound-email.test.ts` — recipient parsing (no
   subaddresses), local part shape, header reading, message identity, the
-  Gmail confirmation's DKIM check, the live setting.
+  Gmail confirmation's DKIM check (receiving-hop headers only), the live
+  setting.
 - `apps/api/src/inbound-email.http.integration.test.ts` (in `bun run verify`)
   — real HTTP and Postgres: delivery through the Worker to the right
   workspace once with provenance, redelivery, refusals (unknown, revoked,

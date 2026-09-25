@@ -256,15 +256,35 @@ export async function acceptInboundEmail(
  * Gmail asks the new forwarding address to confirm before it forwards
  * anything. Its message carries the confirmation link and code, which the
  * workspace needs to see; it is never an invoice. The From header is only
- * believed when the topmost Authentication-Results, the one Cloudflare adds
- * on receipt, shows a DKIM pass for google.com; otherwise the message is
+ * believed when the receiving hop's own block (the headers above the first
+ * Received header) holds an Authentication-Results or ARC-Authentication-
+ * Results (i=1) from Cloudflare showing a DKIM pass for google.com. Anything
+ * below it is sender-controlled and ignored; without it the message is
  * ordinary mail.
  */
 const GMAIL_FORWARDING_SENDER = "forwarding-noreply@google.com";
 const RECEIVING_AUTHSERV_ID = "mx.cloudflare.net";
 
-export function isGoogleSigned(authenticationResults: string | undefined) {
-  if (!authenticationResults) return false;
+type MessageHeader = { key: string; value: string };
+
+function receivingHopResults(headers: MessageHeader[]) {
+  const firstReceived = headers.findIndex(({ key }) => key === "received");
+  if (firstReceived < 0) return [];
+  return headers.slice(0, firstReceived).flatMap(({ key, value }) => {
+    if (key === "authentication-results") return [value];
+    if (key === "arc-authentication-results") {
+      const sealed = value.match(/^\s*i\s*=\s*1\s*;([\s\S]*)$/);
+      return sealed?.[1] ? [sealed[1]] : [];
+    }
+    return [];
+  });
+}
+
+export function isGoogleSigned(headers: MessageHeader[]) {
+  return receivingHopResults(headers).some(showsGoogleDkimPass);
+}
+
+function showsGoogleDkimPass(authenticationResults: string) {
   const [authservId, ...results] = authenticationResults
     .toLowerCase()
     .split(";")
@@ -387,9 +407,7 @@ export async function processInboundEmail(
 
   if (
     parsed.from?.address?.toLowerCase() === GMAIL_FORWARDING_SENDER &&
-    isGoogleSigned(
-      parsed.headers.find(({ key }) => key === "authentication-results")?.value,
-    )
+    isGoogleSigned(parsed.headers)
   ) {
     const text = (parsed.text ?? "").replace(/\s+/g, " ").trim();
     await settleInboundEmail(db, {

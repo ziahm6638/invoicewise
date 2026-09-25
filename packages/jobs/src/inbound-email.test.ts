@@ -84,20 +84,38 @@ describe("inbound headers", () => {
 });
 
 describe("gmail forwarding confirmation", () => {
-  test("only Cloudflare's own DKIM pass for google.com is believed", () => {
+  const RECEIVED = {
+    key: "received",
+    value: "from mail-sor-f41.google.com by mx.cloudflare.net",
+  };
+  const results = (value: string) => ({
+    key: "authentication-results",
+    value,
+  });
+  const PASS =
+    "mx.cloudflare.net; dkim=pass header.d=google.com header.s=20230601";
+
+  test("only the receiving hop's DKIM pass for google.com is believed", () => {
+    expect(isGoogleSigned([results(PASS), RECEIVED])).toBe(true);
     expect(
-      isGoogleSigned(
-        "mx.cloudflare.net; dkim=pass header.d=google.com header.s=20230601; spf=pass smtp.mailfrom=google.com",
-      ),
+      isGoogleSigned([
+        results(
+          "mx.cloudflare.net;\r\n\tdkim=pass header.i=@google.com header.d=google.com",
+        ),
+        RECEIVED,
+      ]),
     ).toBe(true);
     expect(
-      isGoogleSigned(
-        "mx.cloudflare.net;\r\n\tdkim=pass header.i=@google.com header.d=google.com",
-      ),
+      isGoogleSigned([
+        {
+          key: "arc-authentication-results",
+          value: `i=1; ${PASS}`,
+        },
+        RECEIVED,
+      ]),
     ).toBe(true);
 
-    for (const results of [
-      undefined,
+    for (const value of [
       "",
       "mx.cloudflare.net; dkim=fail header.d=google.com",
       "mx.cloudflare.net; dkim=none; spf=pass smtp.mailfrom=google.com",
@@ -107,8 +125,31 @@ describe("gmail forwarding confirmation", () => {
       // Not added by Cloudflare on receipt.
       "mx.evil.example; dkim=pass header.d=google.com",
     ]) {
-      expect(isGoogleSigned(results)).toBe(false);
+      expect(isGoogleSigned([results(value), RECEIVED])).toBe(false);
     }
+  });
+
+  test("results below the first Received header are sender-controlled and ignored", () => {
+    expect(isGoogleSigned([])).toBe(false);
+    // No receiving hop block at all.
+    expect(isGoogleSigned([results(PASS)])).toBe(false);
+    // Forged below the receiving hop's Received header.
+    expect(
+      isGoogleSigned([
+        results("mx.cloudflare.net; dkim=pass header.d=evil.example"),
+        RECEIVED,
+        results(PASS),
+        { key: "arc-authentication-results", value: `i=1; ${PASS}` },
+      ]),
+    ).toBe(false);
+    expect(isGoogleSigned([RECEIVED, results(PASS)])).toBe(false);
+    // A later ARC instance is not the receiving hop's.
+    expect(
+      isGoogleSigned([
+        { key: "arc-authentication-results", value: `i=2; ${PASS}` },
+        RECEIVED,
+      ]),
+    ).toBe(false);
   });
 });
 
