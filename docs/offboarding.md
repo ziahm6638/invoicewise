@@ -8,18 +8,32 @@ workspace is deleted only when its owner asks for it by name.
 | --- | --- | --- | --- |
 | Leave / remove member | the member, or an owner/admin (see [permissions](permissions.md)) | the membership, the member's API keys and OAuth tokens for the workspace, their pending invites; sessions move to another workspace | kept |
 | Transfer ownership | an owner (Settings → Members, change a member's role to owner) | nothing | kept |
-| Delete account (`user.delete`) | the person | their user row, sessions, memberships, API keys and OAuth tokens | every workspace is kept |
+| Delete account (`user.delete`) | the person | their user row, sessions, memberships, API keys and OAuth tokens | shared workspaces are kept; a sole-owned workspace nobody else belongs to is deleted only if named back in the same request |
 | Delete workspace (`team.delete`) | an owner only, typing the workspace name | every row of the workspace; members' sessions move to another workspace | deleted |
 
 ## Account deletion
 
 `deleteUser` (`packages/db/src/queries/users.ts`) locks the person's user row
-and every workspace they belong to, then counts **all** owners of each
-workspace, not only the person's own membership. If the person is the only
-owner of any workspace the request is refused with `CONFLICT`: they must
-transfer ownership or delete that workspace first. Otherwise the user row is
-deleted; memberships, sessions, API keys and OAuth tokens cascade with it, and
-the workspaces, their invoices and the other members' access are unchanged.
+and every workspace they belong to, then counts **all** owners and members of
+each workspace, not only the person's own membership. A workspace the person is
+the only owner of blocks the deletion:
+
+- **Shared** (other members): the request is refused with `CONFLICT`; they must
+  transfer ownership to another member, or delete that workspace, first.
+- **Unshared** (they are its only member): it is deleted in the same
+  transaction, exactly as workspace deletion below, when the request lists it
+  in `deleteWorkspaces` with its name typed back (`confirmName`, as for
+  `team.delete`). Unlisted, the request is refused with `CONFLICT`; a wrong
+  name, or a listed workspace they do not solely own, with `BAD_REQUEST`.
+
+`user.soleOwnedWorkspaces` lists these workspaces, so Account → Delete account
+asks for each unshared workspace's name next to `DELETE`, and names the shared
+ones that need a transfer. Once nothing blocks, the user row is deleted;
+memberships, sessions, API keys and OAuth tokens cascade with it, and the
+remaining workspaces, their invoices and the other members' access are
+unchanged. Someone with no workspace left (for example after deleting their
+last one) cannot open account settings, so workspace creation (`/teams/create`)
+also offers account deletion.
 
 The person's own private objects (their avatar, under `vault/<user id>/`) are
 purged by the cleanup below.

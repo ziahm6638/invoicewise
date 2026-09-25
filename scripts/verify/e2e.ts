@@ -6,7 +6,9 @@
  * boundaries: Better Auth sign-up/sign-in on the dashboard, the dashboard
  * upload route, the API's tRPC surface, the authenticated proxy and the
  * rendered original-document preview. Two tenants are created and the second
- * tenant must not be able to read the first tenant's document.
+ * tenant must not be able to read the first tenant's document. A sole owner of
+ * a single workspace then deletes their account, and that workspace with it,
+ * and someone left with no workspace still reaches account deletion.
  *
  * Nothing here leaves the machine: provider credentials are synthetic values
  * and the storage backend is a temporary local directory.
@@ -196,6 +198,25 @@ async function trpcQuery(
     )}`,
     { headers: { origin: appOrigin, cookie: tenant.cookie } },
   );
+  return { status: response.status, text: await response.text() };
+}
+
+async function trpcMutation(
+  tenant: Tenant,
+  path: string,
+  input: unknown,
+  apiOrigin: string,
+  appOrigin: string,
+) {
+  const response = await fetch(`${apiOrigin}/trpc/${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: appOrigin,
+      cookie: tenant.cookie,
+    },
+    body: JSON.stringify(input === undefined ? {} : { json: input }),
+  });
   return { status: response.status, text: await response.text() };
 }
 
@@ -443,6 +464,153 @@ export async function runProductionE2E(v: Verification, context: E2EContext) {
     }
 
     return `preview ${metadata.width}x${metadata.height}; proxy bytes ${proxiedHash.slice(0, 12)} match the original; cross-tenant reads denied`;
+  });
+
+  await v.runCheck("e2e:sole-owner-account-deletion", async () => {
+    const password = "VerifyPassword123!";
+    // Sign-up provisions exactly one workspace this tenant solely owns.
+    const solo = await createTenant(
+      "verify-solo",
+      E2E_DATABASE,
+      password,
+      APP_ORIGIN,
+    );
+    const { client, query } = await connectDisposableDatabase(E2E_DATABASE);
+    try {
+      const [team] = await query<{ name: string | null }>(
+        "select name from teams where id = $1",
+        [solo.teamId],
+      );
+      const confirmName = team?.name?.trim() || "DELETE";
+
+      const blockers = await trpcQuery(
+        solo,
+        "user.soleOwnedWorkspaces",
+        undefined,
+        API_ORIGIN,
+        APP_ORIGIN,
+      );
+      if (
+        blockers.status !== 200 ||
+        !blockers.text.includes(solo.teamId) ||
+        !blockers.text.includes('"shared":false')
+      ) {
+        throw new Error(
+          `sole-owned workspace was not offered for deletion: ${blockers.status} ${blockers.text.slice(0, 200)}`,
+        );
+      }
+
+      const unconfirmed = await trpcMutation(
+        solo,
+        "user.delete",
+        undefined,
+        API_ORIGIN,
+        APP_ORIGIN,
+      );
+      if (unconfirmed.status !== 409) {
+        throw new Error(
+          `account deletion without naming the workspace was not refused: ${unconfirmed.status}`,
+        );
+      }
+
+      const deleted = await trpcMutation(
+        solo,
+        "user.delete",
+        { deleteWorkspaces: [{ teamId: solo.teamId, confirmName }] },
+        API_ORIGIN,
+        APP_ORIGIN,
+      );
+      if (deleted.status !== 200) {
+        throw new Error(
+          `sole owner could not delete their account: ${deleted.status} ${deleted.text.slice(0, 200)}`,
+        );
+      }
+
+      const [left] = await query<{ users: string; teams: string }>(
+        `select
+           (select count(*)::text from users where id = $1) as users,
+           (select count(*)::text from teams where id = $2) as teams`,
+        [solo.userId, solo.teamId],
+      );
+      if (left?.users !== "0" || left?.teams !== "0") {
+        throw new Error(
+          `account or workspace survived deletion: ${JSON.stringify(left)}`,
+        );
+      }
+      const requests = await query<{ subject: string }>(
+        "select subject::text from deletion_requests where subject_id in ($1, $2) order by subject",
+        [solo.userId, solo.teamId],
+      );
+      if (
+        requests.map((row) => row.subject).join(",") !== "account,workspace"
+      ) {
+        throw new Error(
+          `deletion cleanup was not recorded for both: ${JSON.stringify(requests)}`,
+        );
+      }
+    } finally {
+      await client.end();
+    }
+
+    // Someone who deleted their last workspace first lands on workspace
+    // creation, which must still lead to account deletion.
+    const stranded = await createTenant(
+      "verify-stranded",
+      E2E_DATABASE,
+      password,
+      APP_ORIGIN,
+    );
+    const { client: strandedClient, query: strandedQuery } =
+      await connectDisposableDatabase(E2E_DATABASE);
+    let strandedName: string;
+    try {
+      const [team] = await strandedQuery<{ name: string | null }>(
+        "select name from teams where id = $1",
+        [stranded.teamId],
+      );
+      strandedName = team?.name?.trim() || "DELETE";
+    } finally {
+      await strandedClient.end();
+    }
+    const teamDeleted = await trpcMutation(
+      stranded,
+      "team.delete",
+      { teamId: stranded.teamId, confirmName: strandedName },
+      API_ORIGIN,
+      APP_ORIGIN,
+    );
+    if (teamDeleted.status !== 200) {
+      throw new Error(
+        `workspace deletion failed: ${teamDeleted.status} ${teamDeleted.text.slice(0, 200)}`,
+      );
+    }
+    const createPage = await fetch(`${APP_ORIGIN}/teams/create`, {
+      headers: { cookie: stranded.cookie },
+      redirect: "manual",
+    });
+    const createHtml = await createPage.text();
+    if (
+      createPage.status !== 200 ||
+      !createHtml.includes("Delete your account")
+    ) {
+      throw new Error(
+        `workspace creation page offers no account deletion: ${createPage.status}`,
+      );
+    }
+    const strandedDeleted = await trpcMutation(
+      stranded,
+      "user.delete",
+      undefined,
+      API_ORIGIN,
+      APP_ORIGIN,
+    );
+    if (strandedDeleted.status !== 200) {
+      throw new Error(
+        `a user with no workspace could not delete their account: ${strandedDeleted.status} ${strandedDeleted.text.slice(0, 200)}`,
+      );
+    }
+
+    return "sole owner deleted account and workspace in one confirmed call; a user with no workspace reached and completed account deletion";
   });
 
   await v.runCheck("e2e:worker-executable-lifecycle", async () => {

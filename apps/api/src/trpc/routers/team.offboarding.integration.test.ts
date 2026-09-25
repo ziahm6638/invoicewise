@@ -282,6 +282,143 @@ suite("offboarding (integration)", () => {
     });
   });
 
+  describe("sole owner of a single workspace (#97)", () => {
+    test("deletes their unshared workspace with their account in one confirmed step", async () => {
+      const soloist = await seedUser("soloist");
+      const teamId = await seedTeam("Solo Ltd", [
+        { userId: soloist.id, role: "owner" },
+      ]);
+      await primaryDb
+        .update(schema.users)
+        .set({ teamId })
+        .where(orm.eq(schema.users.id, soloist.id));
+      await seedInvoices(teamId, 2);
+      const api = caller(ctx(soloist, teamId));
+
+      expect(await api.user.soleOwnedWorkspaces()).toEqual([
+        {
+          id: teamId,
+          name: "Solo Ltd",
+          confirmation: "Solo Ltd",
+          shared: false,
+        },
+      ]);
+
+      // Without naming the workspace back, nothing is deleted.
+      await expect(api.user.delete()).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+      for (const confirmName of ["DELETE", "solo ltd", ""]) {
+        await expect(
+          api.user.delete({ deleteWorkspaces: [{ teamId, confirmName }] }),
+        ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      }
+      expect(await queries.getTeamById(db, teamId)).toMatchObject({
+        id: teamId,
+      });
+      expect(await queries.getTeamRole(db, teamId, soloist.id)).toBe("owner");
+      expect(await deletionRequestFor(teamId)).toBeUndefined();
+      expect(await deletionRequestFor(soloist.id)).toBeUndefined();
+
+      const result = await api.user.delete({
+        deleteWorkspaces: [{ teamId, confirmName: " Solo Ltd " }],
+      });
+      expect(result).toMatchObject({
+        id: soloist.id,
+        deletedWorkspaces: [teamId],
+      });
+
+      // Account and workspace are both gone, exactly as each deletion alone
+      // would leave them, and each has its own durable cleanup.
+      expect(
+        await primaryDb.query.users.findFirst({
+          where: orm.eq(schema.users.id, soloist.id),
+          columns: { id: true },
+        }),
+      ).toBeUndefined();
+      expect(await queries.getTeamById(db, teamId)).toBeUndefined();
+      expect(await rowsNamingTeam(teamId)).toEqual({});
+      expect(await deletionRequestFor(teamId)).toMatchObject({
+        subject: "workspace",
+        status: "pending",
+      });
+      expect(await deletionRequestFor(soloist.id)).toMatchObject({
+        subject: "account",
+        status: "pending",
+      });
+    });
+
+    test("a shared or co-owned workspace is never deleted with the account", async () => {
+      const owner = await seedUser("shared-sole-owner");
+      const member = await seedUser("shared-member");
+      const coOwner = await seedUser("shared-co-owner");
+      const shared = await seedTeam("Shared Ltd", [
+        { userId: owner.id, role: "owner" },
+        { userId: member.id, role: "member" },
+      ]);
+      const coOwned = await seedTeam("Co-owned Ltd", [
+        { userId: owner.id, role: "owner" },
+        { userId: coOwner.id, role: "owner" },
+      ]);
+      const api = caller(ctx(owner, shared));
+
+      expect(await api.user.soleOwnedWorkspaces()).toEqual([
+        {
+          id: shared,
+          name: "Shared Ltd",
+          confirmation: "Shared Ltd",
+          shared: true,
+        },
+      ]);
+
+      await expect(
+        api.user.delete({
+          deleteWorkspaces: [{ teamId: shared, confirmName: "Shared Ltd" }],
+        }),
+      ).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: expect.stringMatching(/Transfer ownership/),
+      });
+      await expect(
+        api.user.delete({
+          deleteWorkspaces: [{ teamId: coOwned, confirmName: "Co-owned Ltd" }],
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+      for (const teamId of [shared, coOwned]) {
+        expect(await queries.getTeamById(db, teamId)).toMatchObject({
+          id: teamId,
+        });
+        expect(await queries.getTeamRole(db, teamId, owner.id)).toBe("owner");
+        expect(await deletionRequestFor(teamId)).toBeUndefined();
+      }
+      expect(await queries.getTeamRole(db, shared, member.id)).toBe("member");
+      expect(await deletionRequestFor(owner.id)).toBeUndefined();
+    });
+
+    test("someone who already deleted their last workspace can still delete their account", async () => {
+      const stranded = await seedUser("stranded");
+      const teamId = await seedTeam("Deleted first", [
+        { userId: stranded.id, role: "owner" },
+      ]);
+      await queries.deleteTeam(db, {
+        teamId,
+        userId: stranded.id,
+        confirmName: "Deleted first",
+      });
+      const api = caller(ctx(stranded, null));
+
+      expect(await api.user.soleOwnedWorkspaces()).toEqual([]);
+      await expect(api.user.delete()).resolves.toMatchObject({
+        id: stranded.id,
+        deletedWorkspaces: [],
+      });
+      expect(await deletionRequestFor(stranded.id)).toMatchObject({
+        subject: "account",
+      });
+    });
+  });
+
   describe("workspace deletion", () => {
     test("is owner-only and needs the workspace named back", async () => {
       const owner = await seedUser("confirm-owner");

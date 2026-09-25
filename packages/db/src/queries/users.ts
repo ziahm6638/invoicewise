@@ -1,17 +1,19 @@
 import type { Database, PrimaryDatabase } from "@db/client";
 import { teams, users, usersOnTeam } from "@db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   DELETION_QUIESCE_MS,
   recordDeletionRequest,
+  workspaceDeletionConfirmation,
 } from "./deletion-requests";
 import {
   TeamPermissionError,
-  countTeamOwners,
-  getTeamMemberRow,
   isPostgresError,
   lockTeamRow,
 } from "./team-permissions";
+import { deleteLockedWorkspace } from "./teams";
+
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /**
  * The account profile and stored active workspace. The workspace is only
@@ -115,6 +117,85 @@ export const getUserTeamId = async (db: Database, userId: string) => {
 };
 
 /**
+ * A workspace the user is the only owner of, which blocks account deletion.
+ * An unshared one (the user is its only member) can be deleted together with
+ * the account; a shared one must have its ownership transferred first.
+ */
+export type SoleOwnedWorkspace = {
+  id: string;
+  name: string | null;
+  /** What the user types to delete it (see `workspaceDeletionConfirmation`). */
+  confirmation: string;
+  shared: boolean;
+};
+
+async function findSoleOwnedWorkspaces(
+  db: Pick<Transaction, "select">,
+  userId: string,
+): Promise<SoleOwnedWorkspace[]> {
+  const owned = await db
+    .select({ id: teams.id, name: teams.name })
+    .from(usersOnTeam)
+    .innerJoin(teams, eq(teams.id, usersOnTeam.teamId))
+    .where(and(eq(usersOnTeam.userId, userId), eq(usersOnTeam.role, "owner")))
+    .orderBy(teams.id);
+
+  if (owned.length === 0) {
+    return [];
+  }
+
+  const counts = await db
+    .select({
+      teamId: usersOnTeam.teamId,
+      owners: sql<number>`count(*) filter (where ${usersOnTeam.role} = 'owner')`,
+      members: sql<number>`count(*)`,
+    })
+    .from(usersOnTeam)
+    .where(
+      inArray(
+        usersOnTeam.teamId,
+        owned.map((team) => team.id),
+      ),
+    )
+    .groupBy(usersOnTeam.teamId);
+
+  return owned.flatMap((team) => {
+    const count = counts.find((row) => row.teamId === team.id);
+
+    if (!count || Number(count.owners) > 1) {
+      return [];
+    }
+
+    return [
+      {
+        id: team.id,
+        name: team.name,
+        confirmation: workspaceDeletionConfirmation(team.name),
+        shared: Number(count.members) > 1,
+      },
+    ];
+  });
+}
+
+/**
+ * The workspaces standing between the user and account deletion, so the
+ * account screen can offer to delete unshared ones in the same confirmed step
+ * and ask for an ownership transfer of shared ones.
+ */
+export const getSoleOwnedWorkspaces = async (
+  db: Database | PrimaryDatabase,
+  userId: string,
+) => findSoleOwnedWorkspaces(db, userId);
+
+export type DeleteUserOptions = {
+  /**
+   * Unshared workspaces the user solely owns, each named back as for
+   * workspace deletion, to delete in the same transaction as the account.
+   */
+  deleteWorkspaces?: { teamId: string; confirmName: string }[];
+};
+
+/**
  * Deletes a user's identity and memberships.
  *
  * This is the account-deletion path, so it must uphold the same last-owner
@@ -123,10 +204,25 @@ export const getUserTeamId = async (db: Database, userId: string) => {
  * workspace is deleted deliberately. Shared workspaces are never deleted here —
  * removing one person must leave the workspace and its other members intact.
  *
+ * A sole-owned workspace nobody else belongs to can be deleted deliberately in
+ * the same step: listed in `deleteWorkspaces` and named back, it is removed
+ * exactly as workspace deletion would, before the account, in one transaction.
+ *
  * The person's own private objects (their avatar) are purged afterwards by the
  * resumable cleanup recorded in the same transaction.
  */
-export const deleteUser = async (db: Database, id: string) => {
+export const deleteUser = async (
+  db: Database,
+  id: string,
+  options: DeleteUserOptions = {},
+) => {
+  const requested = new Map(
+    (options.deleteWorkspaces ?? []).map((workspace) => [
+      workspace.teamId,
+      workspace.confirmName,
+    ]),
+  );
+
   try {
     return await db.transaction(async (tx) => {
       // Lock the user row before taking any other lock or snapshot.
@@ -161,24 +257,44 @@ export const deleteUser = async (db: Database, id: string) => {
         await lockTeamRow(tx, teamId);
       }
 
-      const soleOwnerTeams: string[] = [];
+      // Membership and ownership are stable now that every team row is held.
+      const soleOwned = await findSoleOwnedWorkspaces(tx, id);
 
-      for (const teamId of teamIds) {
-        const member = await getTeamMemberRow(tx, teamId, id);
+      for (const teamId of requested.keys()) {
+        const workspace = soleOwned.find((team) => team.id === teamId);
 
-        if (
-          member?.role === "owner" &&
-          (await countTeamOwners(tx, teamId)) <= 1
-        ) {
-          soleOwnerTeams.push(teamId);
+        if (!workspace || workspace.shared) {
+          throw new TeamPermissionError(
+            workspace ? "CONFLICT" : "BAD_REQUEST",
+            workspace
+              ? "Transfer ownership of a shared workspace before deleting your account"
+              : "Only a workspace you solely own and share with no one can be deleted with your account",
+          );
+        }
+
+        if (requested.get(teamId)?.trim() !== workspace.confirmation) {
+          throw new TeamPermissionError(
+            "BAD_REQUEST",
+            "Type the workspace name exactly to confirm deletion",
+          );
         }
       }
 
-      if (soleOwnerTeams.length > 0) {
+      if (soleOwned.some((team) => !requested.has(team.id))) {
         throw new TeamPermissionError(
           "CONFLICT",
           "Transfer ownership or delete the workspace before deleting your account",
         );
+      }
+
+      const deletedWorkspaces: string[] = [];
+
+      for (const workspace of soleOwned) {
+        await deleteLockedWorkspace(tx, {
+          teamId: workspace.id,
+          requestedBy: id,
+        });
+        deletedWorkspaces.push(workspace.id);
       }
 
       // Memberships, sessions, API keys and OAuth tokens cascade with the user.
@@ -191,7 +307,7 @@ export const deleteUser = async (db: Database, id: string) => {
         quiesceUntil: new Date(Date.now() + DELETION_QUIESCE_MS),
       });
 
-      return { id, deletionRequestId: request.id };
+      return { id, deletionRequestId: request.id, deletedWorkspaces };
     });
   } catch (error) {
     // Other flows take the team lock first and the user lock second, so a

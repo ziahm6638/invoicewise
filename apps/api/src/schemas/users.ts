@@ -148,3 +148,30 @@ export const userSchema = z.object({
       description: "Team information that the user belongs to",
     }),
 });
+
+export const deleteUserSchema = z
+  .object({
+    deleteWorkspaces: z
+      .array(
+        z.object({
+          teamId: z.string().openapi({
+            description:
+              "Unique identifier of a workspace only this user owns and belongs to",
+            example: "123e4567-e89b-12d3-a456-426614174000",
+          }),
+          confirmName: z.string().max(255).openapi({
+            description:
+              "The workspace name, typed to confirm its deletion (`DELETE` for an unnamed workspace)",
+            example: "Acme Ltd",
+          }),
+        }),
+      )
+      .max(50)
+      .optional()
+      .openapi({
+        description:
+          "Unshared workspaces the user solely owns, deleted together with the account",
+      }),
+  })
+  .strict()
+  .nullish();

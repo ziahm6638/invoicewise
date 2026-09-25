@@ -624,6 +624,70 @@ export async function leaveTeam(db: Database, params: LeaveTeamParams) {
   });
 }
 
+/**
+ * Removes a workspace whose team row the caller already holds `FOR UPDATE`,
+ * after it has checked who may delete it. Shared by workspace deletion and by
+ * account deletion of a sole owner's unshared workspace, so both leave the
+ * same state behind and record the same resumable cleanup.
+ */
+export async function deleteLockedWorkspace(
+  tx: ProvisioningTransaction,
+  params: { teamId: string; requestedBy: string },
+) {
+  // Everyone whose stored or session pointer could name the workspace,
+  // collected before the membership rows cascade away.
+  const members = await tx
+    .select({ userId: usersOnTeam.userId })
+    .from(usersOnTeam)
+    .where(eq(usersOnTeam.teamId, params.teamId));
+  const pointedUsers = await tx
+    .select({ userId: users.id })
+    .from(users)
+    .where(eq(users.teamId, params.teamId));
+  const pointedSessions = await tx
+    .select({ userId: authSessions.userId })
+    .from(authSessions)
+    .where(eq(authSessions.activeOrganizationId, params.teamId));
+
+  // Repoint before deleting: the session pointer's foreign key is
+  // `ON DELETE SET NULL`, so once the team row is gone the sessions no
+  // longer name it and would be left with no active workspace while
+  // `users.team_id` still names one. Repointing already excludes this
+  // workspace, so its membership rows (which cascade with the team) are
+  // never chosen. User rows are locked in id order so concurrent deletions
+  // cannot deadlock on them.
+  const affectedUserIds = [
+    ...new Set(
+      [...members, ...pointedUsers, ...pointedSessions].map(
+        (row) => row.userId,
+      ),
+    ),
+  ].sort();
+
+  for (const userId of affectedUserIds) {
+    await repointActiveWorkspace(tx, userId, params.teamId);
+  }
+
+  const connections = await snapshotWorkspaceConnections(tx, params.teamId);
+  const quiesceUntil = await workspaceQuiesceUntil(
+    tx,
+    params.teamId,
+    new Date(),
+  );
+
+  await tx.delete(teams).where(eq(teams.id, params.teamId));
+
+  const request = await recordDeletionRequest(tx, {
+    subject: "workspace",
+    subjectId: params.teamId,
+    requestedBy: params.requestedBy,
+    connections,
+    quiesceUntil,
+  });
+
+  return request;
+}
+
 type DeleteTeamParams = {
   teamId: string;
   userId: string;
@@ -678,55 +742,9 @@ export async function deleteTeam(db: Database, params: DeleteTeamParams) {
         );
       }
 
-      // Everyone whose stored or session pointer could name the workspace,
-      // collected before the membership rows cascade away.
-      const members = await tx
-        .select({ userId: usersOnTeam.userId })
-        .from(usersOnTeam)
-        .where(eq(usersOnTeam.teamId, params.teamId));
-      const pointedUsers = await tx
-        .select({ userId: users.id })
-        .from(users)
-        .where(eq(users.teamId, params.teamId));
-      const pointedSessions = await tx
-        .select({ userId: authSessions.userId })
-        .from(authSessions)
-        .where(eq(authSessions.activeOrganizationId, params.teamId));
-
-      // Repoint before deleting: the session pointer's foreign key is
-      // `ON DELETE SET NULL`, so once the team row is gone the sessions no
-      // longer name it and would be left with no active workspace while
-      // `users.team_id` still names one. Repointing already excludes this
-      // workspace, so its membership rows (which cascade with the team) are
-      // never chosen. User rows are locked in id order so concurrent deletions
-      // cannot deadlock on them.
-      const affectedUserIds = [
-        ...new Set(
-          [...members, ...pointedUsers, ...pointedSessions].map(
-            (row) => row.userId,
-          ),
-        ),
-      ].sort();
-
-      for (const userId of affectedUserIds) {
-        await repointActiveWorkspace(tx, userId, params.teamId);
-      }
-
-      const connections = await snapshotWorkspaceConnections(tx, params.teamId);
-      const quiesceUntil = await workspaceQuiesceUntil(
-        tx,
-        params.teamId,
-        new Date(),
-      );
-
-      await tx.delete(teams).where(eq(teams.id, params.teamId));
-
-      const request = await recordDeletionRequest(tx, {
-        subject: "workspace",
-        subjectId: params.teamId,
+      const request = await deleteLockedWorkspace(tx, {
+        teamId: params.teamId,
         requestedBy: params.userId,
-        connections,
-        quiesceUntil,
       });
 
       return { id: team.id, deletionRequestId: request.id };
