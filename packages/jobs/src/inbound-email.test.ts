@@ -133,15 +133,42 @@ describe("gmail forwarding confirmation", () => {
     expect(isGoogleSigned([...cloudflareBlock(PASS), ...senderHeaders])).toBe(
       true,
     );
-    // Either of Cloudflare's two results is enough.
+  });
+
+  test("both of Cloudflare's results must be present and show the pass", () => {
     const onlyArc = cloudflareBlock(PASS).filter(
       ({ key }) => key !== "authentication-results",
     );
-    expect(isGoogleSigned([...onlyArc, ...senderHeaders])).toBe(true);
+    expect(isGoogleSigned([...onlyArc, ...senderHeaders])).toBe(false);
     const onlyResults = cloudflareBlock(PASS).filter(
       ({ key }) => key !== "arc-authentication-results",
     );
-    expect(isGoogleSigned([...onlyResults, ...senderHeaders])).toBe(true);
+    expect(isGoogleSigned([...onlyResults, ...senderHeaders])).toBe(false);
+    const failing = "mx.cloudflare.net; dkim=pass header.d=evil.example";
+    const arcFails = cloudflareBlock(PASS).map((h) =>
+      h.key === "arc-authentication-results"
+        ? header(h.key, `i=1; ${failing}`)
+        : h,
+    );
+    expect(isGoogleSigned([...arcFails, ...senderHeaders])).toBe(false);
+    const resultsFail = cloudflareBlock(PASS).map((h) =>
+      h.key === "authentication-results" ? header(h.key, failing) : h,
+    );
+    expect(isGoogleSigned([...resultsFail, ...senderHeaders])).toBe(false);
+  });
+
+  test("a forged pass after a Cloudflare block missing a result is ignored", () => {
+    const failing = "mx.cloudflare.net; dkim=pass header.d=evil.example";
+    const withoutResults = cloudflareBlock(failing).filter(
+      ({ key }) => key !== "authentication-results",
+    );
+    expect(
+      isGoogleSigned([
+        ...withoutResults,
+        header("authentication-results", PASS),
+        ...senderHeaders,
+      ]),
+    ).toBe(false);
   });
 
   test("Cloudflare's results must show DKIM pass for google.com itself", () => {

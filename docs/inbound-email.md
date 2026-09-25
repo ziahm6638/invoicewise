@@ -150,13 +150,15 @@ Email lists the recent messages with their status and reasons.
 - **Only rejected attachments**: `processed` with "No attachment in this
   message could be read as an invoice."
 - **Gmail forwarding confirmation** (`forwarding-noreply@google.com`, with
-  Cloudflare's own results showing `dkim=pass header.d=google.com`): the
+  both of Cloudflare's own results showing `dkim=pass header.d=google.com`): the
   confirmation text, including its link and code, is shown as the message's
   detail so the workspace can finish setting up Gmail forwarding. Cloudflare's
   results are recognised by position (live proof step 7): the topmost header
   must be Cloudflare's `Received … by cloudflare-email.net`, and only the
   first `Authentication-Results` and the first `ARC-Authentication-Results:
-  i=1` after it count, each with authserv-id `mx.cloudflare.net`. Cloudflare
+  i=1` after it count, each with authserv-id `mx.cloudflare.net`, and both
+  must be present and show the pass (Cloudflare adds both on every message).
+  Cloudflare
   prepends its block above everything the sender supplied, so a sender's own
   `mx.cloudflare.net` claim always comes after Cloudflare's and is ignored;
   without the pass the message is ordinary mail.
@@ -302,7 +304,7 @@ Settings → Email once to provision the address, then read it with
 
    So Cloudflare's `Received` is the topmost header and its two result
    headers follow it; `isGoogleSigned` trusts exactly those (the first of each
-   after that `Received`). The unit and integration tests use this layout.
+   after that `Received`) and requires both to show the pass. The unit and integration tests use this layout.
 
 ## Tests
 
@@ -315,8 +317,8 @@ Settings → Email once to provision the address, then read it with
 - `packages/jobs/src/inbound-email.test.ts` — recipient parsing (no
   subaddresses), local part shape, header reading, message identity, the
   Gmail confirmation's DKIM check against the observed Cloudflare layout
-  (forged results after Cloudflare's block and a missing Cloudflare
-  `Received` are ignored), the live
+  (both Cloudflare results must show the pass; forged results after
+  Cloudflare's block and a missing Cloudflare `Received` are ignored), the live
   setting.
 - `apps/api/src/inbound-email.http.integration.test.ts` (in `bun run verify`)
   — real HTTP and Postgres: delivery through the Worker to the right

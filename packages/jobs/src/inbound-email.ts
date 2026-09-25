@@ -275,8 +275,10 @@ export async function acceptInboundEmail(
  *
  * So the topmost header must be Cloudflare's Received, and only the first
  * Authentication-Results and the first ARC-Authentication-Results after it
- * are Cloudflare's. A sender can add headers claiming `mx.cloudflare.net`,
- * but they always come after Cloudflare's own, so they are never the first.
+ * are Cloudflare's. Cloudflare adds both on every message, so both must be
+ * present and both must show the pass. A sender can add headers claiming
+ * `mx.cloudflare.net`, but they always come after Cloudflare's own, so they
+ * are never the first of either.
  */
 const GMAIL_FORWARDING_SENDER = "forwarding-noreply@google.com";
 const RECEIVING_AUTHSERV_ID = "mx.cloudflare.net";
@@ -287,23 +289,21 @@ type MessageHeader = { key: string; value: string };
 function receivingHopResults(headers: MessageHeader[]) {
   const [top, ...rest] = headers;
   if (top?.key !== "received" || !CLOUDFLARE_RECEIVED.test(top.value)) {
-    return [];
+    return null;
   }
-  const results: string[] = [];
   const authenticationResults = rest.find(
     ({ key }) => key === "authentication-results",
   );
-  if (authenticationResults) results.push(authenticationResults.value);
   const arcResults = rest.find(
     ({ key }) => key === "arc-authentication-results",
   );
   const sealed = arcResults?.value.match(/^\s*i\s*=\s*1\s*;([\s\S]*)$/);
-  if (sealed?.[1]) results.push(sealed[1]);
-  return results;
+  if (!authenticationResults || !sealed?.[1]) return null;
+  return [authenticationResults.value, sealed[1]];
 }
 
 export function isGoogleSigned(headers: MessageHeader[]) {
-  return receivingHopResults(headers).some(showsGoogleDkimPass);
+  return receivingHopResults(headers)?.every(showsGoogleDkimPass) ?? false;
 }
 
 function showsGoogleDkimPass(authenticationResults: string) {
