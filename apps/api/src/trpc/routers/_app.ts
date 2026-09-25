@@ -2,6 +2,7 @@ import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import { createTRPCRouter } from "../init";
 import { accountingRouter } from "./accounting";
 import { apiKeysRouter } from "./api-keys";
+import { auditRouter } from "./audit";
 import { authorizationSourcesRouter } from "./authorization-sources";
 import { billingRouter } from "./billing";
 import { dataRouter } from "./data";
@@ -19,6 +20,7 @@ import { webhooksRouter } from "./webhooks";
 
 export const appRouter = createTRPCRouter({
   accounting: accountingRouter,
+  audit: auditRouter,
   authorizationSources: authorizationSourcesRouter,
   inbox: inboxRouter,
   inboundEmail: inboundEmailRouter,

@@ -253,8 +253,6 @@ export type DeliveryReason = {
 export type DeliveryEvaluation = {
   outcome: "deliver" | "hold";
   reasons: DeliveryReason[];
-  /** False for a credit note, which a draft bill cannot represent. */
-  accountingApplicable: boolean;
 };
 
 // --- Normalisation -------------------------------------------------------------
@@ -602,7 +600,6 @@ export function evaluateDeliveryPolicy(input: {
   const reasons: DeliveryReason[] = [];
   const hold = (reason: DeliveryReason) => reasons.push(reason);
   const validation = asRecord(input.validation);
-  const accountingApplicable = validation.documentType !== "credit_note";
 
   if (!input.validation || !Array.isArray(validation.issues)) {
     hold({
@@ -612,7 +609,7 @@ export function evaluateDeliveryPolicy(input: {
         "This invoice has not been validated. Re-extract or correct it so its values are checked.",
       locked: true,
     });
-    return { outcome: "hold", reasons, accountingApplicable };
+    return { outcome: "hold", reasons };
   }
 
   const issues = (validation.issues as unknown[]).map(
@@ -860,7 +857,6 @@ export function evaluateDeliveryPolicy(input: {
   return {
     outcome: reasons.length > 0 ? "hold" : "deliver",
     reasons,
-    accountingApplicable,
   };
 }
 

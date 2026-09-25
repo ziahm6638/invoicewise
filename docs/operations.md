@@ -94,6 +94,147 @@ dependency errors. The inherited `/health/db` and `/health/pools` are gone.
 curl -fsS -H "Authorization: Bearer $OPS_TOKEN" https://api.invoicewise.uk/ops/metrics | jq
 ```
 
+## Recovery
+
+Routine diagnosis and recovery go through the operator routes and the
+customer's own recovery actions; none of the incidents below needs a manual
+database change. The routes sit beside `/ops/metrics`
+(`apps/api/src/ops/recovery.ts`) and hold the same line:
+
+- **Operator authority is separate from customer roles.** Only
+  `Authorization: Bearer $OPS_TOKEN` is accepted (a session, API key or OAuth
+  token gets `401`), and without a configured token the routes do not exist.
+  Every request names its operator in `X-Operator` (`400` without it), which
+  the audit trail records. The token is the authority; the name is declared,
+  not authenticated: anyone holding the shared token can send any name. Each
+  operator audit record and log line therefore also carries
+  `tokenFingerprint`, the first 8 hex characters of the token's SHA-256, so a
+  record can be tied to the credential that made it (and a rotated token
+  tells old records from new). Per-operator credentials are a follow-up.
+- **Purpose-bound.** An action (retry, cancel) or any read of a workspace's
+  records states a `purpose` (`incident`, `support` or `security`) and a
+  `reason` (5 to 200 characters), and is written to that workspace's
+  [audit trail](#audit-trail) before anything else happens, where its owners
+  and admins see who acted, why and with what result. Impersonating a
+  customer is not supported: operators never act as a member.
+- **Minimal data.** Job views carry identifiers (the invoice, delivery,
+  correction, message or export a job is about), status, attempts, times and
+  the redacted error, never the job's payload. The invoice trace an operator
+  reads shows actor ids instead of names and no sender address.
+
+| Route | Result |
+| --- | --- |
+| `GET /ops/jobs?filter=stuck\|overdue\|failed\|queued\|running[&workflow=][&teamId=][&overdueMinutes=15][&limit=]` | Jobs newest first. `stuck`: running with an expired lease (its worker died); `overdue`: queued and due for longer than `overdueMinutes` |
+| `GET /ops/jobs/:id` | One job |
+| `POST /ops/jobs/:id/retry` `{"purpose","reason"}` | `202` re-driven through the workflow's own recovery path (below); `409` when the job is not failed or a newer job of the same record exists; `422` with the action that recovers a workflow operators do not retry |
+| `POST /ops/jobs/:id/cancel` `{"purpose","reason"}` | `202` a queued job, or a running one whose lease expired, is recorded failed ("Cancelled by an operator: …"); the reconcilers then settle its record as a visible, retryable failure the customer can act on. `409` for a job a live worker holds or that already finished |
+| `GET /ops/invoices/:id/activity?purpose=&reason=` | The invoice's [activity trace](delivery.md#activity-trace), recorded as an operator access in its workspace |
+| `GET /ops/audit[?teamId=][&limit=]` | Operator actions and accesses, newest first |
+
+A retry never restarts a job blindly. It uses the path a customer's own
+action uses, so the invoice, delivery row or message moves with it and every
+idempotency key still holds:
+
+| Workflow | Operator retry |
+| --- | --- |
+| `process-attachment` | Re-extract the invoice (a new processing job) |
+| `rerun-judgments` | Rerun the questions for the same revision; refused once the invoice has moved on |
+| `deliver-webhook` | Redeliver the same delivery and logical event ID |
+| `post-accounting-draft`, `update-accounting-bill` | Retry the invoice's failed destinations, including the accounting post or bill update, on the operator's authority |
+| `match-invoice` | Match the invoice's current revision again under its own key; a person's confirm, link or unlink is kept, and a job of an older revision is refused |
+| `process-inbound-email` | Re-open the failed message from its kept MIME source and process it again |
+| `purge-deleted-data` | Resume that deletion request |
+| others | Refused with the recovering action: the owner requests a new export, an admin resends an invitation or syncs a mailbox, retention runs hourly by itself |
+
+Runbook:
+
+```bash
+# workflow_stuck:<workflow> — a worker died holding jobs.
+curl -fsS -H "Authorization: Bearer $OPS_TOKEN" -H "X-Operator: zishan" \
+  "https://api.invoicewise.uk/ops/jobs?filter=stuck" | jq '.data[] | {id, workflow, lockedBy, leaseExpiresAt}'
+# A running API container reclaims expired leases on its next poll; if none
+# is running, boot it: infisical run --env prod -- kamal app boot -r api
+# (kamal app logs -r api for why it stopped). Stuck rows then read queued
+# or running again. A job that must not run is cancelled instead:
+curl -fsS -X POST -H "Authorization: Bearer $OPS_TOKEN" -H "X-Operator: zishan" \
+  -H "content-type: application/json" -d '{"purpose":"incident","reason":"Poison job looping on retries"}' \
+  "https://api.invoicewise.uk/ops/jobs/<id>/cancel"
+
+# workflow_failures:<workflow> — fix the cause (provider outage, config),
+# then retry the failed jobs one by one, newest first:
+curl -fsS -H "Authorization: Bearer $OPS_TOKEN" -H "X-Operator: zishan" \
+  "https://api.invoicewise.uk/ops/jobs?filter=failed&workflow=process-attachment" | jq -r '.data[].id'
+curl -fsS -X POST -H "Authorization: Bearer $OPS_TOKEN" -H "X-Operator: zishan" \
+  -H "content-type: application/json" -d '{"purpose":"incident","reason":"TypeSafe outage resolved"}' \
+  "https://api.invoicewise.uk/ops/jobs/<id>/retry"
+
+# A customer asks why an invoice is stuck (support ticket):
+curl -fsS -H "Authorization: Bearer $OPS_TOKEN" -H "X-Operator: zishan" \
+  "https://api.invoicewise.uk/ops/invoices/<invoice>/activity?purpose=support&reason=Ticket%204411" | jq '.entries'
+```
+
+Customers recover their own invoices without an operator: **Re-extract**,
+**Rerun questions** and **Retry delivery** on the invoice, and **Redeliver**
+on a webhook delivery ([delivery](delivery.md#corrections-reprocessing-and-retries)).
+`bun jobs:status` still lists the queue from a shell on the host.
+
+The runnable proof is `src/activity.http.integration.test.ts` in `apps/api`
+(`verify:activity-recovery-http` in `bun run verify`): a worker is killed
+mid-job, a fresh runner reclaims it, a provider outage exhausts its attempts,
+customer credentials and bad operator requests are refused, an operator reads
+the trace for a stated purpose and retries the job, the invoice is delivered,
+a queued job is cancelled and redelivered by the customer, and the timeline
+and audit trail are checked end to end, with no secret or bank detail on any
+surface.
+
+## Audit trail
+
+`audit_events` records who did what in a workspace: actor (member, API key,
+OAuth application or operator, with the credential id), workspace, action,
+the record and invoice revision it acted on, time and outcome (`succeeded`,
+`refused`, `denied` for a role or scope refusal, `failed`). An action is
+written as `started` before it runs and refused if that write fails, so
+nothing audited runs unrecorded; one whose process died mid-way stays
+`started` ("outcome unknown").
+
+- **What is recorded.** Every dashboard mutation (`TRPC_AUDIT` in
+  `apps/api/src/trpc/audit.ts`; a test fails when a new mutation is neither
+  listed nor excluded with a reason) and every REST write to a workspace
+  route, including the `/v1` public API (`apps/api/src/rest/middleware/audit.ts`; an unlisted route is
+  recorded as `api.request`): field corrections, re-extraction, question
+  reruns and question changes, supplier and authorization-source changes,
+  invoice-to-source match decisions (confirm, link, unlink),
+  delivery-rule changes and releasing or dismissing a held delivery,
+  webhooks, accounting, mailboxes, the receiving address, OAuth applications
+  and grants, API keys, invitations, membership and roles, workspace
+  settings, data exports and delivery retries and redeliveries. Operator
+  actions and accesses are recorded by the operator routes.
+- **What is not.** Values: a correction records field names, the values stay
+  in the invoice's correction history; an invitation records roles and a
+  count, not addresses; a webhook records its origin, not its path or query.
+  Details are bounded and redacted (`sanitizeAuditDetail`).
+- **Who reads it.** Owners and admins, under **Settings → Audit log**
+  (`audit.list`); every member sees the actions on an invoice in its
+  **Activity**; operators read operator actions (`/ops/audit`). The owner's
+  data export includes it in `audit.json`.
+- **How long.** 365 days (`RETENTION_AUDIT_EVENT_DAYS`), removed by the hourly
+  retention job; deleting a workspace removes its trail with it
+  ([data lifecycle](data-lifecycle.md#retention-schedule)).
+
+## Logs
+
+Operational logs carry event names, identifiers, workflow names, counts and
+redacted error reasons; never document contents, extracted values, bank
+details, tokens or webhook secrets. Errors are redacted before they are
+stored on a job (`workflow_jobs.last_error`) or logged, and again on every
+operator and customer surface: `redactOperationalText`
+(`packages/db/src/utils/redact.ts`) masks bearer and basic credentials,
+InvoiceWise keys and tokens, webhook signing secrets, provider keys, JWTs, URL
+credentials and secret query parameters, IBANs, sort codes, named account
+numbers and card numbers, and bounds the text to 500 characters. The shared
+pino logger censors credential fields by name. Retention of the logs
+themselves is in [data lifecycle](data-lifecycle.md#retention-schedule).
+
 ## Alerts
 
 `ops/monitor/invoicewise-monitor` runs every two minutes per environment
@@ -112,9 +253,9 @@ invoice contents, file names or workspace names.
 | `api_unready` | critical | `kamal app logs -r api`; `kamal accessory logs db`; is the host up? |
 | `app_unavailable` | critical | `kamal app logs -r web` |
 | `metrics_unavailable` | warning | API up but a dependency failed mid-query: API logs (`ops_metrics_failed`) |
-| `workflow_stuck:<workflow>` | critical | a lease expired and nothing reclaimed it: is the api container running? `bun jobs:status` |
+| `workflow_stuck:<workflow>` | critical | a lease expired and nothing reclaimed it: is the api container running? `GET /ops/jobs?filter=stuck` ([recovery](#recovery)) |
 | `queue_age:<workflow>` | warning | backlog: runner errors in the logs, provider outage, or the TypeSafe budget is spent |
-| `workflow_failures:<workflow>` | warning | `bun jobs:status` for the error; fix, then retry from the inbox |
+| `workflow_failures:<workflow>` | warning | `GET /ops/jobs?filter=failed&workflow=…` for the error; fix, then `POST /ops/jobs/:id/retry` ([recovery](#recovery)) |
 | `intake_latency:text`, `intake_latency:scan` | warning | intake p95 over its target; the summary names each stage's p95 (queue, text/OCR, TypeSafe, save). Queue: runner errors, `queue_age`, a stopped runner or a spent budget; TypeSafe: `providers`; a document that failed and was retried counts from its original acceptance |
 | `provider_throttled:<provider>/<op>`, `provider_errors:…` | warning | provider status page; failures retry with backoff |
 | `provider_budget:typesafe` | warning at 80%, critical when spent | expected volume, or runaway intake? Raising the ceiling is an operator decision |

@@ -17,7 +17,6 @@ import {
   disableWebhookEndpoint,
   disconnectAccountingConnectionRecord,
   getInboxById,
-  upsertAccountingConnection,
 } from "@invoicewise/db/queries";
 import {
   inbox,
@@ -38,7 +37,9 @@ import { acceptIntakeUpload } from "./intake";
 import {
   deliverPossibleDuplicates,
   required,
+  seedXeroConnection,
   startTypeSafeStub,
+  xeroConnectStub,
 } from "./verify-support";
 
 type Receipt = {
@@ -171,6 +172,8 @@ async function main() {
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      const shared = xeroConnectStub(request, url);
+      if (shared) return shared;
       if (
         request.method === "GET" &&
         url.pathname === "/connection/xero-connection"
@@ -394,12 +397,7 @@ async function main() {
     }
     const endpointA = createdA.endpoint;
     const endpointB = createdB.endpoint;
-    await upsertAccountingConnection(db, {
-      teamId,
-      provider: "xero",
-      integrationId: "xero-invoicewise",
-      connectionId: "xero-connection",
-    });
+    await seedXeroConnection(db, { teamId, connectionId: "xero-connection" });
 
     const invoiceState = async (invoiceId: string) => {
       const [record] = await db

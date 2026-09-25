@@ -2873,6 +2873,9 @@ export async function getInvoiceForDeliveryUpdate(
       accountingPostStatus: inbox.accountingPostStatus,
       accountingProviderId: inbox.accountingProviderId,
       accountingRevision: inbox.accountingRevision,
+      accountingProvider: inbox.accountingProvider,
+      accountingOrganisationId: inbox.accountingOrganisationId,
+      accountingAttachmentStatus: inbox.accountingAttachmentStatus,
     })
     .from(inbox)
     .where(and(eq(inbox.id, params.id), eq(inbox.teamId, params.teamId)))

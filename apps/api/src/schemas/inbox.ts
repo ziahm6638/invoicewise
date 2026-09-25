@@ -278,3 +278,27 @@ export const inboxPreSignedUrlResponseSchema = z.object({
     example: "invoice.pdf",
   }),
 });
+
+/** A page of the workspace audit log, optionally for some categories. */
+export const auditLogSchema = z.object({
+  categories: z
+    .array(
+      z.enum([
+        "invoice",
+        "delivery",
+        "question",
+        "supplier",
+        "authorization_source",
+        "integration",
+        "access",
+        "workspace",
+        "operator",
+      ]),
+    )
+    .max(9)
+    .optional(),
+  cursor: z
+    .object({ createdAt: z.string().max(40), id: z.string().uuid() })
+    .nullish(),
+  limit: z.number().int().min(1).max(100).optional(),
+});

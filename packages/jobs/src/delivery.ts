@@ -26,6 +26,7 @@ import {
   listStalledAccountingPosts,
   listStalledBillUpdates,
   listStalledWebhookDeliveries,
+  recordAccountingAttachment,
   recordAccountingPostQueued,
   recordBillUpdateOutcome,
   releaseAccountingPostForReview,
@@ -35,7 +36,10 @@ import {
   resolveDeliveryDecision,
   supersedeBillUpdates,
 } from "@invoicewise/db/queries";
-import { DELIVERY_POLICY_LIMITS } from "@invoicewise/documents";
+import {
+  DELIVERY_POLICY_LIMITS,
+  accountingReadiness,
+} from "@invoicewise/documents";
 import { InvoiceActionError } from "./action-error";
 
 export { InvoiceActionError } from "./action-error";
@@ -306,7 +310,9 @@ export async function scheduleAccountingPost(
     return null;
   }
   const connection = await getActiveAccountingConnection(db, input.teamId);
-  if (!connection) return null;
+  // Nothing is created automatically until the workspace opted in (a
+  // QuickBooks bill is open and unpaid, not a draft).
+  if (!connection?.autoPostEnabledAt) return null;
   await recordAccountingPostQueued(db, {
     invoiceId: input.invoiceId,
     teamId: input.teamId,
@@ -543,6 +549,11 @@ export async function retryInvoiceDelivery(
     invoiceId: string;
     teamId: string;
     teamRole: TeamRole | null;
+    /**
+     * An operator recovering an incident (docs/operations.md#recovery) may
+     * re-post on the workspace's behalf; the action is audited as theirs.
+     */
+    operator?: boolean;
     expectedRevision?: number;
   },
 ): Promise<DeliveryRetryResult | null> {
@@ -599,7 +610,8 @@ export async function retryInvoiceDelivery(
       requeued += 1;
     }
 
-    const permitted = canPostToAccounting(input.teamRole);
+    const permitted =
+      input.operator === true || canPostToAccounting(input.teamRole);
     return {
       invoiceId: invoice.id,
       revision,
@@ -620,6 +632,9 @@ export async function retryInvoiceDelivery(
         revision: invoice.accountingRevision ?? revision,
         currentRevision: revision,
         permitted,
+        attachmentStatus: invoice.accountingAttachmentStatus,
+        provider: invoice.accountingProvider,
+        organisationId: invoice.accountingOrganisationId,
       }),
     };
   });
@@ -767,9 +782,130 @@ async function requeueFailedBillUpdate(
   return "requeued";
 }
 
+const ACCOUNTING_PROVIDER_NAME: Record<string, string> = {
+  xero: "Xero",
+  quickbooks: "QuickBooks",
+};
+
+/**
+ * Whether an invoice can be sent to the connected provider as it stands:
+ * the shared accounting readiness. Every provider takes a credit note (a Xero
+ * draft credit note, a QuickBooks vendor credit), so the blocker validations
+ * recorded before that still carry is ignored
+ * (docs/accounting-integrations.md).
+ */
+export function providerAccountingReadiness(
+  _provider: string,
+  extraction: unknown,
+  validation: unknown,
+) {
+  const blockers = accountingReadiness(extraction, validation).blockers.filter(
+    (blocker) => blocker.code !== "credit_note_unsupported",
+  );
+  return { ready: blockers.length === 0, blockers };
+}
+
+/**
+ * Why a posted record cannot be changed through the active connection
+ * because it was created in another company of the same provider (whose
+ * record IDs may name a different record here), or null when it can. A
+ * company not recorded on either side (made before companies were recorded)
+ * is unknown, not different.
+ */
+export function otherAccountingCompanyReason(
+  record: { provider: string | null; organisationId: string | null },
+  connection: { provider: string; organisationId: string | null },
+) {
+  if (
+    record.provider !== connection.provider ||
+    record.organisationId === null ||
+    connection.organisationId === null ||
+    record.organisationId === connection.organisationId
+  ) {
+    return null;
+  }
+  const name = ACCOUNTING_PROVIDER_NAME[connection.provider] ?? "The provider";
+  return `This invoice's record belongs to a different connected ${name} company than the one connected now; change it in that ${name} company yourself.`;
+}
+
+/**
+ * Re-drives the upload of a posted record's document that failed, or whose
+ * queued job was lost, on the connection the record was created through. A
+ * record in another company than the connected one is refused with the
+ * reason instead. Returns whether the upload was scheduled.
+ */
+export async function retryAccountingAttachment(
+  db: Database,
+  input: {
+    invoiceId: string;
+    teamId: string;
+    providerId: string;
+    provider: string | null;
+    organisationId: string | null;
+    attachmentStatus: string | null;
+  },
+) {
+  if (
+    input.attachmentStatus !== "failed" &&
+    input.attachmentStatus !== "queued"
+  ) {
+    return false;
+  }
+  const connection = await getActiveAccountingConnection(db, input.teamId);
+  if (!connection || connection.provider !== input.provider) return false;
+  const otherCompany = otherAccountingCompanyReason(input, connection);
+  if (otherCompany) {
+    await recordAccountingAttachment(db, {
+      invoiceId: input.invoiceId,
+      teamId: input.teamId,
+      status: "failed",
+      error: otherCompany,
+    });
+    return false;
+  }
+  await scheduleAccountingAttachment(db, input);
+  return true;
+}
+
+/**
+ * Schedules the source document's upload to a record InvoiceWise already
+ * created, on its own: the bill is never posted again for it. Restarts the
+ * record's attachment job when one ran before.
+ */
+export async function scheduleAccountingAttachment(
+  db: Database,
+  input: { invoiceId: string; teamId: string; providerId: string },
+) {
+  await recordAccountingAttachment(db, {
+    invoiceId: input.invoiceId,
+    teamId: input.teamId,
+    status: "queued",
+    error: null,
+  });
+  const key = workflowKey.accountingAttachment(
+    input.teamId,
+    input.invoiceId,
+    input.providerId,
+  );
+  const restarted = await requeueFinishedWorkflowJob(db, {
+    name: "attach-accounting-document",
+    idempotencyKey: key,
+    teamId: input.teamId,
+  });
+  if (!restarted) {
+    await enqueueWorkflowJob(db, {
+      name: "attach-accounting-document",
+      teamId: input.teamId,
+      payload: { invoiceId: input.invoiceId, teamId: input.teamId },
+      idempotencyKey: key,
+    });
+  }
+}
+
 /**
  * Re-drives a failed or cancelled accounting intent on the active connection,
- * unless the delivery rules hold the invoice's current revision.
+ * unless the delivery rules hold the invoice's current revision. For a posted
+ * invoice whose document failed to attach, it retries only the attachment.
  */
 export async function requeueAccountingIntent(
   db: Database,
@@ -784,6 +920,12 @@ export async function requeueAccountingIntent(
     currentRevision: number;
     /** Whether the caller may re-post to the accounting provider. */
     permitted: boolean;
+    /** The posted record's attachment state, when known. */
+    attachmentStatus?: string | null;
+    /** The provider the invoice was posted to, when known. */
+    provider?: string | null;
+    /** The provider company the invoice was posted to, when known. */
+    organisationId?: string | null;
   },
 ): Promise<DeliveryRetryResult["accounting"]> {
   if (
@@ -791,6 +933,16 @@ export async function requeueAccountingIntent(
     input.status === "posted" ||
     input.status === "already_posted"
   ) {
+    if (input.providerId && input.permitted) {
+      await retryAccountingAttachment(db, {
+        invoiceId: input.invoiceId,
+        teamId: input.teamId,
+        providerId: input.providerId,
+        provider: input.provider ?? null,
+        organisationId: input.organisationId ?? null,
+        attachmentStatus: input.attachmentStatus ?? null,
+      });
+    }
     return "already_posted";
   }
   if (input.status === "queued") return "in_progress";
@@ -830,16 +982,24 @@ export async function requeueAccountingIntent(
     input.invoiceId,
     input.revision,
   );
+  // A person asked for this post, so it is sent even while automatic
+  // posting is off.
+  const payload = {
+    invoiceId: input.invoiceId,
+    teamId: input.teamId,
+    explicit: true,
+  };
   const restarted = await requeueFinishedWorkflowJob(db, {
     name: "post-accounting-draft",
     idempotencyKey: key,
     teamId: input.teamId,
+    payload,
   });
   if (!restarted) {
     await enqueueWorkflowJob(db, {
       name: "post-accounting-draft",
       teamId: input.teamId,
-      payload: { invoiceId: input.invoiceId, teamId: input.teamId },
+      payload,
       idempotencyKey: key,
     });
   }

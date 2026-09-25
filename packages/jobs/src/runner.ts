@@ -10,6 +10,7 @@ import {
   releaseWorkflowJob,
   retryWorkflowJob,
 } from "@invoicewise/db/queries";
+import { redactOperationalText } from "@invoicewise/db/utils/redact";
 import { observeTypeSafeCalls } from "@invoicewise/documents";
 import {
   Cause,
@@ -330,7 +331,7 @@ const runClaimedWorkflow = (job: WorkflowJob) =>
             Effect.annotateLogs({
               event: "workflow_heartbeat_failed",
               workflowId: job.id,
-              error: error.reason,
+              error: redactOperationalText(error.reason),
             }),
           ),
         ),
@@ -368,7 +369,7 @@ const runClaimedWorkflow = (job: WorkflowJob) =>
           workflow: job.name,
           attempt: job.attempts,
           delayMs,
-          error: error.reason,
+          error: redactOperationalText(error.reason),
         }),
       );
       return;
@@ -382,7 +383,7 @@ const runClaimedWorkflow = (job: WorkflowJob) =>
         workflow: job.name,
         attempt: job.attempts,
         durationMs: Date.now() - startedAt,
-        error: error.reason,
+        error: redactOperationalText(error.reason),
       }),
     );
   }).pipe(
@@ -410,7 +411,7 @@ const runClaimedWorkflow = (job: WorkflowJob) =>
               event: "workflow_release_failed",
               workflowId: job.id,
               workflow: job.name,
-              error: error.reason,
+              error: redactOperationalText(error.reason),
             }),
           ),
         ),
@@ -500,7 +501,7 @@ const runLoggedWorkflow = (job: WorkflowJob) =>
           event: "workflow_queue_update_failed",
           workflowId: job.id,
           workflow: job.name,
-          error: error.reason,
+          error: redactOperationalText(error.reason),
         }),
       ),
     ),
@@ -512,7 +513,7 @@ const runLoggedWorkflow = (job: WorkflowJob) =>
               event: "workflow_run_defect",
               workflowId: job.id,
               workflow: job.name,
-              error: Cause.pretty(cause),
+              error: redactOperationalText(Cause.pretty(cause), 2000),
             }),
           ),
     ),
@@ -562,7 +563,7 @@ export const runWorkflowSlots = Effect.scoped(
             Effect.logError("workflow_queue_poll_failed").pipe(
               Effect.annotateLogs({
                 event: "workflow_queue_poll_failed",
-                error: error.reason,
+                error: redactOperationalText(error.reason),
               }),
               Effect.as([] as WorkflowJob[]),
             ),
@@ -622,7 +623,7 @@ const reconcileForever = Effect.gen(function* () {
         Effect.logError("delivery_reconcile_failed").pipe(
           Effect.annotateLogs({
             event: "delivery_reconcile_failed",
-            error: error.reason,
+            error: redactOperationalText(error.reason),
           }),
         ),
       ),
@@ -640,7 +641,7 @@ export const runWorkflows = Effect.gen(function* () {
         Effect.logError("workflow_maintenance_schedule_failed").pipe(
           Effect.annotateLogs({
             event: "workflow_maintenance_schedule_failed",
-            error: error.reason,
+            error: redactOperationalText(error.reason),
           }),
         ),
       ),

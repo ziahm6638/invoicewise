@@ -465,7 +465,7 @@ export const CORPUS: CorpusDocument[] = [
   {
     name: "credit-note",
     purpose:
-      "A credit note printed with negative amounts that names the invoice it credits. Valid, linked to the original when that invoice is in the workspace, and not deliverable: draft bills cannot represent credits.",
+      "A credit note printed with negative amounts that names the invoice it credits. Valid, linked to the original when that invoice is in the workspace, and deliverable as a credit note (a Xero draft credit note, a QuickBooks vendor credit).",
     layout: {
       title: "CREDIT NOTE",
       supplier: [
@@ -550,8 +550,8 @@ export const CORPUS: CorpusDocument[] = [
       taxBasis: "exclusive",
       checks: ALL_PASS,
       issues: [],
-      accountingReady: false,
-      blockers: ["credit_note_unsupported"],
+      accountingReady: true,
+      blockers: [],
     },
   },
   {

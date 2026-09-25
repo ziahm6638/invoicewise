@@ -70,6 +70,15 @@ export const workflowKey = {
   accounting: (teamId: string, invoiceId: string, revision: number) =>
     `${teamId}:${invoiceId}:r${revision}`,
   /**
+   * One separate attachment upload per provider record; a later retry
+   * restarts the same job.
+   */
+  accountingAttachment: (
+    teamId: string,
+    invoiceId: string,
+    providerId: string,
+  ) => `${teamId}:${invoiceId}:attach:${providerId}`,
+  /**
    * One delivery job per logical event and endpoint. The SQL mirror in
    * `listStalledWebhookDeliveries` (packages/db) must build the same key.
    */

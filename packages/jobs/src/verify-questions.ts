@@ -25,7 +25,6 @@ import {
   listQuestionAnswers,
   recordQuestionAnswer,
   updateUserQuestion,
-  upsertAccountingConnection,
 } from "@invoicewise/db/queries";
 import {
   inbox,
@@ -62,7 +61,10 @@ import {
   requestQuestionRerun,
   runQuestionRerun,
 } from "./questions";
-import { deliverPossibleDuplicates } from "./verify-support";
+import {
+  deliverPossibleDuplicates,
+  seedXeroConnection,
+} from "./verify-support";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -188,12 +190,7 @@ async function main() {
       events: ["invoice.processed", "invoice.judgments.attached"],
     });
     assert(endpoint, "The webhook endpoint is created");
-    await upsertAccountingConnection(db, {
-      teamId,
-      provider: "xero",
-      integrationId: "xero-invoicewise",
-      connectionId: "xero-questions",
-    });
+    await seedXeroConnection(db, { teamId, connectionId: "xero-questions" });
 
     // --- Revision 1: two options.
     const v1 = await createUserQuestion(db, {

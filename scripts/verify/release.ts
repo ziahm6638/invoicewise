@@ -74,6 +74,7 @@ const PERMISSIONS_DATABASE = "invoicewise_perms_test";
 const INTAKE_DATABASE = "invoicewise_intake_test";
 const IDENTITY_DATABASE = "invoicewise_identity_test";
 const JOBS_DATABASE = "invoicewise_jobs_verify_test";
+const ACTIVITY_DATABASE = "invoicewise_activity_test";
 
 /**
  * App-server ports. They are resolved once per run so the dashboard build, the
@@ -244,6 +245,7 @@ async function preflight() {
       INTAKE_DATABASE,
       IDENTITY_DATABASE,
       JOBS_DATABASE,
+      ACTIVITY_DATABASE,
       FRESH_DATABASE,
       UPGRADE_DATABASE,
       RECOVERY_DATABASE,
@@ -841,6 +843,28 @@ async function workflowAndStorageVerifiers() {
     timeoutMs: 10 * 60 * 1000,
   });
 
+  await v.runStep("verify:jobs-quickbooks", {
+    command: "bun",
+    args: ["--no-env-file", "run", "verify:quickbooks"],
+    cwd: ws(JOBS_DIR),
+    env: env({
+      DATABASE_PRIMARY_URL: databaseUrl(JOBS_DATABASE),
+      LOCAL_STORAGE_PATH: join(v.tmpDir, "jobs-storage"),
+    }),
+    timeoutMs: 10 * 60 * 1000,
+  });
+
+  await v.runStep("verify:jobs-xero", {
+    command: "bun",
+    args: ["--no-env-file", "run", "verify:xero"],
+    cwd: ws(JOBS_DIR),
+    env: env({
+      DATABASE_PRIMARY_URL: databaseUrl(JOBS_DATABASE),
+      LOCAL_STORAGE_PATH: join(v.tmpDir, "jobs-storage"),
+    }),
+    timeoutMs: 10 * 60 * 1000,
+  });
+
   await v.runStep("verify:jobs-handoff", {
     command: "bun",
     args: ["--no-env-file", "run", "verify:handoff"],
@@ -1039,6 +1063,19 @@ async function securityRegressionSuites() {
     timeoutMs: 20 * 60 * 1000,
   });
 
+  // Issue #51: a stuck synthetic invoice diagnosed and recovered only
+  // through the status and operator recovery surfaces, then audited.
+  await v.runStep("verify:activity-recovery-http", {
+    command: "bun",
+    args: ["--no-env-file", "test", "src/activity.http.integration.test.ts"],
+    cwd: ws(API_DIR),
+    env: env({
+      ACTIVITY_TEST_DATABASE_URL: databaseUrl(ACTIVITY_DATABASE),
+      ACTIVITY_TEST_PORT: String(await freePort()),
+    }),
+    timeoutMs: 20 * 60 * 1000,
+  });
+
   await v.runStep("verify:identity-http-regressions", {
     command: "bun",
     args: ["--no-env-file", "test", "src/identity.http.integration.test.ts"],
@@ -1174,6 +1211,7 @@ async function main() {
         INTAKE_DATABASE,
         IDENTITY_DATABASE,
         JOBS_DATABASE,
+        ACTIVITY_DATABASE,
       ]) {
         v.onCleanup(`drop ${database}`, () => dropDisposableDatabase(database));
         await resetDisposableDatabase(database);

@@ -69,6 +69,11 @@ export type DeliverWebhookPayload = typeof DeliverWebhookPayload.Type;
 export const PostAccountingDraftPayload = Schema.Struct({
   invoiceId: Schema.String,
   teamId: Schema.String,
+  /**
+   * A person asked to send this invoice (a retry), so it posts even while
+   * the workspace's automatic posting is off.
+   */
+  explicit: Schema.optional(Schema.Boolean),
 });
 export type PostAccountingDraftPayload = typeof PostAccountingDraftPayload.Type;
 
@@ -164,6 +169,10 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("update-accounting-bill"),
     payload: UpdateAccountingBillPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("attach-accounting-document"),
+    payload: PostAccountingDraftPayload,
   }),
   Schema.Struct({
     name: Schema.Literal("rerun-question"),

@@ -20,7 +20,12 @@ import {
 import { scheduleAccountingPost } from "./delivery";
 import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
-import { deliverPossibleDuplicates } from "./verify-support";
+import {
+  deliverPossibleDuplicates,
+  enableXeroPosting,
+  xeroConnectStub,
+  xeroVerificationContactId,
+} from "./verify-support";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -70,6 +75,8 @@ async function main() {
           { status: 401 },
         );
       }
+      const connectCheck = xeroConnectStub(request, url);
+      if (connectCheck) return connectCheck;
       if (request.method === "POST" && url.pathname === "/connect/sessions") {
         const body = (await request.json()) as {
           tags?: { workspace_id?: string };
@@ -158,12 +165,15 @@ async function main() {
           !key.startsWith("invoicewise:") ||
           bill?.Type !== "ACCPAY" ||
           bill.Status !== "DRAFT" ||
-          !["Acme Supplies Ltd", "Northgate Timber Ltd"].includes(
-            String(contact?.Name),
-          ) ||
+          !["Acme Supplies Ltd", "Northgate Timber Ltd"]
+            .map(xeroVerificationContactId)
+            .includes(String(contact?.ContactID)) ||
           bill.CurrencyCode !== "GBP" ||
           bill.LineAmountTypes !== "Exclusive" ||
-          lines?.[0]?.UnitAmount !== 100
+          lines?.[0]?.UnitAmount !== 100 ||
+          lines[0].AccountCode !== "429" ||
+          lines[0].TaxType !== "INPUT2" ||
+          new URL(String(bill.Url)).searchParams.get("posting") !== key
         ) {
           return Response.json(
             { Message: "A validation exception occurred" },
@@ -242,6 +252,17 @@ async function main() {
       connectionId: "xero-connection",
     });
     if (!connection) throw new Error("Unable to store accounting connection");
+    // Nothing posts until an admin chooses the account and confirms the
+    // organisation.
+    const notYetOptedIn = await scheduleAccountingPost(database.db, {
+      invoiceId: crypto.randomUUID(),
+      teamId,
+      revision: 0,
+      status: null,
+      providerId: null,
+    });
+    if (notYetOptedIn) throw new Error("A post was queued before the opt-in");
+    await enableXeroPosting(database.db, teamId);
 
     const createDocument = async (fileName: string) => {
       const path = [teamId!, "inbox", `${fileName}.pdf`];

@@ -4,6 +4,7 @@ import {
   clearExpiredInboundEmailHeaders,
   clearExpiredInboundEmailSources,
   clearExpiredRedeliveryReferences,
+  deleteExpiredAuditEvents,
   deleteExpiredCancelledIntake,
   listExpiredDataExports,
   markDataExportExpired,
@@ -29,7 +30,8 @@ export type RetentionStep =
   | "failed-inbound-email"
   | "source-email"
   | "job-payloads"
-  | "webhook-payloads";
+  | "webhook-payloads"
+  | "audit-events";
 
 export type RetentionDeps = {
   db: Database;
@@ -89,6 +91,7 @@ export async function runRetentionSweep(
       "source-email": 0,
       "job-payloads": 0,
       "webhook-payloads": 0,
+      "audit-events": 0,
     },
     failures: [],
     refused: [],
@@ -229,6 +232,14 @@ export async function runRetentionSweep(
   await drain("webhook-payloads", () =>
     redactFinishedWebhookPayloads(deps.db, {
       before: before(deps.policy.jobPayloadDays),
+      limit: batchSize,
+    }),
+  );
+
+  // 5. Audit events past their period.
+  await drain("audit-events", () =>
+    deleteExpiredAuditEvents(deps.db, {
+      before: before(deps.policy.auditEventDays),
       limit: batchSize,
     }),
   );

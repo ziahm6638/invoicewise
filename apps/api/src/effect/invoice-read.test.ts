@@ -235,6 +235,9 @@ const RepositoryTest = Layer.succeed(InvoiceRepository, {
             revision: 1,
             postedAt: "2026-09-20T12:02:00.000Z",
             idempotencyKey: `invoicewise:${invoice.id}`,
+            entity: "bill" as const,
+            attachmentStatus: "attached" as const,
+            attachmentError: null,
           }
         : null,
     ),

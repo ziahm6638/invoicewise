@@ -18,6 +18,8 @@ export class NangoRequestError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** The provider's own error code, such as a QuickBooks fault code. */
+    readonly code: string | null = null,
   ) {
     super(message);
   }
@@ -96,6 +98,16 @@ export const errorMessage = (body: unknown, status: number) => {
   );
 };
 
+/** The provider's error code in a proxied error body (a QuickBooks fault). */
+export const providerErrorCode = (body: unknown) => {
+  const record = asRecord(body);
+  const fault = asRecord(record.Fault ?? record.fault);
+  const error = asRecord(
+    Array.isArray(fault.Error) ? fault.Error[0] : undefined,
+  );
+  return typeof error.code === "string" && error.code ? error.code : null;
+};
+
 const parseBody = async (response: Response) => {
   const text = await response.text();
   if (!text) return null;
@@ -157,10 +169,20 @@ export const nangoRequest = async (
   }
   const body = await parseBody(response);
   if (!response.ok) {
-    report(response.status === 429 ? "throttled" : "failed");
+    // Nango's own API answering that an integration or connection does not
+    // exist (a provider not set up, a connection already deleted) is an
+    // answer, not a provider failure, so it never trips the provider alert.
+    report(
+      response.status === 429
+        ? "throttled"
+        : response.status === 404 && !path.startsWith("/proxy")
+          ? "ok"
+          : "failed",
+    );
     throw new NangoRequestError(
       errorMessage(body, response.status),
       response.status,
+      providerErrorCode(body),
     );
   }
   report("ok");
