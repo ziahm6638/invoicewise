@@ -10,11 +10,13 @@ import { Config, Effect, Logger } from "effect";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { invoiceHttp } from "./effect/invoice-http";
+import { publicApiHttp } from "./effect/public-api-http";
 import { handleInboundEmail } from "./inbound-email/http";
 import { registerOperatorRoutes } from "./ops/recovery";
 import { registerHealthRoutes } from "./ops/route";
 import { routers } from "./rest/routers";
 import type { Context } from "./rest/types";
+import { v1Router } from "./rest/v1";
 import { exportDownloadResponse } from "./storage/export-route";
 import { storageCapabilityResponse } from "./storage/route";
 import { createTRPCContext } from "./trpc/init";
@@ -40,8 +42,18 @@ app.use(
       "x-user-locale",
       "x-user-timezone",
       "x-user-country",
+      "Idempotency-Key",
     ],
-    exposeHeaders: ["Content-Length"],
+    exposeHeaders: [
+      "Content-Length",
+      "Location",
+      "Link",
+      "X-Next-Cursor",
+      "Retry-After",
+      "RateLimit-Limit",
+      "RateLimit-Remaining",
+      "RateLimit-Reset",
+    ],
     maxAge: 86400,
   }),
 );
@@ -113,6 +125,9 @@ app.get(
   Scalar({ url: "/openapi", pageTitle: "InvoiceWise API", theme: "saturn" }),
 );
 
+// The versioned public API is mounted before the unversioned routers so its
+// own bearer-only authentication, scopes and error bodies apply.
+app.route("/v1", v1Router);
 app.route("/", routers);
 
 const main = Effect.gen(function* () {
@@ -123,6 +138,7 @@ const main = Effect.gen(function* () {
   allowedOrigins.push(...configuredOrigins);
 
   yield* Effect.addFinalizer(() => Effect.promise(invoiceHttp.dispose));
+  yield* Effect.addFinalizer(() => Effect.promise(publicApiHttp.dispose));
   yield* Effect.addFinalizer(() => Effect.promise(closeDatabase));
   yield* Effect.forkScoped(
     runWorkflows.pipe(

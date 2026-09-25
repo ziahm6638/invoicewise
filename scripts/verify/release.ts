@@ -768,6 +768,19 @@ async function runtimeSmoke() {
   // cannot claim the probe job; the claim must belong to the worker executable.
   await api.stop();
 
+  // The public API contract end to end: its own API process (with a loopback
+  // TypeSafe stub, so a submitted document is really processed) and the
+  // clean-room smoke check driven by nothing but a URL and a fresh key. It
+  // runs after the executable API stopped so no other workflow runner, whose
+  // TypeSafe points at the provider trap, can claim its documents.
+  await v.runStep("start:api-public-api-verifier", {
+    command: "bun",
+    args: ["--no-env-file", "run", "verify:public-api"],
+    cwd: ws(API_DIR),
+    env: env({ ...smokeEnv }),
+    timeoutMs: 10 * 60 * 1000,
+  });
+
   const workerEnv = env({
     ...smokeEnv,
     NODE_ENV: "test",

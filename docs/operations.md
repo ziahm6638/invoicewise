@@ -200,7 +200,7 @@ nothing audited runs unrecorded; one whose process died mid-way stays
 - **What is recorded.** Every dashboard mutation (`TRPC_AUDIT` in
   `apps/api/src/trpc/audit.ts`; a test fails when a new mutation is neither
   listed nor excluded with a reason) and every REST write to a workspace
-  route (`apps/api/src/rest/middleware/audit.ts`; an unlisted route is
+  route, including the `/v1` public API (`apps/api/src/rest/middleware/audit.ts`; an unlisted route is
   recorded as `api.request`): field corrections, re-extraction, question
   reruns and question changes, supplier and authorization-source changes,
   invoice-to-source match decisions (confirm, link, unlink),

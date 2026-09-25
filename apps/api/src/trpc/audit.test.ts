@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AUDIT_ACTIONS } from "@invoicewise/jobs/activity";
 import { TRPCError } from "@trpc/server";
+import { publicApiContract } from "../effect/public-api-http";
 import { REST_AUDIT_ROUTES, restOutcome } from "../rest/middleware/audit";
 import { routers } from "../rest/routers";
 import { TRPC_AUDIT, auditOutcomeForError } from "./audit";
@@ -50,6 +51,27 @@ describe("audit trail coverage", () => {
     expect(unmapped.map((route) => `${route.method} ${route.path}`)).toEqual(
       [],
     );
+  });
+
+  test("every /v1 public API write has an action", () => {
+    const contract = publicApiContract() as {
+      paths: Record<string, Record<string, unknown>>;
+    };
+    const writes = Object.entries(contract.paths).flatMap(([path, methods]) =>
+      Object.keys(methods)
+        .map((method) => method.toUpperCase())
+        .filter((method) => ["POST", "PUT", "PATCH", "DELETE"].includes(method))
+        .map((method) => ({ method, path })),
+    );
+    expect(writes.length).toBeGreaterThanOrEqual(4);
+    const unmapped = writes.filter(({ method, path }) => {
+      const sample = `${path.startsWith("/v1") ? "" : "/v1"}${path.replace(/\{[^}]+\}/g, "00000000-0000-4000-8000-000000000000")}`;
+      return !REST_AUDIT_ROUTES.some(
+        (candidate) =>
+          candidate.method === method && candidate.pattern.test(sample),
+      );
+    });
+    expect(unmapped).toEqual([]);
   });
 
   test("maps refusals, role denials and failures to outcomes", () => {

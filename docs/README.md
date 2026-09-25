@@ -4,6 +4,7 @@ This directory contains technical documentation for InvoiceWise.
 
 - [Local development](development.md)
 - [Effect architecture](effect-architecture.md)
+- [InvoiceWise API (v1): integration guide](api.md)
 - [REST, MCP, webhooks, delivery rules and export](delivery.md)
 - [Dedicated receiving address](inbound-email.md)
 - [Authorization sources: jobs, purchase orders and contracts](authorization-sources.md)

@@ -23,6 +23,10 @@ export const AUDIT_ACTIONS = {
     label: "Asked to answer questions again",
   },
   "invoice.bulk_action": { category: "invoice", label: "Bulk action" },
+  "invoice.submit": {
+    category: "invoice",
+    label: "Submitted a document over the API",
+  },
   "invoice.update": { category: "invoice", label: "Updated invoice" },
   "invoice.delete": { category: "invoice", label: "Deleted invoice" },
   "invoice.document_link": {

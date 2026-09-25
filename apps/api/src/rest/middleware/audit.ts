@@ -36,6 +36,31 @@ const id =
 const created = (type: string) => () => ({ type, id: null });
 
 export const REST_AUDIT_ROUTES: RestAuditRoute[] = [
+  // The versioned public API (apps/api/src/rest/v1.ts).
+  {
+    method: "POST",
+    pattern: /^\/v1\/invoices\/?$/,
+    action: "invoice.submit",
+    target: created("invoice"),
+  },
+  {
+    method: "POST",
+    pattern: /^\/v1\/invoices\/([^/]+)\/reextract$/,
+    action: "invoice.reextract",
+    target: id("invoice"),
+  },
+  {
+    method: "POST",
+    pattern: /^\/v1\/invoices\/([^/]+)\/questions\/rerun$/,
+    action: "invoice.rerun_questions",
+    target: id("invoice"),
+  },
+  {
+    method: "POST",
+    pattern: /^\/v1\/invoices\/([^/]+)\/delivery\/retry$/,
+    action: "delivery.retry",
+    target: id("invoice"),
+  },
   {
     method: "POST",
     pattern: /^\/webhooks\/?$/,
@@ -239,7 +264,7 @@ export const withRestAuditTrail: MiddlewareHandler = async (c, next) => {
 
   const status = c.res.status;
   let createdId: string | null = null;
-  if (status === 201 && target && !target.id) {
+  if ((status === 201 || status === 202) && target && !target.id) {
     // The created record's id only; the body can hold a one-time secret.
     const body = (await c.res
       .clone()
