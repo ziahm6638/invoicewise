@@ -89,7 +89,10 @@ function ToneIcon({ tone }: { tone: Tone }) {
   }
   if (tone === "unknown") {
     return (
-      <HelpCircle aria-hidden className={`${className} text-muted-foreground`} />
+      <HelpCircle
+        aria-hidden
+        className={`${className} text-muted-foreground`}
+      />
     );
   }
   return (
@@ -284,11 +287,12 @@ export function PaymentMatchView({
         <p className="text-sm text-amber-700 dark:text-amber-400">
           Proposed:{" "}
           {current.proposed
-            .map((item) =>
-              formatAmount(item.amount, item.currency) +
-              (item.transactionId && byId.get(item.transactionId)
-                ? ` from ${byId.get(item.transactionId)!.description}`
-                : ""),
+            .map(
+              (item) =>
+                formatAmount(item.amount, item.currency) +
+                (item.transactionId && byId.get(item.transactionId)
+                  ? ` from ${byId.get(item.transactionId)!.description}`
+                  : ""),
             )
             .join("; ")}
           . It does not count as paid until confirmed.

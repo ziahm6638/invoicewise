@@ -3292,7 +3292,8 @@ export const bankFeedConnections = pgTable(
     }),
     lastSyncStatus: text("last_sync_status"),
     lastSyncError: text("last_sync_error"),
-    lastSyncSummary: jsonb("last_sync_summary").$type<Record<string, unknown>>(),
+    lastSyncSummary:
+      jsonb("last_sync_summary").$type<Record<string, unknown>>(),
     connectedAt: timestamp("connected_at", {
       withTimezone: true,
       mode: "string",

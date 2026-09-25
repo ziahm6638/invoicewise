@@ -92,8 +92,9 @@ export const bankPaymentsAvailability = (
       appId,
       secret,
       privateKey,
-      baseUrl: (env.SALT_EDGE_BASE_URL?.trim() || SALT_EDGE_DEFAULT_BASE_URL)
-        .replace(/\/+$/, ""),
+      baseUrl: (
+        env.SALT_EDGE_BASE_URL?.trim() || SALT_EDGE_DEFAULT_BASE_URL
+      ).replace(/\/+$/, ""),
     },
   };
 };
@@ -481,7 +482,10 @@ export function createSaltEdgeClient(
       const { data } = await call("POST", "/connections/connect", {
         body: {
           customer_id: input.customerId,
-          consent: { ...consentOf_(input.periodDays), from_date: input.fromDate },
+          consent: {
+            ...consentOf_(input.periodDays),
+            from_date: input.fromDate,
+          },
           attempt: { ...attemptOf(input), fetch_from_date: input.fromDate },
         },
       });
@@ -636,10 +640,9 @@ export async function revokeBankFeedCustomer(
       secret,
       privateKey:
         env.SALT_EDGE_PRIVATE_KEY?.replace(/\\n/g, "\n").trim() || null,
-      baseUrl: (env.SALT_EDGE_BASE_URL?.trim() || SALT_EDGE_DEFAULT_BASE_URL).replace(
-        /\/+$/,
-        "",
-      ),
+      baseUrl: (
+        env.SALT_EDGE_BASE_URL?.trim() || SALT_EDGE_DEFAULT_BASE_URL
+      ).replace(/\/+$/, ""),
     },
     fetcher,
   ).removeCustomer(customerId);

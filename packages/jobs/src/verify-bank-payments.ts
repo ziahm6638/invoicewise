@@ -263,7 +263,10 @@ async function main() {
     const [adminA, adminB] = userIds as [string, string];
 
     // --- Off by default; explicit consent; one customer per workspace ------------
-    const before = await getBankPaymentsOverview(db, { teamId: teamA, env: ENV });
+    const before = await getBankPaymentsOverview(db, {
+      teamId: teamA,
+      env: ENV,
+    });
     assert(before.enabled === false, "bank payments are off by default");
     await rejects(
       () =>
@@ -312,7 +315,10 @@ async function main() {
 
     const a = await connectAs(teamA, adminA);
     const b = await connectAs(teamB, adminB);
-    assert(a.customerId !== b.customerId, "each workspace has its own customer");
+    assert(
+      a.customerId !== b.customerId,
+      "each workspace has its own customer",
+    );
     const connectCall = fake.calls.find(
       (call) => call.path === "/connections/connect",
     )!.body as { data: { consent: { scopes: string[]; period_days: number } } };
@@ -409,14 +415,42 @@ async function main() {
 
     // --- Invoices -------------------------------------------------------------
     const inv = {
-      paid: await receive(teamA, extractionOf({ invoiceNumber: "INV-1001", ...amounts(1200) })),
-      partial: await receive(teamA, extractionOf({ invoiceNumber: "INV-1002", ...amounts(500) })),
-      ambiguous: await receive(teamA, extractionOf({ invoiceNumber: "INV-1003", ...amounts(300) })),
-      proposed: await receive(teamA, extractionOf({ invoiceNumber: "INV-1004", ...amounts(99.96) })),
-      credited: await receive(teamA, extractionOf({ invoiceNumber: "INV-1005", ...amounts(420) })),
-      fee: await receive(teamA, extractionOf({ invoiceNumber: "INV-1006", ...amounts(1080) })),
-      euro: await receive(teamA, extractionOf({ invoiceNumber: "INV-1007", currency: "EUR", ...amounts(1200) })),
-      pending: await receive(teamA, extractionOf({ invoiceNumber: "INV-1008", ...amounts(240) })),
+      paid: await receive(
+        teamA,
+        extractionOf({ invoiceNumber: "INV-1001", ...amounts(1200) }),
+      ),
+      partial: await receive(
+        teamA,
+        extractionOf({ invoiceNumber: "INV-1002", ...amounts(500) }),
+      ),
+      ambiguous: await receive(
+        teamA,
+        extractionOf({ invoiceNumber: "INV-1003", ...amounts(300) }),
+      ),
+      proposed: await receive(
+        teamA,
+        extractionOf({ invoiceNumber: "INV-1004", ...amounts(99.96) }),
+      ),
+      credited: await receive(
+        teamA,
+        extractionOf({ invoiceNumber: "INV-1005", ...amounts(420) }),
+      ),
+      fee: await receive(
+        teamA,
+        extractionOf({ invoiceNumber: "INV-1006", ...amounts(1080) }),
+      ),
+      euro: await receive(
+        teamA,
+        extractionOf({
+          invoiceNumber: "INV-1007",
+          currency: "EUR",
+          ...amounts(1200),
+        }),
+      ),
+      pending: await receive(
+        teamA,
+        extractionOf({ invoiceNumber: "INV-1008", ...amounts(240) }),
+      ),
     };
     const creditNote = await receive(
       teamA,
@@ -434,7 +468,12 @@ async function main() {
     );
 
     // --- Transactions at the bank ---------------------------------------------
-    const tx = (description: string, amount: number, madeOn = "2026-09-10", extra: Record<string, unknown> = {}) =>
+    const tx = (
+      description: string,
+      amount: number,
+      madeOn = "2026-09-10",
+      extra: Record<string, unknown> = {},
+    ) =>
       fake.addTransaction(a.accountId, {
         status: "posted",
         made_on: madeOn,
@@ -492,7 +531,11 @@ async function main() {
           .from(bankFeedTransactions)
           .where(eq(bankFeedTransactions.teamId, teamId))
       )[0]!.count;
-    assert((await txCount(teamA)) === 12, "10 posted and 2 pending landed across pages", await txCount(teamA));
+    assert(
+      (await txCount(teamA)) === 12,
+      "10 posted and 2 pending landed across pages",
+      await txCount(teamA),
+    );
     const again = await syncBankConnection(
       db,
       { teamId: teamA, connectionId: a.started.connectionId },
@@ -505,17 +548,27 @@ async function main() {
       "a repeated sync resumes from the cursor and stores nothing twice",
       again,
     );
-    await syncBankConnection(db, { teamId: teamB, connectionId: b.started.connectionId }, deps());
+    await syncBankConnection(
+      db,
+      { teamId: teamB, connectionId: b.started.connectionId },
+      deps(),
+    );
     assert((await txCount(teamB)) === 1, "B has only its own transaction");
     const aTransactions = await listBankFeedTransactions(db, { teamId: teamA });
     assert(
       aTransactions.every((row) => row.connectionId === a.started.connectionId),
       "A's transaction list holds only A's connection",
     );
-    proof.sync = { first: first.outcome === "synced" ? first.summary : first, again: again.outcome === "synced" ? again.summary : again };
+    proof.sync = {
+      first: first.outcome === "synced" ? first.summary : first,
+      again: again.outcome === "synced" ? again.summary : again,
+    };
 
     // --- Matching ----------------------------------------------------------------
-    const sweep = await matchWorkspacePayments(db, { teamId: teamA, now: new Date(clock) });
+    const sweep = await matchWorkspacePayments(db, {
+      teamId: teamA,
+      now: new Date(clock),
+    });
     await matchWorkspacePayments(db, { teamId: teamB, now: new Date(clock) });
     const paid = await summary(inv.paid);
     assert(
@@ -526,8 +579,9 @@ async function main() {
     const paidAllocations = (await currentOf(inv.paid)).result.allocations;
     assert(
       paidAllocations.length === 1 &&
-        aTransactions.find((row) => row.id === paidAllocations[0]!.transactionId)
-          ?.duplicated === false,
+        aTransactions.find(
+          (row) => row.id === paidAllocations[0]!.transactionId,
+        )?.duplicated === false,
       "the duplicate entry is never counted",
       paidAllocations,
     );
@@ -585,12 +639,23 @@ async function main() {
       "a pending payment is pending, not paid",
       pending,
     );
-    proof.matched = { sweep, paid, partial: await summary(inv.partial), ambiguous, proposed, credited, fee, euro, pending };
+    proof.matched = {
+      sweep,
+      paid,
+      partial: await summary(inv.partial),
+      ambiguous,
+      proposed,
+      credited,
+      fee,
+      euro,
+      pending,
+    };
 
     // --- An admin resolves: choose, confirm, record a fee -------------------------
     const ambiguousCurrent = await currentOf(inv.ambiguous);
     const ambiguousTxId = aTransactions.find(
-      (row) => row.description === "ACME SUPPLIES" && row.madeOn === "2026-09-07",
+      (row) =>
+        row.description === "ACME SUPPLIES" && row.madeOn === "2026-09-07",
     )!.id;
     const chosen = await recordInvoicePayments(db, {
       teamId: teamA,
@@ -600,7 +665,11 @@ async function main() {
       reason: "Remittance advice for INV-1003 names the 7 September payment.",
       payments: [{ transactionId: ambiguousTxId, amount: "300" }],
     });
-    assert(chosen.paymentStatus === "paid", "an admin's choice pays it", chosen);
+    assert(
+      chosen.paymentStatus === "paid",
+      "an admin's choice pays it",
+      chosen,
+    );
     await rejects(
       () =>
         recordInvoicePayments(db, {
@@ -612,7 +681,9 @@ async function main() {
         }),
       "conflict",
     );
-    const euroTxId = aTransactions.find((row) => row.description === "INV-1007 GBP")!.id;
+    const euroTxId = aTransactions.find(
+      (row) => row.description === "INV-1007 GBP",
+    )!.id;
     const noFx = await rejects(
       () =>
         recordInvoicePayments(db, {
@@ -623,14 +694,24 @@ async function main() {
         }),
       "invalid",
     );
-    assert(/never converted/.test(noFx.message), "an admin cannot pay across currencies either", noFx.message);
+    assert(
+      /never converted/.test(noFx.message),
+      "an admin cannot pay across currencies either",
+      noFx.message,
+    );
     const confirmed = await confirmPaymentMatch(db, {
       teamId: teamA,
       inboxId: inv.proposed,
       actorId: adminA,
     });
-    assert(confirmed.paymentStatus === "paid", "a confirmed proposal is paid", confirmed);
-    const feeTxRow = aTransactions.find((row) => row.description === "INV-1006 INCL CHARGES")!;
+    assert(
+      confirmed.paymentStatus === "paid",
+      "a confirmed proposal is paid",
+      confirmed,
+    );
+    const feeTxRow = aTransactions.find(
+      (row) => row.description === "INV-1006 INCL CHARGES",
+    )!;
     const withFee = await recordInvoicePayments(db, {
       teamId: teamA,
       inboxId: inv.fee,
@@ -640,13 +721,19 @@ async function main() {
     });
     assert(
       withFee.paymentStatus === "paid" &&
-        ((withFee as { allocations?: unknown }).allocations as { kind: string; amount: string }[]).some(
-          (row) => row.kind === "fee" && row.amount === "5.00",
-        ),
+        (
+          (withFee as { allocations?: unknown }).allocations as {
+            kind: string;
+            amount: string;
+          }[]
+        ).some((row) => row.kind === "fee" && row.amount === "5.00"),
       "a bank charge is recorded beside the payment and not counted as paid",
       withFee,
     );
-    const rerun = await matchWorkspacePayments(db, { teamId: teamA, now: new Date(clock) });
+    const rerun = await matchWorkspacePayments(db, {
+      teamId: teamA,
+      now: new Date(clock),
+    });
     assert(
       (await currentOf(inv.ambiguous)).origin === "manual" && rerun.kept >= 3,
       "automatic runs keep a person's decisions",
@@ -683,10 +770,13 @@ async function main() {
       .from(bankFeedTransactions)
       .where(eq(bankFeedTransactions.teamId, teamA));
     const statusOf = (description: string) =>
-      statuses.filter((row) => row.description === description).map((row) => row.status);
+      statuses
+        .filter((row) => row.description === description)
+        .map((row) => row.status);
     assert(
       statusOf("CARD HOLD").join() === "reversed" &&
-        statusOf("INV-1008 FASTER PAYMENT").sort().join() === "posted,superseded" &&
+        statusOf("INV-1008 FASTER PAYMENT").sort().join() ===
+          "posted,superseded" &&
         statusOf("BACS ACME SUPPLIES INV-1001").join() === "reversed",
       "transaction states follow the bank",
       statuses,
@@ -745,7 +835,11 @@ async function main() {
       { teamId: teamA, connectionId: a.started.connectionId },
       deps(),
     );
-    assert(skipped.outcome === "skipped", "nothing is pulled while consent is revoked", skipped);
+    assert(
+      skipped.outcome === "skipped",
+      "nothing is pulled while consent is revoked",
+      skipped,
+    );
     const renew = await reconnectBankConnection(
       db,
       {
@@ -757,7 +851,10 @@ async function main() {
       },
       deps(),
     );
-    assert(renew.connectUrl.includes("reconnect"), "reconnect opens the provider's page");
+    assert(
+      renew.connectUrl.includes("reconnect"),
+      "reconnect opens the provider's page",
+    );
     fake.setConsent(a.connectionId, "active");
     const reconnected = await completeBankConnection(
       db,
@@ -786,7 +883,13 @@ async function main() {
 
     // --- Disconnect keeps only counted evidence -----------------------------------
     await rejects(
-      () => setBankPayments(db, { teamId: teamA, actorId: adminA, enabled: false, env: ENV }),
+      () =>
+        setBankPayments(db, {
+          teamId: teamA,
+          actorId: adminA,
+          enabled: false,
+          env: ENV,
+        }),
       "conflict",
     );
     const beforeDisconnect = await txCount(teamA);
@@ -814,7 +917,8 @@ async function main() {
         disconnected.connection.consent.status === "withdrawn" &&
         !fake.connections.has(a.connectionId) &&
         disconnected.removedTransactions > 0 &&
-        (await txCount(teamA)) === beforeDisconnect - disconnected.removedTransactions &&
+        (await txCount(teamA)) ===
+          beforeDisconnect - disconnected.removedTransactions &&
         leftRows.length === 0,
       "disconnect removes the provider connection and keeps only counted evidence",
       { disconnected, remaining: await txCount(teamA), leftRows },
@@ -823,7 +927,12 @@ async function main() {
       (await summary(inv.partial)).paymentStatus === "paid",
       "payment decisions keep their evidence after a disconnect",
     );
-    await setBankPayments(db, { teamId: teamA, actorId: adminA, enabled: false, env: ENV });
+    await setBankPayments(db, {
+      teamId: teamA,
+      actorId: adminA,
+      enabled: false,
+      env: ENV,
+    });
     const off = await matchWorkspacePayments(db, { teamId: teamA });
     assert(off.outcome === "skipped", "nothing is matched once turned off");
     proof.disconnect = disconnected;
@@ -881,7 +990,10 @@ async function main() {
           eq(workflowJobs.name, "match-payments"),
         ),
       );
-    assert(matchJobs.length > 0, "processing queued payment matching for the enabled workspaces");
+    assert(
+      matchJobs.length > 0,
+      "processing queued payment matching for the enabled workspaces",
+    );
 
     console.log(JSON.stringify(proof, null, 2));
     console.log("verify:bank-payments passed");

@@ -68,9 +68,10 @@ const TX_STATUS: Record<string, string> = {
 
 const money = (amount: string, currency: string) => {
   try {
-    return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(
-      Number(amount),
-    );
+    return new Intl.NumberFormat("en-GB", {
+      style: "currency",
+      currency,
+    }).format(Number(amount));
   } catch {
     return `${amount} ${currency}`;
   }
@@ -120,8 +121,8 @@ function ConsentFields({
         <Label htmlFor="consent-accepted" className="text-sm font-normal">
           I allow InvoiceWise to read this bank's accounts and transactions,
           through Salt Edge, for {period} days, to match payments to invoices.
-          It cannot move money. I sign in at my bank; InvoiceWise never sees
-          my bank login. I can disconnect at any time.
+          It cannot move money. I sign in at my bank; InvoiceWise never sees my
+          bank login. I can disconnect at any time.
         </Label>
       </div>
     </div>
@@ -157,7 +158,12 @@ export function BankPayments() {
       }),
     ]);
   const fail = (title: string) => (error: { message: string }) =>
-    toast({ duration: 6000, variant: "error", title, description: error.message });
+    toast({
+      duration: 6000,
+      variant: "error",
+      title,
+      description: error.message,
+    });
 
   const setEnabled = useMutation(
     trpc.bankPayments.setEnabled.mutationOptions({
@@ -202,7 +208,11 @@ export function BankPayments() {
     trpc.bankPayments.disconnect.mutationOptions({
       onSuccess: () => {
         setDisconnecting(null);
-        toast({ duration: 3500, variant: "success", title: "Bank disconnected" });
+        toast({
+          duration: 3500,
+          variant: "success",
+          title: "Bank disconnected",
+        });
         return refresh();
       },
       onError: fail("Unable to disconnect the bank"),
@@ -264,10 +274,9 @@ export function BankPayments() {
                 Optional. Match the payments in your bank account to invoices,
                 so each invoice shows whether it was paid, part paid or not,
                 with the transactions behind it. A payment counts on its own
-                only when the transaction prints the invoice's number;
-                anything less is proposed for you to confirm. Payment status
-                is separate from matching invoices to jobs, purchase orders
-                and contracts.
+                only when the transaction prints the invoice's number; anything
+                less is proposed for you to confirm. Payment status is separate
+                from matching invoices to jobs, purchase orders and contracts.
               </CardDescription>
             </div>
             <Switch
@@ -366,7 +375,9 @@ export function BankPayments() {
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Consent {CONSENT[connection.consent.status] ?? connection.consent.status}
+                  Consent{" "}
+                  {CONSENT[connection.consent.status] ??
+                    connection.consent.status}
                   {connection.consent.givenByName
                     ? `, given by ${connection.consent.givenByName}`
                     : ""}{" "}
@@ -496,12 +507,13 @@ export function BankPayments() {
         <DialogContent className="max-w-md">
           <div className="space-y-4 p-4">
             <DialogHeader>
-              <DialogTitle>Disconnect {disconnecting?.bankName ?? "bank"}?</DialogTitle>
+              <DialogTitle>
+                Disconnect {disconnecting?.bankName ?? "bank"}?
+              </DialogTitle>
               <DialogDescription>
-                InvoiceWise stops reading this bank and withdraws its consent
-                at Salt Edge. Transactions no invoice payment counts are
-                deleted; those an invoice's payment counts are kept as its
-                evidence.
+                InvoiceWise stops reading this bank and withdraws its consent at
+                Salt Edge. Transactions no invoice payment counts are deleted;
+                those an invoice's payment counts are kept as its evidence.
               </DialogDescription>
             </DialogHeader>
             <div className="flex justify-end gap-2">

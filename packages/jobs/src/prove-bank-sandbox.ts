@@ -78,12 +78,17 @@ const print = (label: string, value: unknown) =>
 async function main(step: string | undefined) {
   const url = required("DATABASE_PRIMARY_URL");
   if (!/_test(\?|$)/.test(new URL(url).pathname + new URL(url).search)) {
-    throw new Error("DATABASE_PRIMARY_URL must name a disposable *_test database");
+    throw new Error(
+      "DATABASE_PRIMARY_URL must name a disposable *_test database",
+    );
   }
   const availability = bankPaymentsAvailability(env);
   if (!availability.available) throw new Error(availability.message);
   const client = createSaltEdgeClient(availability.config);
-  const database = createDatabaseClient({ primaryUrl: url, isDevelopment: true });
+  const database = createDatabaseClient({
+    primaryUrl: url,
+    isDevelopment: true,
+  });
   const db = database.db;
   const deps = { env, client };
   try {
@@ -124,7 +129,10 @@ async function main(step: string | undefined) {
           connectionId: started.connectionId,
         }),
       );
-      print("workspace", { teamId: team!.id, connectionId: started.connectionId });
+      print("workspace", {
+        teamId: team!.id,
+        connectionId: started.connectionId,
+      });
       console.log(`connect URL: ${started.connectUrl}`);
       return;
     }
@@ -281,7 +289,10 @@ async function main(step: string | undefined) {
         });
       }
       await Bun.write(STATE, JSON.stringify({ ...state, invoices }));
-      print("sweep", await matchWorkspacePayments(db, { teamId: state.teamId }));
+      print(
+        "sweep",
+        await matchWorkspacePayments(db, { teamId: state.teamId }),
+      );
       await showDecisions(db, invoices);
       const confirmed = await confirmPaymentMatch(db, {
         teamId: state.teamId,
@@ -312,14 +323,17 @@ async function main(step: string | undefined) {
           eq(invoicePaymentMatches.id, inbox.paymentMatchId),
         )
         .where(eq(inbox.id, invoices.referenced!));
-      const counted = (current[0]?.result as unknown as PaymentMatchResult)
-        ?.allocations.find((row) => row.kind === "payment");
+      const counted = (
+        current[0]?.result as unknown as PaymentMatchResult
+      )?.allocations.find((row) => row.kind === "payment");
       if (!counted?.transactionId) throw new Error("run match first");
       const [original] = await db
         .select()
         .from(bankFeedTransactions)
         .where(eq(bankFeedTransactions.id, counted.transactionId));
-      const madeOn = new Date(Date.parse(`${original!.madeOn}T00:00:00Z`) + 86_400_000)
+      const madeOn = new Date(
+        Date.parse(`${original!.madeOn}T00:00:00Z`) + 86_400_000,
+      )
         .toISOString()
         .slice(0, 10);
       await db.insert(bankFeedTransactions).values({
@@ -351,7 +365,10 @@ async function main(step: string | undefined) {
         .from(bankFeedTransactions)
         .where(eq(bankFeedTransactions.id, original!.id));
       print("original transaction", reversed);
-      print("sweep", await matchWorkspacePayments(db, { teamId: state.teamId }));
+      print(
+        "sweep",
+        await matchWorkspacePayments(db, { teamId: state.teamId }),
+      );
       await showDecisions(db, invoices);
       return;
     }
@@ -433,7 +450,10 @@ async function main(step: string | undefined) {
         sync: row.lastSyncSummary,
       });
       const accounts = await db
-        .select({ name: bankFeedAccounts.name, cursor: bankFeedAccounts.postedCursor })
+        .select({
+          name: bankFeedAccounts.name,
+          cursor: bankFeedAccounts.postedCursor,
+        })
         .from(bankFeedAccounts)
         .where(eq(bankFeedAccounts.teamId, state.teamId));
       print("accounts", accounts);

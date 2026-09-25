@@ -513,9 +513,9 @@ describe("Effect invoice read HTTP slice", () => {
       );
       expect(withPayments.sourceMatch).not.toEqual(invoice.sourceMatch);
     }
-    const page = (await (
-      await read("/invoices", ["inbox.read"])
-    ).json()) as { data: Record<string, unknown>[] };
+    const page = (await (await read("/invoices", ["inbox.read"])).json()) as {
+      data: Record<string, unknown>[];
+    };
     expect(page.data[0]!.paymentMatch).toEqual(summary);
   });
 });

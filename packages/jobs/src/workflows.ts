@@ -49,6 +49,11 @@ import {
 import { nanoid } from "nanoid";
 import { type CreateContactOptions, Resend } from "resend";
 import { postAccountingDraft, updateAccountingBill } from "./accounting";
+import {
+  BANK_FEED_LIMITS,
+  scheduleBankSync,
+  syncBankConnection,
+} from "./bank-feeds";
 import { workflowKey } from "./client";
 import {
   DataExportError,
@@ -77,6 +82,10 @@ import {
   verifyStoredIntake,
 } from "./intake";
 import { isTransientIntakeFailure } from "./intake-failure";
+import {
+  matchWorkspacePayments,
+  schedulePaymentMatching,
+} from "./payment-matching";
 import { processDocumentAttachment } from "./process-document";
 import { STALLED_QUESTION_RUN_ERROR, runQuestionRerun } from "./questions";
 import {
@@ -96,7 +105,6 @@ import {
   type InviteTeamMembersPayload,
   type MatchInvoicePayload,
   type MatchPaymentsPayload,
-  type SyncBankConnectionPayload,
   type OnboardTeamPayload,
   type PostAccountingDraftPayload,
   type ProcessAttachmentPayload,
@@ -104,19 +112,11 @@ import {
   type PurgeDeletedDataPayload,
   type RerunJudgmentsPayload,
   type RerunQuestionPayload,
+  type SyncBankConnectionPayload,
   type SyncInboxAccountPayload,
   type UpdateAccountingBillPayload,
   WorkflowRequest,
 } from "./schema";
-import {
-  BANK_FEED_LIMITS,
-  scheduleBankSync,
-  syncBankConnection,
-} from "./bank-feeds";
-import {
-  matchWorkspacePayments,
-  schedulePaymentMatching,
-} from "./payment-matching";
 import { matchInvoice } from "./source-matching";
 import {
   WebhookDeliveryRepository,
@@ -1279,7 +1279,10 @@ export const WorkflowHandlerLive = Layer.effect(
             ),
           ),
         );
-        if (outcome.outcome === "synced" || outcome.outcome === "disconnected") {
+        if (
+          outcome.outcome === "synced" ||
+          outcome.outcome === "disconnected"
+        ) {
           yield* attempt(
             () =>
               schedulePaymentMatching(db, {
@@ -1291,7 +1294,10 @@ export const WorkflowHandlerLive = Layer.effect(
         }
         return outcome as unknown as Record<string, unknown>;
       });
-    const matchPaymentsJob = (job: WorkflowJob, payload: MatchPaymentsPayload) =>
+    const matchPaymentsJob = (
+      job: WorkflowJob,
+      payload: MatchPaymentsPayload,
+    ) =>
       Effect.gen(function* () {
         yield* ensureTeam(job, payload.teamId);
         return yield* attempt(

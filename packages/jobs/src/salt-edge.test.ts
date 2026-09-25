@@ -75,7 +75,10 @@ describe("createSaltEdgeClient", () => {
     );
     const error = await wrong.getConnection("1").catch((value) => value);
     expect(error).toBeInstanceOf(SaltEdgeError);
-    expect(error).toMatchObject({ status: 401, errorClass: "WrongClientSecret" });
+    expect(error).toMatchObject({
+      status: 401,
+      errorClass: "WrongClientSecret",
+    });
     expect((error as SaltEdgeError).retryable).toBe(false);
     const down = createSaltEdgeClient(config, (async () => {
       throw new Error("ECONNRESET");
@@ -85,9 +88,9 @@ describe("createSaltEdgeClient", () => {
       .catch((value) => value)) as SaltEdgeError;
     expect(network.status).toBe(0);
     expect(network.retryable).toBe(true);
-    expect(
-      new SaltEdgeError("gone", 406, "ConsentRevoked").consentGone,
-    ).toBe(true);
+    expect(new SaltEdgeError("gone", 406, "ConsentRevoked").consentGone).toBe(
+      true,
+    );
   });
 
   test("removing an already removed connection or customer succeeds", async () => {

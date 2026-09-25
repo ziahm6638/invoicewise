@@ -74,7 +74,12 @@ export function PaymentMatch({ inboxId }: { inboxId: string }) {
     return refresh();
   };
   const fail = (title: string) => (error: { message: string }) =>
-    toast({ duration: 6000, variant: "error", title, description: error.message });
+    toast({
+      duration: 6000,
+      variant: "error",
+      title,
+      description: error.message,
+    });
 
   const confirm = useMutation(
     trpc.bankPayments.confirm.mutationOptions({
@@ -107,8 +112,7 @@ export function PaymentMatch({ inboxId }: { inboxId: string }) {
   const summary = data.canDecide
     ? null
     : (data.current as unknown as PaymentSummary | null);
-  const expectedMatchId =
-    (data.current as { id?: string } | null)?.id ?? null;
+  const expectedMatchId = (data.current as { id?: string } | null)?.id ?? null;
 
   const actions = data.canDecide && data.enabled && data.processed && (
     <div className="flex flex-wrap gap-2 border-t py-3">
@@ -133,7 +137,7 @@ export function PaymentMatch({ inboxId }: { inboxId: string }) {
       >
         Choose transactions
       </Button>
-      {current && current.allocations.some((item) => item.kind !== "credit") && (
+      {current?.allocations.some((item) => item.kind !== "credit") && (
         <Button
           size="sm"
           variant="outline"
@@ -187,8 +191,8 @@ export function PaymentMatch({ inboxId }: { inboxId: string }) {
               <DialogTitle>Which transactions paid this invoice?</DialogTitle>
               <DialogDescription>
                 Only posted transactions in the invoice's own currency are
-                listed; amounts are never converted. Give how much of each
-                paid this invoice, and any part that was a bank charge.
+                listed; amounts are never converted. Give how much of each paid
+                this invoice, and any part that was a bank charge.
               </DialogDescription>
             </DialogHeader>
             <ul className="mt-4 max-h-72 divide-y overflow-y-auto rounded border">
@@ -292,7 +296,11 @@ export function PaymentMatch({ inboxId }: { inboxId: string }) {
             className="p-4"
             onSubmit={(event) => {
               event.preventDefault();
-              unlink.mutate({ inboxId, expectedMatchId, reason: reason.trim() });
+              unlink.mutate({
+                inboxId,
+                expectedMatchId,
+                reason: reason.trim(),
+              });
             }}
           >
             <DialogHeader>

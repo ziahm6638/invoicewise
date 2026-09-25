@@ -37,7 +37,9 @@ app.get("/transactions", async (c) => {
     offset: parsed.data.page * pageSize,
   });
   return c.json({
-    data: rows.slice(0, pageSize).map(({ providerTransactionId, ...row }) => row),
+    data: rows
+      .slice(0, pageSize)
+      .map(({ providerTransactionId, ...row }) => row),
     meta: { page: parsed.data.page, hasNextPage: rows.length > pageSize },
   });
 });

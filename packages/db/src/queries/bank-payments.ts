@@ -71,10 +71,7 @@ export async function setBankPaymentsEnabled(
 
 /** Locks the workspace's setting row, creating it (off) when missing. */
 export async function lockBankPaymentSettings(db: Database, teamId: string) {
-  await db
-    .insert(bankPaymentSettings)
-    .values({ teamId })
-    .onConflictDoNothing();
+  await db.insert(bankPaymentSettings).values({ teamId }).onConflictDoNothing();
   const [row] = await db
     .select()
     .from(bankPaymentSettings)
@@ -167,7 +164,10 @@ export async function getBankFeedConnectionByProviderId(
       and(
         eq(bankFeedConnections.teamId, params.teamId),
         eq(bankFeedConnections.provider, params.provider),
-        eq(bankFeedConnections.providerConnectionId, params.providerConnectionId),
+        eq(
+          bankFeedConnections.providerConnectionId,
+          params.providerConnectionId,
+        ),
       ),
     )
     .limit(1);
@@ -175,7 +175,10 @@ export async function getBankFeedConnectionByProviderId(
 }
 
 /** The workspace's newest connection still waiting for its first connect. */
-export async function getPendingBankFeedConnection(db: Database, teamId: string) {
+export async function getPendingBankFeedConnection(
+  db: Database,
+  teamId: string,
+) {
   const [row] = await db
     .select()
     .from(bankFeedConnections)
@@ -261,7 +264,10 @@ export async function updateBankFeedConnection(
 }
 
 /** Connections the scheduled sync keeps pulling. */
-export async function listSyncableBankFeedConnections(db: Database, limit = 200) {
+export async function listSyncableBankFeedConnections(
+  db: Database,
+  limit = 200,
+) {
   return db
     .select({
       id: bankFeedConnections.id,
@@ -283,7 +289,10 @@ export async function listSyncableBankFeedConnections(db: Database, limit = 200)
     .limit(limit);
 }
 
-export async function hasActiveBankFeedConnection(db: Database, teamId: string) {
+export async function hasActiveBankFeedConnection(
+  db: Database,
+  teamId: string,
+) {
   const [row] = await db
     .select({ id: bankFeedConnections.id })
     .from(bankFeedConnections)
@@ -315,7 +324,10 @@ export async function upsertBankFeedAccount(
     .insert(bankFeedAccounts)
     .values({ ...params })
     .onConflictDoUpdate({
-      target: [bankFeedAccounts.connectionId, bankFeedAccounts.providerAccountId],
+      target: [
+        bankFeedAccounts.connectionId,
+        bankFeedAccounts.providerAccountId,
+      ],
       set: {
         name: params.name,
         nature: params.nature,
@@ -451,7 +463,9 @@ export async function listAccountTransactions(
         eq(bankFeedTransactions.teamId, params.teamId),
         eq(bankFeedTransactions.accountId, params.accountId),
         inArray(bankFeedTransactions.status, params.statuses),
-        params.since ? gte(bankFeedTransactions.madeOn, params.since) : undefined,
+        params.since
+          ? gte(bankFeedTransactions.madeOn, params.since)
+          : undefined,
       ),
     )
     .orderBy(asc(bankFeedTransactions.madeOn), asc(bankFeedTransactions.id));
@@ -568,7 +582,9 @@ export async function listBankFeedTransactions(
         params.connectionId
           ? eq(bankFeedTransactions.connectionId, params.connectionId)
           : undefined,
-        params.status ? eq(bankFeedTransactions.status, params.status) : undefined,
+        params.status
+          ? eq(bankFeedTransactions.status, params.status)
+          : undefined,
       ),
     )
     .orderBy(desc(bankFeedTransactions.madeOn), desc(bankFeedTransactions.id))
@@ -830,7 +846,10 @@ export async function listInvoicesCountingTransactions(
   const rows = await db
     .selectDistinct({ inboxId: invoicePaymentAllocations.inboxId })
     .from(invoicePaymentAllocations)
-    .innerJoin(inbox, eq(inbox.paymentMatchId, invoicePaymentAllocations.matchId))
+    .innerJoin(
+      inbox,
+      eq(inbox.paymentMatchId, invoicePaymentAllocations.matchId),
+    )
     .where(
       and(
         eq(invoicePaymentAllocations.teamId, params.teamId),
@@ -876,7 +895,10 @@ export async function getPaymentMatchesForExport(db: Database, teamId: string) {
     .from(invoicePaymentMatches)
     .innerJoin(inbox, eq(inbox.id, invoicePaymentMatches.inboxId))
     .where(eq(invoicePaymentMatches.teamId, teamId))
-    .orderBy(asc(invoicePaymentMatches.inboxId), asc(invoicePaymentMatches.sequence));
+    .orderBy(
+      asc(invoicePaymentMatches.inboxId),
+      asc(invoicePaymentMatches.sequence),
+    );
   const allocations = await db
     .select()
     .from(invoicePaymentAllocations)

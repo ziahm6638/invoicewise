@@ -233,7 +233,9 @@ async function requireEnabled(db: Database, teamId: string) {
 
 const consentPeriodOf = (days: number | undefined) => {
   const period = days ?? BANK_FEED_LIMITS.defaultConsentDays;
-  if (!(BANK_FEED_LIMITS.consentPeriods as readonly number[]).includes(period)) {
+  if (
+    !(BANK_FEED_LIMITS.consentPeriods as readonly number[]).includes(period)
+  ) {
     throw new BankFeedError(
       `Choose a consent period of ${BANK_FEED_LIMITS.consentPeriods.join(", ")} days.`,
       "invalid",
@@ -314,7 +316,8 @@ export async function startBankConnection(
       set: {
         status: "failed",
         lastError: errorText(error),
-        lastErrorClass: error instanceof SaltEdgeError ? error.errorClass : null,
+        lastErrorClass:
+          error instanceof SaltEdgeError ? error.errorClass : null,
       },
     });
     throw providerError(error, "Unable to start the bank connection");
@@ -355,7 +358,10 @@ async function attachProviderConnection(
     .getConnection(input.providerConnectionId)
     .catch((error) => {
       if (error instanceof SaltEdgeError && error.notFound) {
-        throw new BankFeedError("That bank connection was not found.", "not_found");
+        throw new BankFeedError(
+          "That bank connection was not found.",
+          "not_found",
+        );
       }
       throw providerError(error, "Unable to confirm the bank connection");
     });
@@ -377,7 +383,8 @@ async function attachProviderConnection(
       connectionId: input.row.id,
       set: {
         status: "failed",
-        lastError: "This bank was already connected; the existing connection was kept.",
+        lastError:
+          "This bank was already connected; the existing connection was kept.",
       },
     });
     return activate(db, {
@@ -470,7 +477,10 @@ export async function completeBankConnection(
     throw new BankFeedError("Bank connection not found", "not_found");
   }
   if (row.status === "disconnected") {
-    throw new BankFeedError("This bank connection was disconnected.", "conflict");
+    throw new BankFeedError(
+      "This bank connection was disconnected.",
+      "conflict",
+    );
   }
 
   if (input.errorClass) {
@@ -503,8 +513,9 @@ export async function completeBankConnection(
     providerConnectionId =
       remote
         .filter((item) => !held.has(item.id))
-        .sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }))[0]
-        ?.id ?? null;
+        .sort((a, b) =>
+          b.id.localeCompare(a.id, undefined, { numeric: true }),
+        )[0]?.id ?? null;
   }
   if (!providerConnectionId) {
     return presentBankConnection(row);
@@ -635,7 +646,10 @@ async function finishDisconnect(
       teamId: input.teamId,
       connectionId: input.row.id,
     });
-    return { connection: presentBankConnection(updated!), removedTransactions: removed };
+    return {
+      connection: presentBankConnection(updated!),
+      removedTransactions: removed,
+    };
   });
 }
 
@@ -681,7 +695,10 @@ export async function requestBankSync(
 // --- Sync --------------------------------------------------------------------------
 
 const normalizedText = (value: string | null | undefined) =>
-  (value ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+  (value ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
 
 /** Identifies a pending entry across fetches when the provider renumbers it. */
 export const transactionFingerprint = (transaction: {
@@ -710,7 +727,9 @@ const significantWords = (value: string | null | undefined) =>
     .split(" ")
     .filter(
       (word) =>
-        word.length >= 3 && !REVERSAL_WORDS.test(word) && !/^\d{1,2}$/.test(word),
+        word.length >= 3 &&
+        !REVERSAL_WORDS.test(word) &&
+        !/^\d{1,2}$/.test(word),
     );
 
 const amountOf = (row: Pick<BankFeedTransactionRow, "amount">) =>
@@ -730,11 +749,21 @@ const dayDiff = (from: string, to: string) =>
 export const reversalScore = (
   entry: Pick<
     BankFeedTransactionRow,
-    "amount" | "currency" | "madeOn" | "description" | "counterparty" | "reference"
+    | "amount"
+    | "currency"
+    | "madeOn"
+    | "description"
+    | "counterparty"
+    | "reference"
   >,
   original: Pick<
     BankFeedTransactionRow,
-    "amount" | "currency" | "madeOn" | "description" | "counterparty" | "reference"
+    | "amount"
+    | "currency"
+    | "madeOn"
+    | "description"
+    | "counterparty"
+    | "reference"
   >,
 ): number | null => {
   if (entry.currency !== original.currency) return null;
@@ -749,7 +778,8 @@ export const reversalScore = (
   if (!REVERSAL_WORDS.test(entryText)) return null;
   const sameCounterparty =
     Boolean(entry.counterparty && original.counterparty) &&
-    normalizedText(entry.counterparty) === normalizedText(original.counterparty);
+    normalizedText(entry.counterparty) ===
+      normalizedText(original.counterparty);
   const words = significantWords(
     [original.description, original.reference].join(" "),
   );
@@ -849,7 +879,9 @@ export async function syncBankConnection(
   try {
     const remote = await client.getConnection(providerConnectionId);
     if (remote.customerId !== settings.providerCustomerId) {
-      await fail("The provider reports this connection under another customer.");
+      await fail(
+        "The provider reports this connection under another customer.",
+      );
       throw new BankFeedError(
         "Bank connection does not belong to this workspace",
         "forbidden",
@@ -877,8 +909,16 @@ export async function syncBankConnection(
         : "active";
     const consentExpired =
       consent?.expiresAt && Date.parse(consent.expiresAt) <= now.getTime();
-    if (consentStatus !== "active" || consentExpired || remote.status === "inactive") {
-      const status = consentExpired ? "expired" : consentStatus === "active" ? "revoked" : consentStatus;
+    if (
+      consentStatus !== "active" ||
+      consentExpired ||
+      remote.status === "inactive"
+    ) {
+      const status = consentExpired
+        ? "expired"
+        : consentStatus === "active"
+          ? "revoked"
+          : consentStatus;
       await updateBankFeedConnection(db, {
         teamId: input.teamId,
         connectionId: row.id,
@@ -924,7 +964,11 @@ export async function syncBankConnection(
       // Posted: from the durable cursor (inclusive), page by page. The cursor
       // is saved after each page, so an interrupted sync resumes there.
       let cursor = stored.postedCursor;
-      for (let page = 0; page < BANK_FEED_LIMITS.postedPagesPerSync; page += 1) {
+      for (
+        let page = 0;
+        page < BANK_FEED_LIMITS.postedPagesPerSync;
+        page += 1
+      ) {
         const { transactions, nextId } = await client.listTransactions({
           connectionId: providerConnectionId,
           accountId: account.id,
@@ -949,20 +993,27 @@ export async function syncBankConnection(
           postedCursor: cursor,
         });
         if (!nextId) break;
-        if (page === BANK_FEED_LIMITS.postedPagesPerSync - 1) summary.more = true;
+        if (page === BANK_FEED_LIMITS.postedPagesPerSync - 1)
+          summary.more = true;
       }
 
       // Pending: the whole current list, every sync.
       const pending: SaltEdgeTransaction[] = [];
       let fromId: string | null = null;
-      for (let page = 0; page < BANK_FEED_LIMITS.pendingPagesPerSync; page += 1) {
+      for (
+        let page = 0;
+        page < BANK_FEED_LIMITS.pendingPagesPerSync;
+        page += 1
+      ) {
         const { transactions, nextId } = await client.listTransactions({
           connectionId: providerConnectionId,
           accountId: account.id,
           pending: true,
           fromId,
         });
-        pending.push(...transactions.filter((item) => item.status === "pending"));
+        pending.push(
+          ...transactions.filter((item) => item.status === "pending"),
+        );
         fromId = nextId;
         if (!nextId) break;
       }
@@ -1000,7 +1051,10 @@ export async function syncBankConnection(
       });
     }
     const changed =
-      summary.postedNew + summary.pending + summary.superseded + summary.reversed >
+      summary.postedNew +
+        summary.pending +
+        summary.superseded +
+        summary.reversed >
       0;
     return { outcome: "synced", summary, changed };
   } catch (error) {
@@ -1019,7 +1073,8 @@ export async function syncBankConnection(
               : "expired",
             lastSyncStatus: "failed",
             lastSyncFinishedAt: new Date().toISOString(),
-            lastSyncError: "The bank consent is no longer valid. Reconnect to renew it.",
+            lastSyncError:
+              "The bank consent is no longer valid. Reconnect to renew it.",
           },
         });
         return { outcome: "reconnect_required", consent: "expired" };
@@ -1083,7 +1138,8 @@ async function reconcileAccount(
     const fingerprint = transactionFingerprint(item);
     const renumbered = storedPending.find(
       (row) =>
-        row.fingerprint === fingerprint && !fetchedIds.has(row.providerTransactionId),
+        row.fingerprint === fingerprint &&
+        !fetchedIds.has(row.providerTransactionId),
     );
     if (renumbered) {
       await markBankFeedTransaction(db, {
@@ -1109,14 +1165,17 @@ async function reconcileAccount(
   });
   const posted = rows.filter((row) => row.status === "posted");
   const claimed = new Set(
-    rows.map((row) => row.supersededById).filter((id): id is string => Boolean(id)),
+    rows
+      .map((row) => row.supersededById)
+      .filter((id): id is string => Boolean(id)),
   );
 
   // Pending entries no longer listed (and earlier ones marked dropped): the
   // posted entry that replaced them, else they were dropped by the bank.
   const vanished = rows.filter(
     (row) =>
-      (row.status === "pending" && !fetchedIds.has(row.providerTransactionId)) ||
+      (row.status === "pending" &&
+        !fetchedIds.has(row.providerTransactionId)) ||
       (row.status === "reversed" &&
         (row.reversal as { kind?: string } | null)?.kind === "pending_dropped"),
   );
@@ -1127,14 +1186,19 @@ async function reconcileAccount(
         candidate.currency === row.currency &&
         amountOf(candidate) === amountOf(row) &&
         dayDiff(row.madeOn, candidate.madeOn) >= -3 &&
-        dayDiff(row.madeOn, candidate.madeOn) <= BANK_FEED_LIMITS.pendingToPostedDays,
+        dayDiff(row.madeOn, candidate.madeOn) <=
+          BANK_FEED_LIMITS.pendingToPostedDays,
     );
     if (replacement) {
       claimed.add(replacement.id);
       await markBankFeedTransaction(db, {
         teamId: input.teamId,
         transactionId: row.id,
-        set: { status: "superseded", supersededById: replacement.id, reversal: null },
+        set: {
+          status: "superseded",
+          supersededById: replacement.id,
+          reversal: null,
+        },
       });
       superseded += 1;
     } else if (row.status === "pending") {
@@ -1160,10 +1224,16 @@ async function reconcileAccount(
   for (const entry of open) {
     if (used.has(entry.id)) continue;
     const original = open
-      .filter((candidate) => candidate.id !== entry.id && !used.has(candidate.id))
-      .map((candidate) => ({ candidate, score: reversalScore(entry, candidate) }))
-      .filter((item): item is { candidate: BankFeedTransactionRow; score: number } =>
-        item.score !== null,
+      .filter(
+        (candidate) => candidate.id !== entry.id && !used.has(candidate.id),
+      )
+      .map((candidate) => ({
+        candidate,
+        score: reversalScore(entry, candidate),
+      }))
+      .filter(
+        (item): item is { candidate: BankFeedTransactionRow; score: number } =>
+          item.score !== null,
       )
       .sort(
         (a, b) =>
@@ -1209,7 +1279,12 @@ async function reconcileAccount(
 
 // --- Provider callbacks -----------------------------------------------------------------
 
-export type SaltEdgeCallbackType = "success" | "fail" | "notify" | "destroy" | "service";
+export type SaltEdgeCallbackType =
+  | "success"
+  | "fail"
+  | "notify"
+  | "destroy"
+  | "service";
 
 /**
  * A verified Salt Edge callback. The workspace is the one whose own customer
@@ -1222,7 +1297,8 @@ export async function handleSaltEdgeCallback(
   deps: BankFeedDeps = {},
 ): Promise<{ outcome: string }> {
   const now = deps.now?.() ?? new Date();
-  const data = (input.payload as { data?: Record<string, unknown> } | null)?.data;
+  const data = (input.payload as { data?: Record<string, unknown> } | null)
+    ?.data;
   if (!data || typeof data !== "object") return { outcome: "ignored" };
   const connectionId = String(data.connection_id ?? "");
   const customerId = String(data.customer_id ?? "");
@@ -1236,7 +1312,11 @@ export async function handleSaltEdgeCallback(
       customerId,
     });
   }
-  if (!team && input.type === "fail" && typeof customFields.connection === "string") {
+  if (
+    !team &&
+    input.type === "fail" &&
+    typeof customFields.connection === "string"
+  ) {
     // A failure before the connection existed carries only our own row id;
     // it may only mark that row, which is still pending.
     const pending = /^[0-9a-f-]{36}$/i.test(customFields.connection)
@@ -1249,7 +1329,9 @@ export async function handleSaltEdgeCallback(
         set: {
           status: "failed",
           lastErrorClass: String(data.error_class ?? "").slice(0, 200) || null,
-          lastError: String(data.error_message ?? "The bank connection failed.").slice(0, 1_000),
+          lastError: String(
+            data.error_message ?? "The bank connection failed.",
+          ).slice(0, 1_000),
         },
       });
       return { outcome: "failed_attempt" };
@@ -1286,7 +1368,9 @@ export async function handleSaltEdgeCallback(
       connectionId: row.id,
       set: {
         lastErrorClass: String(data.error_class ?? "").slice(0, 200) || null,
-        lastError: String(data.error_message ?? "The bank connection failed.").slice(0, 1_000),
+        lastError: String(
+          data.error_message ?? "The bank connection failed.",
+        ).slice(0, 1_000),
         ...(row.providerConnectionId ? {} : { status: "failed" }),
       },
     });
@@ -1316,7 +1400,11 @@ export async function handleSaltEdgeCallback(
   const finished =
     (input.type === "success" && stage === "finish") ||
     (input.type === "notify" && stage === "finish_fetching");
-  if (row.status !== "active" && input.type === "success" && stage === "finish") {
+  if (
+    row.status !== "active" &&
+    input.type === "success" &&
+    stage === "finish"
+  ) {
     // A reconnect finished: the consent is live again.
     await activate(db, {
       teamId: team.teamId,

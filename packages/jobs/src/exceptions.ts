@@ -39,11 +39,11 @@ import { workflowKey } from "./client";
 import { enqueueBillUpdate, scheduleInvoiceDeliveries } from "./delivery";
 import { decisionHeld } from "./delivery-rules";
 import { resolveWorkerIntakeBinding, verifyStoredIntake } from "./intake";
+import { schedulePaymentMatchingForRevision } from "./payment-matching";
 import {
   loadJudgmentQuestions,
   reevaluateLaterDocuments,
 } from "./process-document";
-import { schedulePaymentMatchingForRevision } from "./payment-matching";
 import { scheduleInvoiceMatch } from "./source-matching";
 import {
   loadJudgmentHistory,

@@ -26,7 +26,9 @@ const invoice = (overrides: Partial<PaymentInvoice> = {}): PaymentInvoice => ({
 });
 
 let next = 0;
-const tx = (overrides: Partial<PaymentTransaction> = {}): PaymentTransaction => {
+const tx = (
+  overrides: Partial<PaymentTransaction> = {},
+): PaymentTransaction => {
   next += 1;
   const amountMinor = overrides.amountMinor ?? -120_000;
   return {
@@ -81,14 +83,20 @@ describe("references", () => {
   });
 
   test("legal words do not identify a supplier", () => {
-    expect(supplierWords("The Acme Supplies Ltd")).toEqual(["ACME", "SUPPLIES"]);
+    expect(supplierWords("The Acme Supplies Ltd")).toEqual([
+      "ACME",
+      "SUPPLIES",
+    ]);
   });
 });
 
 describe("decidePayment", () => {
   test("a posted transaction printing the invoice number pays it", () => {
     const paid = tx({ description: "BACS INV-2026-0042 ACME SUPPLIES" });
-    const result = decide([paid, tx({ description: "Coffee", amountMinor: -350 })]);
+    const result = decide([
+      paid,
+      tx({ description: "Coffee", amountMinor: -350 }),
+    ]);
     expect(result.status).toBe("matched");
     expect(result.paymentStatus).toBe("paid");
     expect(result.needsConfirmation).toBe(false);
@@ -102,7 +110,9 @@ describe("decidePayment", () => {
       },
     ]);
     expect(result.remaining).toBe("0.00");
-    expect(result.candidates.map((row) => row.transactionId)).toEqual([paid.id]);
+    expect(result.candidates.map((row) => row.transactionId)).toEqual([
+      paid.id,
+    ]);
   });
 
   test("two referenced part payments pay it; a third is left over", () => {
@@ -154,7 +164,9 @@ describe("decidePayment", () => {
     expect(result.status).toBe("unmatched");
     expect(result.proposed).toEqual([]);
     expect(
-      result.candidates.flatMap((row) => row.evidence.map((item) => item.message)),
+      result.candidates.flatMap((row) =>
+        row.evidence.map((item) => item.message),
+      ),
     ).toContain("Prints INV20260099, another invoice's reference.");
   });
 
@@ -218,11 +230,14 @@ describe("decidePayment", () => {
   });
 
   test("an applied credit note reduces what is due", () => {
-    const result = decide([tx({ description: "INV-2026-0042", amountMinor: -100_000 })], {
-      credits: [
-        { creditInboxId: "cn-1", invoiceNumber: "CN-1", amountMinor: 20_000 },
-      ],
-    });
+    const result = decide(
+      [tx({ description: "INV-2026-0042", amountMinor: -100_000 })],
+      {
+        credits: [
+          { creditInboxId: "cn-1", invoiceNumber: "CN-1", amountMinor: 20_000 },
+        ],
+      },
+    );
     expect(result.paymentStatus).toBe("paid");
     expect(result.allocations.map((row) => [row.kind, row.amount])).toEqual([
       ["credit", "200.00"],

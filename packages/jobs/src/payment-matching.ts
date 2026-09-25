@@ -178,7 +178,9 @@ const otherReferencesOf = (
   invoiceId: string,
 ) =>
   new Set(
-    [...all].flatMap(([id, references]) => (id === invoiceId ? [] : references)),
+    [...all].flatMap(([id, references]) =>
+      id === invoiceId ? [] : references,
+    ),
   );
 
 /** Credit notes of this workspace applied to `invoiceId`. */
@@ -382,7 +384,12 @@ export async function matchInvoicePayment(
       teamId: input.teamId,
       inboxId: input.invoiceId,
     });
-    if (!row || !row.extraction || !row.validation || row.status === "processing") {
+    if (
+      !row ||
+      !row.extraction ||
+      !row.validation ||
+      row.status === "processing"
+    ) {
       return "skipped";
     }
     const current = row.paymentMatchId
@@ -483,7 +490,9 @@ async function carryForward(
     (allocation) => allocation.transactionId,
   );
   if (counted.length === 0) return "kept";
-  const ids = [...new Set(counted.map((allocation) => allocation.transactionId!))];
+  const ids = [
+    ...new Set(counted.map((allocation) => allocation.transactionId!)),
+  ];
   const rows = await listPaymentCandidateTransactions(db, {
     teamId: input.teamId,
     currency: input.invoice.currency ?? "",
@@ -499,7 +508,8 @@ async function carryForward(
   );
   if (gone.size === 0) return "kept";
   const allocations = previous.allocations.filter(
-    (allocation) => !allocation.transactionId || !gone.has(allocation.transactionId),
+    (allocation) =>
+      !allocation.transactionId || !gone.has(allocation.transactionId),
   );
   const paidMinor = allocations
     .filter((allocation) => allocation.kind === "payment")
@@ -645,8 +655,14 @@ export async function confirmPaymentMatch(
 ) {
   return inTransaction(db, async (tx) => {
     const { row, current, invoice } = await lockForDecision(tx, input);
-    const previous = current?.result as unknown as PaymentMatchResult | undefined;
-    if (!current || current.status !== "proposed" || !previous?.proposed.length) {
+    const previous = current?.result as unknown as
+      | PaymentMatchResult
+      | undefined;
+    if (
+      !current ||
+      current.status !== "proposed" ||
+      !previous?.proposed.length
+    ) {
       throw new PaymentMatchError(
         "Only a proposed payment can be confirmed; choose transactions instead.",
         "conflict",
@@ -657,7 +673,9 @@ export async function confirmPaymentMatch(
       tx,
       input.teamId,
       invoice,
-      previous.proposed.flatMap((item) => (item.transactionId ? [item.transactionId] : [])),
+      previous.proposed.flatMap((item) =>
+        item.transactionId ? [item.transactionId] : [],
+      ),
     );
     const { result, issues } = manualPaymentResult({
       invoice,
@@ -678,7 +696,10 @@ export async function confirmPaymentMatch(
       teamId: input.teamId,
       invoice: row,
       current,
-      result: { ...result, message: `Confirmed: ${result.message.replace(/^Recorded by an owner or admin: /, "")}` },
+      result: {
+        ...result,
+        message: `Confirmed: ${result.message.replace(/^Recorded by an owner or admin: /, "")}`,
+      },
       origin: "manual",
       action: "confirm",
       reason,
@@ -763,7 +784,9 @@ export async function unlinkInvoicePayments(
   return inTransaction(db, async (tx) => {
     const { row, current, invoice } = await lockForDecision(tx, input);
     const reason = reasonOf(input.reason, true);
-    const previous = current?.result as unknown as PaymentMatchResult | undefined;
+    const previous = current?.result as unknown as
+      | PaymentMatchResult
+      | undefined;
     const decided = decidePayment({
       invoice: { ...invoice, credits: [] },
       transactions: [],
@@ -774,7 +797,8 @@ export async function unlinkInvoicePayments(
       status: "unmatched",
       paymentStatus: "unpaid",
       needsConfirmation: false,
-      message: "Marked by an owner or admin as paid by none of these bank transactions.",
+      message:
+        "Marked by an owner or admin as paid by none of these bank transactions.",
       allocations: [],
       proposed: [],
       paid: "0.00",
@@ -822,7 +846,8 @@ export async function getInvoicePayments(
     ...presentPaymentMatch(match),
     actorName,
   }));
-  let choices: (PaymentTransaction & { amount: string; available: string })[] = [];
+  let choices: (PaymentTransaction & { amount: string; available: string })[] =
+    [];
   if (input.withChoices && row && settings?.enabled) {
     const invoice = paymentInvoiceOf(row);
     const direction = invoice.documentType === "credit_note" ? 1 : -1;

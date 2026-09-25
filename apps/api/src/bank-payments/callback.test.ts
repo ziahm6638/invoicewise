@@ -51,7 +51,9 @@ const request = (body: string, signature?: string) =>
   });
 
 describe("Salt Edge callbacks", () => {
-  const body = JSON.stringify({ data: { connection_id: "1", customer_id: "2" } });
+  const body = JSON.stringify({
+    data: { connection_id: "1", customer_id: "2" },
+  });
 
   test("a correctly signed callback is accepted", async () => {
     const response = await handleSaltEdgeCallbackRequest(

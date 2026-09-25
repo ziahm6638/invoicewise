@@ -70,7 +70,11 @@ export type PaymentInvoice = {
   invoiceDate: string;
   invoiceDatePrinted: boolean;
   /** Credit notes applied to this invoice (never to a credit note). */
-  credits: { creditInboxId: string; invoiceNumber: string | null; amountMinor: number }[];
+  credits: {
+    creditInboxId: string;
+    invoiceNumber: string | null;
+    amountMinor: number;
+  }[];
   /**
    * The references of the workspace's other invoices (as
    * `invoicePaymentReferences` gives them). A transaction printing one of
@@ -208,12 +212,13 @@ export const invoicePaymentReferences = (invoice: {
   invoiceNumber: string | null;
   paymentReference: string | null;
 }) =>
-  [...new Set([invoice.invoiceNumber, invoice.paymentReference].map(compact))]
-    .filter(
-      (value) =>
-        value.length >= PAYMENT_MATCH_RULES.minReferenceLength &&
-        /\d/.test(value),
-    );
+  [
+    ...new Set([invoice.invoiceNumber, invoice.paymentReference].map(compact)),
+  ].filter(
+    (value) =>
+      value.length >= PAYMENT_MATCH_RULES.minReferenceLength &&
+      /\d/.test(value),
+  );
 
 /**
  * Whether the transaction's text prints `reference` as a whole: a run of
@@ -252,9 +257,7 @@ const LEGAL_WORDS = new Set([
 
 /** The words of a supplier's name that identify it (legal suffixes dropped). */
 export const supplierWords = (name: string | null | undefined) =>
-  tokensOf(name).filter(
-    (word) => word.length >= 2 && !LEGAL_WORDS.has(word),
-  );
+  tokensOf(name).filter((word) => word.length >= 2 && !LEGAL_WORDS.has(word));
 
 const transactionText = (transaction: PaymentTransaction) =>
   [transaction.description, transaction.counterparty, transaction.reference]
@@ -343,7 +346,9 @@ export function assessTransaction(
   }
 
   const rightWay =
-    direction === "out" ? transaction.amountMinor < 0 : transaction.amountMinor > 0;
+    direction === "out"
+      ? transaction.amountMinor < 0
+      : transaction.amountMinor > 0;
   if (!rightWay) {
     evidence.push({
       kind: "direction",
@@ -501,8 +506,7 @@ const baseOf = (invoice: PaymentInvoice, asOf: string) => {
     invoice: {
       documentType: invoice.documentType,
       currency: invoice.currency,
-      gross:
-        invoice.grossMinor === null ? null : fromMinor(invoice.grossMinor),
+      gross: invoice.grossMinor === null ? null : fromMinor(invoice.grossMinor),
       credited: fromMinor(creditedMinor),
       direction:
         invoice.documentType === "credit_note"

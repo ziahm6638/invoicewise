@@ -53,10 +53,7 @@ export function createFakeSaltEdge(options: {
   const ok = (data: unknown, meta: Record<string, unknown> = {}) =>
     Response.json({ data, meta });
   const error = (status: number, errorClass: string, message: string) =>
-    Response.json(
-      { error: { class: errorClass, message } },
-      { status },
-    );
+    Response.json({ error: { class: errorClass, message } }, { status });
 
   const page = <T extends { id: string }>(rows: T[], fromId: string | null) => {
     const sorted = [...rows].sort((a, b) => Number(a.id) - Number(b.id));
@@ -73,7 +70,10 @@ export function createFakeSaltEdge(options: {
     const method = (init?.method ?? "GET").toUpperCase();
     const headers = new Headers(init?.headers);
     const body = init?.body ? JSON.parse(String(init.body)) : null;
-    const path = url.pathname.replace(new URL(SALT_EDGE_DEFAULT_BASE_URL).pathname, "");
+    const path = url.pathname.replace(
+      new URL(SALT_EDGE_DEFAULT_BASE_URL).pathname,
+      "",
+    );
     calls.push({ method, path, body });
     if (
       headers.get("App-id") !== options.appId ||
@@ -81,12 +81,15 @@ export function createFakeSaltEdge(options: {
     ) {
       return error(401, "WrongClientSecret", "Wrong App-id or Secret");
     }
-    const data = (body as { data?: Record<string, unknown> } | null)?.data ?? {};
+    const data =
+      (body as { data?: Record<string, unknown> } | null)?.data ?? {};
     const segments = path.split("/").filter(Boolean);
 
     if (path === "/customers" && method === "POST") {
       const identifier = String(data.identifier);
-      if ([...customers.values()].some((row) => row.identifier === identifier)) {
+      if (
+        [...customers.values()].some((row) => row.identifier === identifier)
+      ) {
         return error(409, "DuplicatedCustomer", "Customer exists");
       }
       const id = nextId();
@@ -122,7 +125,9 @@ export function createFakeSaltEdge(options: {
       if (!connections.has(segments[1]!)) {
         return error(404, "ConnectionNotFound", "No connection");
       }
-      return ok({ connect_url: `https://fake.saltedge.test/reconnect/${segments[1]}` });
+      return ok({
+        connect_url: `https://fake.saltedge.test/reconnect/${segments[1]}`,
+      });
     }
     if (segments[0] === "connections" && segments[2] === "refresh") {
       return connections.has(segments[1]!)
@@ -181,7 +186,10 @@ export function createFakeSaltEdge(options: {
       const rows = (transactions.get(accountId) ?? []).filter(
         (row) => (row.status === "pending") === pending,
       );
-      const { slice, nextId: next } = page(rows, url.searchParams.get("from_id"));
+      const { slice, nextId: next } = page(
+        rows,
+        url.searchParams.get("from_id"),
+      );
       return ok(
         slice.map((row) => ({
           duplicated: false,

@@ -449,8 +449,12 @@ async function exportBankPayments(
   const matches = decisions.matches
     .filter(({ match }) => invoiceIds.has(match.inboxId))
     .map(({ match, current }) => {
-      const { teamId: _team, fingerprint: _fingerprint, inboxId, ...rest } =
-        match;
+      const {
+        teamId: _team,
+        fingerprint: _fingerprint,
+        inboxId,
+        ...rest
+      } = match;
       return {
         ...rest,
         invoiceId: inboxId,
