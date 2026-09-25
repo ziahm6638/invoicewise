@@ -6,6 +6,7 @@ export * from "./apps";
 export * from "./authorization-sources";
 export * from "./bank-accounts";
 export * from "./bank-connections";
+export * from "./bank-payments";
 export * from "./connector-state";
 export * from "./customers";
 export * from "./customer-analytics";

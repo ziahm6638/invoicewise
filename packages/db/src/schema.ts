@@ -2508,6 +2508,12 @@ export const inbox = pgTable(
       (): AnyPgColumn => invoiceSourceMatches.id,
       { onDelete: "set null" },
     ),
+    // The invoice's current bank-payment decision (optional feature); earlier
+    // decisions stay in `invoice_payment_matches`.
+    paymentMatchId: uuid("payment_match_id").references(
+      (): AnyPgColumn => invoicePaymentMatches.id,
+      { onDelete: "set null" },
+    ),
   },
   (table) => [
     index("inbox_attachment_id_idx").using(
@@ -3200,6 +3206,342 @@ export const invoiceSourceAllocations = pgTable(
       columns: [table.linkId],
       foreignColumns: [invoiceSourceLinks.id],
       name: "invoice_source_allocations_link_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// --- Bank payments (optional; docs/bank-payments.md) ----------------------------
+// Bank-payment reconciliation is off unless a workspace owner or admin turns
+// it on. The workspace's Salt Edge customer is created on its first connect;
+// callbacks and returns are attributed to a workspace only through it.
+export const bankPaymentSettings = pgTable(
+  "bank_payment_settings",
+  {
+    teamId: uuid("team_id").primaryKey().notNull(),
+    enabled: boolean("enabled").default(false).notNull(),
+    provider: text("provider").default("saltedge").notNull(),
+    providerCustomerId: text("provider_customer_id"),
+    changedBy: uuid("changed_by"),
+    changedAt: timestamp("changed_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("bank_payment_settings_customer_key")
+      .on(table.provider, table.providerCustomerId)
+      .where(sql`provider_customer_id IS NOT NULL`),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "bank_payment_settings_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.changedBy],
+      foreignColumns: [users.id],
+      name: "bank_payment_settings_changed_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+// One bank connection through the provider, with the consent it holds and
+// what its last sync did. Rows are kept after a disconnect as history.
+export const bankFeedConnections = pgTable(
+  "bank_feed_connections",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    provider: text("provider").default("saltedge").notNull(),
+    // Null while the first connect attempt has not returned.
+    providerConnectionId: text("provider_connection_id"),
+    providerName: text("provider_name"),
+    status: text("status").notNull(),
+    consentStatus: text("consent_status").notNull(),
+    consentId: text("consent_id"),
+    consentPeriodDays: integer("consent_period_days").notNull(),
+    consentGivenBy: uuid("consent_given_by"),
+    consentGivenAt: timestamp("consent_given_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    consentExpiresAt: timestamp("consent_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    attemptStartedAt: timestamp("attempt_started_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    lastErrorClass: text("last_error_class"),
+    lastError: text("last_error"),
+    lastSyncStartedAt: timestamp("last_sync_started_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    lastSyncFinishedAt: timestamp("last_sync_finished_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    lastSyncStatus: text("last_sync_status"),
+    lastSyncError: text("last_sync_error"),
+    lastSyncSummary: jsonb("last_sync_summary").$type<Record<string, unknown>>(),
+    connectedAt: timestamp("connected_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    disconnectedAt: timestamp("disconnected_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    disconnectedBy: uuid("disconnected_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("bank_feed_connections_provider_key")
+      .on(table.provider, table.providerConnectionId)
+      .where(sql`provider_connection_id IS NOT NULL`),
+    index("bank_feed_connections_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "bank_feed_connections_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.consentGivenBy],
+      foreignColumns: [users.id],
+      name: "bank_feed_connections_consent_given_by_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.disconnectedBy],
+      foreignColumns: [users.id],
+      name: "bank_feed_connections_disconnected_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+// An account of a connection, with the durable cursor of its posted
+// transactions (the provider id to resume from).
+export const bankFeedAccounts = pgTable(
+  "bank_feed_accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    connectionId: uuid("connection_id").notNull(),
+    providerAccountId: text("provider_account_id").notNull(),
+    name: text("name").notNull(),
+    nature: text("nature"),
+    currency: text("currency").notNull(),
+    postedCursor: text("posted_cursor"),
+    lastSyncedAt: timestamp("last_synced_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("bank_feed_accounts_connection_account_key").on(
+      table.connectionId,
+      table.providerAccountId,
+    ),
+    index("bank_feed_accounts_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "bank_feed_accounts_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.connectionId],
+      foreignColumns: [bankFeedConnections.id],
+      name: "bank_feed_accounts_connection_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// One bank transaction as the provider reported it. `status` is pending,
+// posted, superseded (a pending entry replaced by its posted one) or reversed
+// (a posted entry offset by its reversal, or a pending one that was dropped).
+// Amounts are signed as the bank shows them: money out is negative.
+export const bankFeedTransactions = pgTable(
+  "bank_feed_transactions",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    connectionId: uuid("connection_id").notNull(),
+    accountId: uuid("account_id").notNull(),
+    providerTransactionId: text("provider_transaction_id").notNull(),
+    status: text("status").notNull(),
+    duplicated: boolean("duplicated").default(false).notNull(),
+    mode: text("mode").default("normal").notNull(),
+    madeOn: date("made_on").notNull(),
+    amount: numeric("amount", { precision: 18, scale: 4 }).notNull(),
+    currency: text("currency").notNull(),
+    description: text("description").notNull(),
+    counterparty: text("counterparty"),
+    reference: text("reference"),
+    fingerprint: text("fingerprint").notNull(),
+    supersededById: uuid("superseded_by_id").references(
+      (): AnyPgColumn => bankFeedTransactions.id,
+      { onDelete: "set null" },
+    ),
+    reversedById: uuid("reversed_by_id").references(
+      (): AnyPgColumn => bankFeedTransactions.id,
+      { onDelete: "set null" },
+    ),
+    reversal: jsonb("reversal").$type<Record<string, unknown>>(),
+    firstSeenAt: timestamp("first_seen_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    lastSeenAt: timestamp("last_seen_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("bank_feed_transactions_account_provider_key").on(
+      table.accountId,
+      table.providerTransactionId,
+    ),
+    index("bank_feed_transactions_team_currency_idx").on(
+      table.teamId,
+      table.currency,
+      table.madeOn,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "bank_feed_transactions_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.connectionId],
+      foreignColumns: [bankFeedConnections.id],
+      name: "bank_feed_transactions_connection_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.accountId],
+      foreignColumns: [bankFeedAccounts.id],
+      name: "bank_feed_transactions_account_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// One immutable decision about how an invoice was paid: its payment status,
+// the evidence for every transaction considered and who decided. The invoice
+// points at its current decision (`inbox.payment_match_id`). Separate from
+// the authorization-source decisions in `invoice_source_matches`.
+export const invoicePaymentMatches = pgTable(
+  "invoice_payment_matches",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    inboxId: uuid("inbox_id").notNull(),
+    // 1, 2, ... per invoice.
+    sequence: integer("sequence").notNull(),
+    status: text("status").notNull(),
+    paymentStatus: text("payment_status").notNull(),
+    origin: text("origin").notNull(),
+    action: text("action").notNull(),
+    currency: text("currency"),
+    dueAmount: numeric("due_amount", { precision: 16, scale: 2 }),
+    paidAmount: numeric("paid_amount", { precision: 16, scale: 2 }).notNull(),
+    result: jsonb("result").$type<Record<string, unknown>>().notNull(),
+    reason: text("reason"),
+    processingRevision: integer("processing_revision"),
+    rulesVersion: integer("rules_version").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    actorId: uuid("actor_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("invoice_payment_matches_inbox_sequence_key").on(
+      table.inboxId,
+      table.sequence,
+    ),
+    index("invoice_payment_matches_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "invoice_payment_matches_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.inboxId],
+      foreignColumns: [inbox.id],
+      name: "invoice_payment_matches_inbox_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.actorId],
+      foreignColumns: [users.id],
+      name: "invoice_payment_matches_actor_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+// What one payment decision counts: part of a bank transaction paid to the
+// invoice (`payment`), a bank charge carried by that transaction (`fee`,
+// never counted as paid), or a credit note applied to the invoice (`credit`).
+// Amounts are positive, in the invoice's currency, which is always the
+// transaction's own: nothing is converted.
+export const invoicePaymentAllocations = pgTable(
+  "invoice_payment_allocations",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    matchId: uuid("match_id").notNull(),
+    inboxId: uuid("inbox_id").notNull(),
+    kind: text("kind").notNull(),
+    transactionId: uuid("transaction_id"),
+    creditInboxId: uuid("credit_inbox_id"),
+    amount: numeric("amount", { precision: 16, scale: 2 }).notNull(),
+    currency: text("currency").notNull(),
+  },
+  (table) => [
+    index("invoice_payment_allocations_match_id_idx").on(table.matchId),
+    index("invoice_payment_allocations_transaction_id_idx").on(
+      table.transactionId,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "invoice_payment_allocations_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.matchId],
+      foreignColumns: [invoicePaymentMatches.id],
+      name: "invoice_payment_allocations_match_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.inboxId],
+      foreignColumns: [inbox.id],
+      name: "invoice_payment_allocations_inbox_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.transactionId],
+      foreignColumns: [bankFeedTransactions.id],
+      name: "invoice_payment_allocations_transaction_id_fkey",
+    }),
+    foreignKey({
+      columns: [table.creditInboxId],
+      foreignColumns: [inbox.id],
+      name: "invoice_payment_allocations_credit_inbox_id_fkey",
     }).onDelete("cascade"),
   ],
 );

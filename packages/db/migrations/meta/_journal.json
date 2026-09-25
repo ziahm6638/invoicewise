@@ -204,6 +204,13 @@
       "when": 1790500000000,
       "tag": "0028_invoice_source_matching",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790510000000,
+      "tag": "0029_bank_payments",
+      "breakpoints": true
     }
   ]
 }
