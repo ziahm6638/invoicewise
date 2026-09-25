@@ -1,5 +1,5 @@
 import type { AuditTarget } from "@api/trpc/audit";
-import type { Database } from "@invoicewise/db/client";
+import { type Database, db as sharedDb } from "@invoicewise/db/client";
 import {
   type AuditActorType,
   type AuditOutcome,
@@ -232,7 +232,8 @@ export const withRestAuditTrail: MiddlewareHandler = async (c, next) => {
         authType?: string;
       }
     | undefined;
-  const db = c.get("db") as Database;
+  // The /v1 chain attaches no request database; the shared client is the same.
+  const db = (c.get("db") as Database | undefined) ?? sharedDb;
 
   let started: { id: string };
   try {

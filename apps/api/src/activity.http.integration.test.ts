@@ -341,6 +341,7 @@ suite("invoice activity and operator recovery over real HTTP", () => {
     const { createTRPCContext } = await import("@api/trpc/init");
     const { appRouter } = await import("@api/trpc/routers/_app");
     const { routers } = await import("@api/rest/routers");
+    const { v1Router } = await import("@api/rest/v1");
     const { registerOperatorRoutes } = await import("@api/ops/recovery");
     const intakeHttp = await import("@api/intake/http");
     const { WorkflowRuntimeLive, runWorkflowBatch } = await import(
@@ -389,6 +390,7 @@ suite("invoice activity and operator recovery over real HTTP", () => {
         },
       });
     });
+    app.route("/v1", v1Router);
     app.route("/", routers);
     server = Bun.serve({ port: PORT, fetch: app.fetch });
   });
@@ -518,6 +520,12 @@ suite("invoice activity and operator recovery over real HTTP", () => {
       headers: bearer,
     });
     expect(keyRetry.status).toBe(403);
+    // The same refusal through the versioned public API is recorded too.
+    const v1Retry = await request(`/v1/invoices/${invoiceId}/delivery/retry`, {
+      method: "POST",
+      headers: bearer,
+    });
+    expect(v1Retry.status).toBe(403);
     expect((await trpc(member.cookie, "audit.list", {})).code).toBe(
       "FORBIDDEN",
     );
@@ -753,6 +761,14 @@ suite("invoice activity and operator recovery over real HTTP", () => {
     expect(find("member.join", "succeeded")).toMatchObject({
       actor: { id: member.userId },
     });
+    expect(
+      events.filter(
+        (event) =>
+          event.action === "delivery.retry" &&
+          event.outcome === "denied" &&
+          event.actor.type === "api_key",
+      ),
+    ).toHaveLength(2);
     expect(find("delivery.retry", "denied", "api_key")).toMatchObject({
       target: { type: "invoice", id: invoiceId },
       surface: "api",
