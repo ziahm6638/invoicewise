@@ -2,7 +2,10 @@
 
 import { FileViewer } from "@/components/file-viewer";
 import { FormatAmount } from "@/components/format-amount";
-import { getInvoiceState } from "@/components/inbox/invoice-state";
+import {
+  STALLED_PROCESSING_REASON,
+  getInvoiceState,
+} from "@/components/inbox/invoice-state";
 import { useInboxParams } from "@/hooks/use-inbox-params";
 import { useUserQuery } from "@/hooks/use-user";
 import { useTRPC } from "@/trpc/client";
@@ -19,9 +22,12 @@ import {
   FileWarning,
   LoaderCircle,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
+import { CorrectionForm } from "./correction-form";
 import { DeliveryResults } from "./delivery-results";
 import { InboxStatus } from "./inbox-status";
+import { InvoiceHistory } from "./invoice-history";
+import { InvoiceWorkflow } from "./invoice-workflow";
 import { JudgmentResults } from "./judgment-results";
 import { SupplierHistory } from "./supplier-history";
 import { ValidationResults, uncertainFields } from "./validation-results";
@@ -101,6 +107,13 @@ export function InboxDetails() {
       { enabled: Boolean(params.inboxId) },
     ),
   );
+  // Editing belongs to one invoice at one revision: switching invoices or a
+  // new revision arriving (another tab, a finished re-extraction) closes it.
+  const [editing, setEditing] = useState<string | null>(null);
+  const editKey = data ? `${data.id}:${data.processingRevision}` : null;
+  useEffect(() => {
+    if (editing && editing !== editKey) setEditing(null);
+  }, [editing, editKey]);
 
   if (isLoading) {
     return (
@@ -215,10 +228,28 @@ export function InboxDetails() {
           <div className="p-5">
             {state === "processing" && <ProcessingMessage />}
             {state === "failed" && (
-              <FailedMessage reason={data.processingError} />
+              <FailedMessage
+                reason={
+                  data.processingStalled
+                    ? STALLED_PROCESSING_REASON
+                    : data.processingError
+                }
+              />
             )}
 
-            {extraction ? (
+            <InvoiceWorkflow
+              invoice={data}
+              editing={editing === editKey}
+              onCorrect={() => setEditing(editing === editKey ? null : editKey)}
+            />
+
+            {extraction && editing === editKey ? (
+              <CorrectionForm
+                key={editKey}
+                invoice={data}
+                onDone={() => setEditing(null)}
+              />
+            ) : extraction ? (
               <>
                 <section className="mb-7">
                   <h3 className="text-sm font-semibold">Validation</h3>
@@ -438,10 +469,11 @@ export function InboxDetails() {
               state !== "processing" && (
                 <p className="text-sm text-muted-foreground">
                   No extracted fields are available. Review the original
-                  document or upload a clearer copy.
+                  document, re-extract it, or upload a clearer copy.
                 </p>
               )
             )}
+            <InvoiceHistory invoiceId={data.id} />
           </div>
         </ScrollArea>
       </div>

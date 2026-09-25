@@ -250,6 +250,11 @@ Every input persists the same fields on its `inbox` record:
   temporary processing problem, with the detail in the worker log
   (`invoice_processing_failed`). A failure is recorded only on a document
   still `processing`, so a later error never erases a saved extraction.
+- after a user correction: `extraction` holds the corrected record,
+  `extraction_original` the extraction as read, and `invoice_corrections` who
+  changed what, when and why; validation and supplier checks are those of the
+  corrected record. See
+  [Corrections](delivery.md#corrections).
 
 Fixtures for each input live in `packages/documents/src/test/fixtures`
 (regenerate with `generate-uk-invoice.ts`): `uk-invoice.pdf` (text PDF),

@@ -7,11 +7,13 @@ import {
   getAccountingPostInvoice,
   getActiveAccountingConnection,
   getActiveAccountingConnectionByProvider,
+  getBillUpdate,
   isValidDocumentBinding,
   recordAccountingAlreadyPosted,
   recordAccountingPostCancelled,
   recordAccountingPostFailure,
   recordAccountingPostSuccess,
+  recordBillUpdateOutcome,
   releaseAccountingPostClaim,
   updateInboxValidation,
   upsertAccountingConnection,
@@ -22,7 +24,12 @@ import {
   validateInvoice,
 } from "@invoicewise/documents";
 import { Effect, Schema } from "effect";
-import { BillRejectedError, postProviderBill } from "./accounting-providers";
+import {
+  BillRejectedError,
+  type DraftBill,
+  postProviderBill,
+  updateProviderBill,
+} from "./accounting-providers";
 import { requeueAccountingIntent } from "./delivery";
 import {
   NangoRequestError,
@@ -40,6 +47,56 @@ const PROVIDER_NAME: Record<AccountingProvider, string> = {
 
 type AttachmentStorage = {
   download: (input: { bucket: string; path: string[] }) => Promise<Blob>;
+};
+
+/**
+ * Where a user opens the bill in the provider's own app. QuickBooks sandbox
+ * companies live on a different host, set with QUICKBOOKS_APP_URL.
+ */
+export const providerBillUrl = (
+  provider: AccountingProvider,
+  providerId: string,
+  env = process.env,
+) =>
+  provider === "xero"
+    ? `https://go.xero.com/AccountsPayable/Edit.aspx?InvoiceID=${encodeURIComponent(providerId)}`
+    : `${(env.QUICKBOOKS_APP_URL || "https://app.qbo.intuit.com").replace(/\/$/, "")}/app/bill?txnId=${encodeURIComponent(providerId)}`;
+
+/** What a provider bill carries, from an invoice's (corrected) extraction. */
+export const draftBillFrom = (
+  source: unknown,
+  idempotencyKey: string,
+): DraftBill => {
+  const extraction = asRecord(source);
+  const text = (value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim() : null;
+  const amount = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
+  return {
+    idempotencyKey,
+    supplierName: text(extraction.supplierName),
+    supplierTaxNumber: text(extraction.supplierVatNumber),
+    invoiceNumber: text(extraction.invoiceNumber),
+    invoiceDate: text(extraction.invoiceDate),
+    dueDate: text(extraction.dueDate),
+    currency: text(extraction.currency),
+    netAmount: amount(extraction.netAmount),
+    vatAmount: amount(extraction.vatAmount),
+    grossAmount: amount(extraction.grossAmount),
+    description: text(extraction.description),
+    lineItems: (Array.isArray(extraction.lineItems)
+      ? extraction.lineItems
+      : []
+    ).map((item) => {
+      const line = asRecord(item);
+      return {
+        description: text(line.description),
+        quantity: amount(line.quantity),
+        unitPrice: amount(line.unitPrice),
+        total: amount(line.total),
+      };
+    }),
+  };
 };
 
 export class AccountingPostError extends Schema.TaggedError<AccountingPostError>()(
@@ -472,36 +529,7 @@ export const postAccountingDraft = (
       }
       attachment = loaded.right;
     }
-    const extraction = asRecord(invoice.extraction);
-    const text = (value: unknown) =>
-      typeof value === "string" && value.trim() ? value.trim() : null;
-    const amount = (value: unknown) =>
-      typeof value === "number" && Number.isFinite(value) ? value : null;
-    const bill = {
-      idempotencyKey,
-      supplierName: text(extraction.supplierName),
-      supplierTaxNumber: text(extraction.supplierVatNumber),
-      invoiceNumber: text(extraction.invoiceNumber),
-      invoiceDate: text(extraction.invoiceDate),
-      dueDate: text(extraction.dueDate),
-      currency: text(extraction.currency),
-      netAmount: amount(extraction.netAmount),
-      vatAmount: amount(extraction.vatAmount),
-      grossAmount: amount(extraction.grossAmount),
-      description: text(extraction.description),
-      lineItems: (Array.isArray(extraction.lineItems)
-        ? extraction.lineItems
-        : []
-      ).map((item) => {
-        const line = asRecord(item);
-        return {
-          description: text(line.description),
-          quantity: amount(line.quantity),
-          unitPrice: amount(line.unitPrice),
-          total: amount(line.total),
-        };
-      }),
-    };
+    const bill = draftBillFrom(invoice.extraction, idempotencyKey);
     const posted = yield* Effect.tryPromise({
       try: () =>
         postProviderBill(
@@ -591,3 +619,169 @@ export async function retryAccountingPost(
   );
   return { status: outcome === "requeued" ? ("queued" as const) : outcome };
 }
+
+/**
+ * Updates the bill an invoice was already posted as, after a user corrected
+ * the invoice and chose to update it (docs/delivery.md#corrections). The
+ * provider ID recorded when the bill was created is the only target: the
+ * update can change that bill or fail, never create another. It sends the
+ * extraction as it was when the user approved the correction, under a key
+ * per correction, so a retry after an ambiguous timeout replays the same
+ * update. A non-final failure keeps the update queued with its last error.
+ */
+export const updateAccountingBill = (
+  db: Database,
+  input: {
+    correctionId: string;
+    teamId: string;
+    attempt?: number;
+    maxAttempts?: number;
+  },
+  env = process.env,
+) =>
+  Effect.gen(function* () {
+    const target = { correctionId: input.correctionId, teamId: input.teamId };
+    const settle = (
+      status: "updated" | "failed" | "cancelled" | "queued",
+      error?: string,
+      retryable?: boolean,
+    ) =>
+      Effect.tryPromise({
+        try: () =>
+          recordBillUpdateOutcome(db, { ...target, status, error, retryable }),
+        catch: () =>
+          new AccountingPostError({
+            reason: "Unable to record the bill update",
+            retryable: true,
+          }),
+      });
+    const loaded = yield* Effect.tryPromise({
+      try: () => getBillUpdate(db, target),
+      catch: () =>
+        new AccountingPostError({
+          reason: "Unable to load the bill update",
+          retryable: true,
+        }),
+    });
+    if (!loaded) {
+      return yield* Effect.fail(
+        new AccountingPostError({
+          reason: "Correction not found",
+          retryable: false,
+        }),
+      );
+    }
+    const { correction, invoice } = loaded;
+    // Settled already (a replayed job, or a retry that finished first).
+    if (correction.updateStatus !== "queued") {
+      return {
+        correctionId: correction.id,
+        status: correction.updateStatus ?? "none",
+        idempotent: true,
+      };
+    }
+    if (invoice.status === "deleted") {
+      yield* settle("cancelled", "Invoice was deleted", false);
+      return { correctionId: correction.id, status: "cancelled" };
+    }
+    const providerId = correction.providerId;
+    const provider = correction.provider;
+    if (!providerId || !provider) {
+      yield* settle("failed", "The invoice has no bill to update", false);
+      return { correctionId: correction.id, status: "failed" };
+    }
+    const providerName = PROVIDER_NAME[provider];
+    const connection = yield* Effect.tryPromise({
+      try: () => getActiveAccountingConnection(db, input.teamId),
+      catch: () =>
+        new AccountingPostError({
+          reason: "Unable to load accounting connection",
+          retryable: true,
+        }),
+    });
+    if (!connection) {
+      yield* settle("cancelled", "No accounting connection is active", true);
+      return { correctionId: correction.id, status: "cancelled" };
+    }
+    if (connection.provider !== provider) {
+      yield* settle(
+        "failed",
+        `The bill is in ${providerName}, but ${PROVIDER_NAME[connection.provider]} is connected now. Update the bill in ${providerName} yourself.`,
+        false,
+      );
+      return { correctionId: correction.id, status: "failed" };
+    }
+
+    // The corrected invoice must still be one a draft bill can represent.
+    const readiness = accountingReadiness(
+      correction.extraction,
+      validateInvoice(correction.extraction),
+    );
+    if (!readiness.ready) {
+      yield* settle(
+        "failed",
+        `Not updated in ${providerName}: ${readiness.blockers
+          .map((blocker) => blocker.message)
+          .join(" ")}`,
+        false,
+      );
+      return { correctionId: correction.id, status: "blocked" };
+    }
+
+    const final = (error: AccountingPostError) =>
+      !error.retryable ||
+      input.attempt === undefined ||
+      input.attempt >= (input.maxAttempts ?? input.attempt);
+    const config = yield* Effect.try({
+      try: () => getNangoConfig(provider, env),
+      catch: (error) =>
+        new AccountingPostError({
+          reason:
+            error instanceof Error ? error.message : "Nango is not configured",
+          retryable: false,
+        }),
+    }).pipe(Effect.either);
+    if (config._tag === "Left") {
+      yield* settle("failed", config.left.reason, false);
+      return yield* Effect.fail(config.left);
+    }
+    const updated = yield* Effect.tryPromise({
+      try: () =>
+        updateProviderBill(
+          provider,
+          config.right,
+          connection,
+          providerId,
+          draftBillFrom(
+            correction.extraction,
+            `invoicewise-update:${correction.id}`,
+          ),
+        ),
+      catch: (error) =>
+        new AccountingPostError({
+          reason:
+            error instanceof Error ? error.message : "Nango update failed",
+          retryable:
+            error instanceof BillRejectedError
+              ? false
+              : error instanceof NangoRequestError
+                ? error.retryable
+                : true,
+        }),
+    }).pipe(Effect.either);
+    if (updated._tag === "Left") {
+      const error = updated.left;
+      yield* settle(
+        final(error) ? "failed" : "queued",
+        error.reason,
+        error.retryable,
+      );
+      return yield* Effect.fail(error);
+    }
+    yield* settle("updated");
+    return {
+      correctionId: correction.id,
+      status: "updated",
+      providerId: updated.right.providerId,
+    };
+  });

@@ -92,8 +92,103 @@ const invoiceDeliverySummary = () =>
         else ${inbox.accountingPostStatus}::text
       end
       where ${inbox.accountingPostStatus} is not null
+      union all
+      -- The latest in-place update of a posted bill after a correction: an
+      -- update still queued is not delivered, and a failed one needs retrying.
+      select * from (
+        select case c.update_status
+          when 'updated' then 'succeeded'
+          else c.update_status
+        end
+        from invoice_corrections c
+        where c.invoice_id = ${inbox.id}
+          and c.team_id = ${inbox.teamId}
+          and c.update_status is not null
+        order by c.version desc
+        limit 1
+      ) latest_update
     ) d
   )`;
+
+/**
+ * A document left `processing` although its processing job has failed and
+ * none is pending: the worker died after its final attempt before recording
+ * the failure. It is shown as failed and may be re-extracted; the delivery
+ * reconciler records the failure (`listStalledProcessing`).
+ */
+const processingJobs = () =>
+  sql`select 1 from workflow_jobs j
+      where j.name = 'process-attachment'
+        and j.team_id = ${inbox.teamId}
+        and j.payload ->> 'inboxId' = ${inbox.id}::text`;
+
+export const processingStalledSql = () =>
+  sql<boolean>`(${inbox.status} = 'processing'
+    and exists (${processingJobs()} and j.status = 'failed')
+    and not exists (${processingJobs()} and j.status in ('queued', 'running')))`;
+
+/** Whether the invoice has been corrected by a user at any revision. */
+const correctionCount = () =>
+  sql<number>`(select count(*)::int from invoice_corrections c where c.invoice_id = ${inbox.id} and c.team_id = ${inbox.teamId})`;
+
+/**
+ * Exception states the invoice list can be filtered by. They follow the
+ * dashboard's own reading of a record (`getInvoiceState`), so a filter shows
+ * exactly the invoices that carry that badge.
+ */
+export const INVOICE_STATE_FILTERS = [
+  "needs_attention",
+  "processing",
+  "failed",
+  "invalid",
+  "needs_review",
+  "delivering",
+  "delivery_failed",
+  "delivered",
+  "corrected",
+] as const;
+
+export type InvoiceStateFilter = (typeof INVOICE_STATE_FILTERS)[number];
+
+const deliveryStateIs = (state: InvoiceDeliveryState) =>
+  sql`(${invoiceDeliverySummary()} ->> 'state') = ${state}`;
+
+const extractionFailed = () =>
+  sql`((${inbox.status} is null or ${inbox.status} not in ('new', 'processing', 'analyzing'))
+    and (${inbox.processingError} is not null or ${inbox.extraction} is null))
+    or ${processingStalledSql()}`;
+
+const validationIs = (status: "invalid" | "needs_review") =>
+  sql`(${inbox.processingError} is null and ${inbox.extraction} is not null
+    and ${inbox.status} not in ('new', 'processing', 'analyzing')
+    and ${inbox.validation} ->> 'status' = ${status})`;
+
+const stateCondition = (state: InvoiceStateFilter): SQL => {
+  switch (state) {
+    case "processing":
+      return sql`(${inbox.status} in ('new', 'processing', 'analyzing') and not ${processingStalledSql()})`;
+    case "failed":
+      return sql`(${extractionFailed()})`;
+    case "invalid":
+      return validationIs("invalid");
+    case "needs_review":
+      return validationIs("needs_review");
+    case "delivering":
+      return deliveryStateIs("pending");
+    case "delivery_failed":
+      return deliveryStateIs("failed");
+    case "delivered":
+      return deliveryStateIs("delivered");
+    case "corrected":
+      return sql`${correctionCount()} > 0`;
+    case "needs_attention":
+      return sql`(${extractionFailed()}
+        or ${validationIs("invalid")}
+        or ${validationIs("needs_review")}
+        or ${deliveryStateIs("failed")}
+        or ${inbox.judgmentsRerunStatus} = 'failed')`;
+  }
+};
 
 // Scoring functions for suggestion ranking
 function calculateAmountScore(
@@ -166,6 +261,8 @@ export type GetInboxParams = {
     | "suggested_match"
     | "no_match"
     | null;
+  /** Exception state, as the dashboard reads the record. */
+  state?: InvoiceStateFilter | null;
 };
 
 /**
@@ -199,6 +296,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
     dateFrom,
     dateTo,
     status,
+    state,
   } = params;
 
   const whereConditions: SQL[] = [
@@ -210,6 +308,10 @@ export async function getInbox(db: Database, params: GetInboxParams) {
   // Apply status filter
   if (status) {
     whereConditions.push(eq(inbox.status, status));
+  }
+
+  if (state) {
+    whereConditions.push(stateCondition(state));
   }
 
   if (dateFrom) {
@@ -224,9 +326,13 @@ export async function getInbox(db: Database, params: GetInboxParams) {
 
   // Apply search query filter
   if (q) {
-    // If the query is a number, search by amount
+    // If the query is a number, search by amount (or an invoice number
+    // that starts with digits)
     if (!Number.isNaN(Number.parseInt(q))) {
-      whereConditions.push(sql`${inbox.amount}::text LIKE '%' || ${q} || '%'`);
+      whereConditions.push(
+        sql`(${inbox.amount}::text LIKE '%' || ${q} || '%'
+          OR ${inbox.extraction} ->> 'invoiceNumber' ILIKE '%' || ${q} || '%')`,
+      );
     } else {
       // Use both FTS and ILIKE for better special character support
       const query = buildSearchQuery(q);
@@ -236,6 +342,8 @@ export async function getInbox(db: Database, params: GetInboxParams) {
           OR ${inbox.displayName} ILIKE '%' || ${q} || '%'
           OR ${inbox.fileName} ILIKE '%' || ${q} || '%'
           OR ${inbox.description} ILIKE '%' || ${q} || '%'
+          OR ${inbox.extraction} ->> 'supplierName' ILIKE '%' || ${q} || '%'
+          OR ${inbox.extraction} ->> 'invoiceNumber' ILIKE '%' || ${q} || '%'
         )`,
       );
     }
@@ -265,6 +373,13 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
+      processingStalled: processingStalledSql(),
+      judgmentsRerunStatus: inbox.judgmentsRerunStatus,
+      judgmentsRerunError: inbox.judgmentsRerunError,
+      correctionCount: correctionCount(),
+      accountingProvider: inbox.accountingProvider,
+      accountingPostStatus: inbox.accountingPostStatus,
+      accountingProviderId: inbox.accountingProviderId,
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
         id: inboxAccounts.id,
@@ -353,6 +468,13 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
+      processingStalled: processingStalledSql(),
+      judgmentsRerunStatus: inbox.judgmentsRerunStatus,
+      judgmentsRerunError: inbox.judgmentsRerunError,
+      correctionCount: correctionCount(),
+      accountingProvider: inbox.accountingProvider,
+      accountingPostStatus: inbox.accountingPostStatus,
+      accountingProviderId: inbox.accountingProviderId,
       inboxAccountId: inbox.inboxAccountId,
       inboxAccount: {
         id: inboxAccounts.id,
@@ -1286,6 +1408,7 @@ export type InboxIntakeBinding = {
   intakeError: string | null;
   objectRemovalPending: boolean | null;
   objectRemovalAmbiguous: boolean | null;
+  processingRevision?: number;
 };
 
 /** The only storage namespace that may hold workspace documents. */
@@ -1354,6 +1477,7 @@ const intakeBindingColumns = {
   intakeError: inbox.intakeError,
   objectRemovalPending: inbox.objectRemovalPending,
   objectRemovalAmbiguous: inbox.objectRemovalAmbiguous,
+  processingRevision: inbox.processingRevision,
 };
 
 /**
@@ -2261,6 +2385,42 @@ export type UpdateInboxWithProcessedDataParams = {
 };
 
 /**
+ * What a completed revision carries into its delivery intents: the record
+ * delivered to webhooks plus the accounting state that decides whether a
+ * bill is scheduled. Shared by processing and by user revisions
+ * (`reviseInvoice`).
+ */
+export const completedInvoiceColumns = {
+  id: inbox.id,
+  teamId: inbox.teamId,
+  fileName: inbox.fileName,
+  filePath: inbox.filePath,
+  displayName: inbox.displayName,
+  transactionId: inbox.transactionId,
+  amount: inbox.amount,
+  currency: inbox.currency,
+  contentType: inbox.contentType,
+  date: inbox.date,
+  status: inbox.status,
+  createdAt: inbox.createdAt,
+  website: inbox.website,
+  description: inbox.description,
+  referenceId: inbox.referenceId,
+  inboundEmailId: inbox.inboundEmailId,
+  size: inbox.size,
+  taxAmount: inbox.taxAmount,
+  taxRate: inbox.taxRate,
+  taxType: inbox.taxType,
+  type: inbox.type,
+  extraction: inbox.extraction,
+  judgments: inbox.judgments,
+  validation: inbox.validation,
+  processingRevision: inbox.processingRevision,
+  accountingPostStatus: inbox.accountingPostStatus,
+  accountingProviderId: inbox.accountingProviderId,
+};
+
+/**
  * Persists a processing result as the next revision, but only while the
  * record is still `processing`. Two workers that raced on one document (an
  * expired lease) cannot both complete it: the loser gets no row back and
@@ -2279,6 +2439,12 @@ export async function completeInboxProcessing(
       ...updateData,
       status: "pending",
       processingRevision: sql`${inbox.processingRevision} + 1`,
+      // A fresh reading replaces any corrected record and supersedes a
+      // question rerun that was requested for an earlier revision.
+      extractionOriginal: null,
+      judgmentsRerunStatus: null,
+      judgmentsRerunError: null,
+      judgmentsRerunRevision: null,
     })
     .where(
       and(
@@ -2287,35 +2453,7 @@ export async function completeInboxProcessing(
         eq(inbox.status, "processing"),
       ),
     )
-    .returning({
-      id: inbox.id,
-      teamId: inbox.teamId,
-      fileName: inbox.fileName,
-      filePath: inbox.filePath,
-      displayName: inbox.displayName,
-      transactionId: inbox.transactionId,
-      amount: inbox.amount,
-      currency: inbox.currency,
-      contentType: inbox.contentType,
-      date: inbox.date,
-      status: inbox.status,
-      createdAt: inbox.createdAt,
-      website: inbox.website,
-      description: inbox.description,
-      referenceId: inbox.referenceId,
-      inboundEmailId: inbox.inboundEmailId,
-      size: inbox.size,
-      taxAmount: inbox.taxAmount,
-      taxRate: inbox.taxRate,
-      taxType: inbox.taxType,
-      type: inbox.type,
-      extraction: inbox.extraction,
-      judgments: inbox.judgments,
-      validation: inbox.validation,
-      processingRevision: inbox.processingRevision,
-      accountingPostStatus: inbox.accountingPostStatus,
-      accountingProviderId: inbox.accountingProviderId,
-    });
+    .returning(completedInvoiceColumns);
   return result;
 }
 
@@ -2410,8 +2548,12 @@ export async function recordInboxProcessingFailure(
       status: "pending",
       processingError: params.error,
       extraction: null,
+      extractionOriginal: null,
       judgments: null,
       validation: null,
+      judgmentsRerunStatus: null,
+      judgmentsRerunError: null,
+      judgmentsRerunRevision: null,
     })
     .where(
       and(

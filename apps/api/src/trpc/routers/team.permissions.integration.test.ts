@@ -395,6 +395,95 @@ suite("workspace permissions (integration)", () => {
       ).rejects.toThrow();
     });
 
+    test("invoice corrections follow the workspace and the accounting role", async () => {
+      const extraction = {
+        documentType: "invoice",
+        supplierName: "Harbour Lane Plumbing Ltd",
+        supplierVatNumber: null,
+        invoiceNumber: "HLP-EXC-1",
+        invoiceDate: "2026-09-01",
+        currency: "GBP",
+        netAmount: 100,
+        vatAmount: 20,
+        grossAmount: 150,
+        lineItems: [],
+        bankDetails: {},
+        evidence: { fields: {}, lineItems: [] },
+      };
+      const [invoice] = await primaryDb
+        .insert(schema.inbox)
+        .values({
+          teamId: ids.teamA,
+          displayName: "Exception check",
+          fileName: "exception-check.pdf",
+          contentType: "application/pdf",
+          status: "pending",
+          extraction,
+          processingRevision: 1,
+          // Already a bill in Xero.
+          accountingProvider: "xero",
+          accountingPostStatus: "posted",
+          accountingProviderId: "xero-bill-perm",
+        })
+        .returning({ id: schema.inbox.id });
+      const id = invoice!.id;
+      const correction = {
+        id,
+        revision: 1,
+        reason: "Gross read from the wrong line",
+        changes: { grossAmount: 120 },
+      };
+
+      // Another workspace can neither see nor act on the invoice.
+      const otherOwner = caller(ctx(ids.ownerB, ids.teamB));
+      expect(await otherOwner.inbox.history({ id })).toBeNull();
+      await expect(
+        otherOwner.inbox.correct({
+          ...correction,
+          accountingOutcome: "keep_bill",
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        otherOwner.inbox.rerunQuestions({ id, revision: 1 }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      // A member corrects, but may not change the bill in the provider.
+      const member = caller(ctx(ids.memberA, ids.teamA));
+      await expect(member.inbox.correct(correction)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
+      await expect(
+        member.inbox.correct({
+          ...correction,
+          accountingOutcome: "update_bill",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      const kept = await member.inbox.correct({
+        ...correction,
+        accountingOutcome: "keep_bill",
+      });
+      expect(kept).toMatchObject({ version: 1, accounting: "bill_kept" });
+
+      // The same revision cannot be corrected twice.
+      await expect(
+        member.inbox.correct({ ...correction, accountingOutcome: "keep_bill" }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+
+      const history = await member.inbox.history({ id });
+      expect(history?.bill).toMatchObject({
+        provider: "xero",
+        providerId: "xero-bill-perm",
+      });
+      expect(history?.corrections[0]).toMatchObject({
+        version: 1,
+        accountingOutcome: "keep_bill",
+        providerId: "xero-bill-perm",
+        actor: { id: ids.memberA },
+        changes: [{ field: "grossAmount", from: 150, to: 120 }],
+      });
+      expect(history?.original).toMatchObject({ grossAmount: 150 });
+    });
+
     test("an admin manages members but can never grant owner", async () => {
       const admin = caller(ctx(ids.adminA, ids.teamA));
 

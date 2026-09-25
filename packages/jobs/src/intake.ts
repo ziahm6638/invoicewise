@@ -42,6 +42,7 @@ import {
   checkStoredIntakeBytes,
   validateIntakeDocument,
 } from "@invoicewise/documents";
+import { InvoiceActionError } from "./action-error";
 import { workflowKey } from "./client";
 
 /**
@@ -574,7 +575,16 @@ export const acceptIntakeUpload = async (
  */
 export async function retryIntakeProcessing(
   db: PrimaryDatabase,
-  params: { teamId: string; inboxId: string },
+  params: {
+    teamId: string;
+    inboxId: string;
+    /**
+     * The revision the caller saw. A re-extraction of a revision that has
+     * since changed (another click already re-read it, or it was corrected)
+     * is refused with a conflict instead of reading the document again.
+     */
+    expectedRevision?: number;
+  },
 ): Promise<{ inboxId: string; jobId: string; deduplicated: boolean } | null> {
   const client = db as Database;
   return client.transaction(async (tx) => {
@@ -605,6 +615,15 @@ export async function retryIntakeProcessing(
     );
     if (pending) {
       return { inboxId: binding.id, jobId: pending.id, deduplicated: true };
+    }
+    if (
+      params.expectedRevision !== undefined &&
+      binding.processingRevision !== params.expectedRevision
+    ) {
+      throw new InvoiceActionError(
+        "conflict",
+        "This invoice changed since you opened it. Reload it to see the current state before reading it again.",
+      );
     }
 
     // The worker treats anything other than `processing` as already done, so

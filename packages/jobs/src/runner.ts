@@ -23,6 +23,7 @@ import {
   Schema,
 } from "effect";
 import { reconcileDeliveries } from "./delivery";
+import { reconcileInvoiceOperations } from "./exceptions";
 import { reconcileInboundEmails } from "./inbound-email";
 import { observeNangoCalls } from "./nango";
 import { publishDeliveryFailureById } from "./webhooks";
@@ -242,9 +243,10 @@ export const DeliveryReconcilerLive = Layer.effect(
         );
         const inbound = await reconcileInboundEmails(db);
         const exports = await failStalledDataExports(db);
+        const operations = await reconcileInvoiceOperations(db);
         return {
-          ...deliveries,
-          failed: deliveries.failed + inbound.failed,
+          rescheduled: deliveries.rescheduled + operations.rescheduled,
+          failed: deliveries.failed + inbound.failed + operations.failed,
           exportsFailed: exports.length,
         };
       }, "Unable to reconcile deliveries"),
@@ -402,7 +404,10 @@ const runClaimedWorkflow = (job: WorkflowJob) =>
   );
 
 /** Workflows that spend TypeSafe calls; held back once the daily budget is spent. */
-export const PROVIDER_BUDGETED_WORKFLOWS = ["process-attachment"] as const;
+export const PROVIDER_BUDGETED_WORKFLOWS = [
+  "process-attachment",
+  "rerun-judgments",
+] as const;
 
 let providerBudgetExhausted = false;
 

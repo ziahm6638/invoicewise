@@ -1,7 +1,16 @@
 import { Cause, Effect, Exit } from "effect";
+import { invoiceColumnsFromExtraction } from "../../correction";
 import type { GetDocumentRequest, GetInvoiceResponse } from "../../types";
-import { TypeSafeError, TypeSafeLive } from "../../typesafe/client";
-import { processInvoice } from "../../typesafe/invoice";
+import {
+  type TypeSafe,
+  TypeSafeError,
+  TypeSafeLive,
+} from "../../typesafe/client";
+import {
+  type StoredInvoiceJudgmentRequest,
+  judgeStoredInvoice,
+  processInvoice,
+} from "../../typesafe/invoice";
 
 /**
  * A failed invoice run. `message` is the internal detail for logs,
@@ -20,52 +29,56 @@ export class InvoiceProcessingError extends Error {
   }
 }
 
+/**
+ * Runs a TypeSafe program and unwraps its typed failure: a rejected
+ * `runPromise` would hide the reason inside a FiberFailure and drop the
+ * retryable flag.
+ */
+async function run<A>(
+  program: Effect.Effect<A, TypeSafeError, TypeSafe>,
+): Promise<A> {
+  const exit = await Effect.runPromiseExit(
+    program.pipe(Effect.provide(TypeSafeLive)),
+  );
+  if (Exit.isSuccess(exit)) return exit.value;
+  const failure = Cause.failureOption(exit.cause);
+  if (failure._tag === "None") {
+    throw new InvoiceProcessingError(Cause.pretty(exit.cause), true);
+  }
+  if (failure.value instanceof TypeSafeError) {
+    throw new InvoiceProcessingError(
+      failure.value.reason,
+      failure.value.retryable,
+      failure.value.userMessage,
+    );
+  }
+  // Missing TypeSafe configuration: another attempt cannot succeed.
+  throw new InvoiceProcessingError(
+    `TypeSafe is not configured: ${failure.value.message}`,
+    false,
+  );
+}
+
 export class InvoiceProcessor {
   public async getInvoice(
     params: GetDocumentRequest,
   ): Promise<GetInvoiceResponse> {
-    const exit = await Effect.runPromiseExit(
-      processInvoice(params).pipe(Effect.provide(TypeSafeLive)),
+    const { extraction, validation, judgments, timings } = await run(
+      processInvoice(params),
     );
-    if (Exit.isFailure(exit)) {
-      // Unwrap the typed failure: a rejected `runPromise` would hide the
-      // reason inside a FiberFailure and drop the retryable flag.
-      const failure = Cause.failureOption(exit.cause);
-      if (failure._tag === "None") {
-        throw new InvoiceProcessingError(Cause.pretty(exit.cause), true);
-      }
-      if (failure.value instanceof TypeSafeError) {
-        throw new InvoiceProcessingError(
-          failure.value.reason,
-          failure.value.retryable,
-          failure.value.userMessage,
-        );
-      }
-      // Missing TypeSafe configuration: another attempt cannot succeed.
-      throw new InvoiceProcessingError(
-        `TypeSafe is not configured: ${failure.value.message}`,
-        false,
-      );
-    }
-
-    const { extraction, validation, judgments, timings } = exit.value;
-    const taxRate =
-      extraction.taxRate ??
-      (extraction.netAmount && extraction.vatAmount !== null
-        ? (extraction.vatAmount / extraction.netAmount) * 100
-        : null);
+    const columns = invoiceColumnsFromExtraction(extraction);
 
     return {
       type: "invoice",
-      name: extraction.supplierName,
-      date: extraction.dueDate ?? extraction.invoiceDate,
-      amount: extraction.grossAmount,
-      currency: extraction.currency,
+      name: columns.displayName,
+      date: columns.date,
+      amount: columns.amount,
+      currency: columns.currency,
       website: null,
-      description: extraction.description,
-      tax_amount: extraction.vatAmount,
-      tax_rate: taxRate,
-      tax_type: extraction.vatAmount === null ? null : "vat",
+      description: columns.description,
+      tax_amount: columns.taxAmount,
+      tax_rate: columns.taxRate,
+      tax_type: columns.taxType,
       extraction,
       validation,
       judgments,
@@ -81,5 +94,10 @@ export class InvoiceProcessor {
         validation_status: validation.status,
       },
     };
+  }
+
+  /** Answers the configured questions again for a stored extraction. */
+  public async getJudgments(params: StoredInvoiceJudgmentRequest) {
+    return run(judgeStoredInvoice(params));
   }
 }

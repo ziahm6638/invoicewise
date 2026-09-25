@@ -7,6 +7,7 @@ import {
   WEBHOOK_TEST_EVENT,
   type WebhookEndpointForDelivery,
   type WebhookEvent,
+  canPostToAccounting,
   completeInboxProcessing,
   createWebhookDelivery,
   enqueueWorkflowJob,
@@ -15,16 +16,19 @@ import {
   getActiveAccountingConnection,
   getActiveWebhookEndpointForDelivery,
   getInvoiceForDeliveryUpdate,
+  getLatestBillUpdate,
   getRevisionWebhookDeliveries,
   getWebhookDeliveryForUpdate,
   getWebhookEndpointsForEvent,
   listStalledAccountingPosts,
+  listStalledBillUpdates,
   listStalledWebhookDeliveries,
   recordAccountingPostQueued,
+  recordBillUpdateOutcome,
   releaseAccountingPostForReview,
+  requeueBillUpdate,
   requeueFinishedWorkflowJob,
   requeueWebhookDelivery,
-  roleAtLeast,
 } from "@invoicewise/db/queries";
 import { workflowKey } from "./client";
 
@@ -103,17 +107,22 @@ export type CompletedInvoice = NonNullable<
 
 /**
  * Durable intents for every destination the workspace has configured when the
- * revision completes. Must run inside the completion transaction.
+ * revision completes. Must run inside the completion transaction. A user
+ * revision that cannot change the bill (a question rerun) or that decides the
+ * bill itself (a correction) passes `accounting: false`; `data` adds to what
+ * the webhook events carry.
  */
 export async function scheduleInvoiceDeliveries(
   db: Database,
   invoice: CompletedInvoice,
+  options: { accounting?: boolean; data?: Record<string, unknown> } = {},
 ) {
   if (!invoice.teamId) return { webhooks: 0, accounting: false };
   const teamId = invoice.teamId;
   const revision = invoice.processingRevision;
   const createdAt = new Date().toISOString();
-  const { accountingPostStatus, accountingProviderId, ...data } = invoice;
+  const { accountingPostStatus, accountingProviderId, ...record } = invoice;
+  const data = { ...record, ...options.data };
   const event = (type: WebhookEvent["type"]): WebhookEvent => ({
     id: logicalEventId(invoice.id, revision, type),
     type,
@@ -133,6 +142,7 @@ export async function scheduleInvoiceDeliveries(
     );
   }
 
+  if (options.accounting === false) return { webhooks, accounting: false };
   const accounting = await scheduleAccountingPost(db, {
     invoiceId: invoice.id,
     teamId,
@@ -304,7 +314,52 @@ export async function reconcileDeliveries(
     rescheduled += 1;
   }
 
+  const updates = await listStalledBillUpdates(db, { ...input, limit });
+  for (const update of updates) {
+    if (update.jobStatus === "failed") {
+      const settled = await recordBillUpdateOutcome(db, {
+        correctionId: update.correctionId,
+        teamId: update.teamId,
+        status: "failed",
+        error: update.jobError ?? "Bill update workflow failed",
+        retryable: true,
+      });
+      if (settled) failed += 1;
+      continue;
+    }
+    await enqueueBillUpdate(db, update);
+    rescheduled += 1;
+  }
+
   return { rescheduled, failed };
+}
+
+/** The job that updates a posted bill in place for one correction. */
+export async function enqueueBillUpdate(
+  db: Database,
+  input: { correctionId: string; invoiceId: string; teamId: string },
+) {
+  const key = workflowKey.billUpdate(
+    input.teamId,
+    input.invoiceId,
+    input.correctionId,
+  );
+  const restarted = await requeueFinishedWorkflowJob(db, {
+    name: "update-accounting-bill",
+    idempotencyKey: key,
+    teamId: input.teamId,
+  });
+  if (restarted) return;
+  await enqueueWorkflowJob(db, {
+    name: "update-accounting-bill",
+    teamId: input.teamId,
+    payload: {
+      correctionId: input.correctionId,
+      invoiceId: input.invoiceId,
+      teamId: input.teamId,
+    },
+    idempotencyKey: key,
+  });
 }
 
 export type DeliveryRetryResult = {
@@ -317,6 +372,13 @@ export type DeliveryRetryResult = {
     | "in_progress"
     | "no_active_connection"
     | "not_scheduled"
+    | "admin_required";
+  /** The in-place update of a posted bill after a correction, if one failed. */
+  billUpdate:
+    | "requeued"
+    | "in_progress"
+    | "not_needed"
+    | "no_active_connection"
     | "admin_required";
 };
 
@@ -378,17 +440,23 @@ export async function retryInvoiceDelivery(
       requeued += 1;
     }
 
+    const permitted = canPostToAccounting(input.teamRole);
     return {
       invoiceId: invoice.id,
       revision,
       webhooks: { requeued, skipped },
+      billUpdate: await requeueFailedBillUpdate(executor, {
+        invoiceId: invoice.id,
+        teamId: input.teamId,
+        permitted,
+      }),
       accounting: await requeueAccountingIntent(executor, {
         invoiceId: invoice.id,
         teamId: input.teamId,
         status: invoice.accountingPostStatus,
         providerId: invoice.accountingProviderId,
         revision: invoice.accountingRevision ?? revision,
-        permitted: roleAtLeast(input.teamRole, "admin"),
+        permitted,
       }),
     };
   });
@@ -505,6 +573,35 @@ export async function sendWebhookTestEvent(
     const delivery = await scheduleWebhookDelivery(executor, event, endpoint);
     return { deliveryId: delivery.id, eventId: event.id };
   });
+}
+
+/**
+ * Re-drives the newest bill update when it failed or was cancelled. Only an
+ * admin may change the bill at the provider, as for any accounting post.
+ */
+async function requeueFailedBillUpdate(
+  db: Database,
+  input: { invoiceId: string; teamId: string; permitted: boolean },
+): Promise<DeliveryRetryResult["billUpdate"]> {
+  const update = await getLatestBillUpdate(db, input);
+  if (!update) return "not_needed";
+  if (update.updateStatus === "queued") return "in_progress";
+  if (update.updateStatus !== "failed" && update.updateStatus !== "cancelled") {
+    return "not_needed";
+  }
+  if (!input.permitted) return "admin_required";
+  const connection = await getActiveAccountingConnection(db, input.teamId);
+  if (!connection) return "no_active_connection";
+  await requeueBillUpdate(db, {
+    correctionId: update.id,
+    teamId: input.teamId,
+  });
+  await enqueueBillUpdate(db, {
+    correctionId: update.id,
+    invoiceId: input.invoiceId,
+    teamId: input.teamId,
+  });
+  return "requeued";
 }
 
 /** Re-drives a failed or cancelled accounting intent on the active connection. */

@@ -19,18 +19,12 @@ import {
   validateAgainstEarlierDocuments,
 } from "./suppliers";
 
-export async function processDocumentAttachment(
-  db: Database,
-  input: {
-    inboxId: string;
-    teamId: string;
-    documentUrl: string;
-    mimetype: string;
-    companyName?: string | null;
-    judgmentQuestions?: readonly InvoiceJudgmentQuestion[];
-  },
-) {
-  const workspaceQuestions = await getUserQuestions(db, input.teamId);
+/**
+ * The workspace's enabled questions, as a processing run and a question
+ * rerun both ask them: its default checks and its own custom questions.
+ */
+export async function loadJudgmentQuestions(db: Database, teamId: string) {
+  const workspaceQuestions = await getUserQuestions(db, teamId);
   const configuredQuestions = workspaceQuestions.map((question) => {
     const common = {
       id: question.questionKey,
@@ -70,6 +64,28 @@ export async function processDocumentAttachment(
       } satisfies InvoiceJudgmentQuestion,
     };
   });
+  return {
+    defaultQuestions: configuredQuestions
+      .filter((question) => question.isDefault && question.enabled)
+      .map(({ question }) => question),
+    customQuestions: configuredQuestions
+      .filter((question) => !question.isDefault && question.enabled)
+      .map(({ question }) => question),
+  };
+}
+
+export async function processDocumentAttachment(
+  db: Database,
+  input: {
+    inboxId: string;
+    teamId: string;
+    documentUrl: string;
+    mimetype: string;
+    companyName?: string | null;
+    judgmentQuestions?: readonly InvoiceJudgmentQuestion[];
+  },
+) {
+  const questions = await loadJudgmentQuestions(db, input.teamId);
   const result = await new DocumentClient().getInvoice({
     documentUrl: input.documentUrl,
     mimetype: input.mimetype,
@@ -82,14 +98,8 @@ export async function processDocumentAttachment(
         documentId: input.inboxId,
         extraction,
       }),
-    defaultJudgmentQuestions: configuredQuestions
-      .filter((question) => question.isDefault && question.enabled)
-      .map(({ question }) => question),
-    judgmentQuestions:
-      input.judgmentQuestions ??
-      configuredQuestions
-        .filter((question) => !question.isDefault && question.enabled)
-        .map(({ question }) => question),
+    defaultJudgmentQuestions: questions.defaultQuestions,
+    judgmentQuestions: input.judgmentQuestions ?? questions.customQuestions,
   });
 
   // The result, its validation, its revision and every destination's delivery
@@ -169,18 +179,37 @@ export async function saveProcessedDocument(
         })
       : null;
     if (completion && input.extraction.invoiceNumber) {
-      const later = await getLaterDocumentsByNumber(executor, {
-        teamId: input.teamId,
-        documentId: input.id,
-        number: input.extraction.invoiceNumber,
-      });
-      for (const document of later) {
-        await reevaluateDocument(executor, {
-          teamId: input.teamId,
-          documentId: document.id,
-        });
-      }
+      await reevaluateLaterDocuments(executor, input.teamId, input.id, [
+        input.extraction.invoiceNumber,
+      ]);
     }
     return { completion, validation, supplierChecks };
   });
+}
+
+/**
+ * Checks again the later documents, not yet sent to accounting, whose
+ * duplicate identity or credit link depends on this document carrying (or
+ * no longer carrying) one of `numbers`. Runs in the caller's transaction,
+ * under `lockDocumentIdentities`.
+ */
+export async function reevaluateLaterDocuments(
+  executor: Database,
+  teamId: string,
+  documentId: string,
+  numbers: readonly string[],
+) {
+  const seen = new Set<string>();
+  for (const number of numbers) {
+    const later = await getLaterDocumentsByNumber(executor, {
+      teamId,
+      documentId,
+      number,
+    });
+    for (const document of later) {
+      if (seen.has(document.id)) continue;
+      seen.add(document.id);
+      await reevaluateDocument(executor, { teamId, documentId: document.id });
+    }
+  }
 }

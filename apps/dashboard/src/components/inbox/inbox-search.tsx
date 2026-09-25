@@ -33,8 +33,8 @@ export function InboxSearch() {
           className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
         />
         <Input
-          aria-label="Search invoices by supplier"
-          placeholder="Search suppliers"
+          aria-label="Search invoices by supplier or invoice number"
+          placeholder="Search suppliers or invoice numbers"
           className="pl-9 pr-10"
           value={params.q ?? ""}
           onChange={(event) => setParams({ q: event.target.value || null })}

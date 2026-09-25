@@ -1,4 +1,9 @@
 import { z } from "@hono/zod-openapi";
+import { INVOICE_STATE_FILTERS } from "@invoicewise/db/queries";
+import {
+  CORRECTABLE_FIELDS,
+  MAX_CORRECTION_REASON_LENGTH,
+} from "@invoicewise/documents";
 
 export const getInboxSchema = z.object({
   cursor: z.string().nullable().optional(),
@@ -9,6 +14,8 @@ export const getInboxSchema = z.object({
   dateFrom: z.string().date().nullable().optional(),
   dateTo: z.string().date().nullable().optional(),
   status: z.enum(["done", "pending"]).nullable().optional(),
+  /** Exception state, as the dashboard reads the invoice. */
+  state: z.enum(INVOICE_STATE_FILTERS).nullable().optional(),
 });
 
 export const inboxItemResponseSchema = z
@@ -154,6 +161,50 @@ export const deleteInboxSchema = z
  */
 export const retryInboxSchema = z.object({
   id: z.string().uuid(),
+  /**
+   * The processing revision the caller saw. When given, a re-extraction of an
+   * invoice that has changed since is refused instead of repeated.
+   */
+  revision: z.number().int().min(0).optional(),
+});
+
+const correctionValue = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
+
+/**
+ * A correction of extracted fields. Values are checked against the canonical
+ * record by `applyInvoiceCorrection`; this schema only bounds the shape.
+ */
+export const correctInboxSchema = z.object({
+  id: z.string().uuid(),
+  revision: z.number().int().min(0),
+  reason: z.string().max(MAX_CORRECTION_REASON_LENGTH),
+  changes: z
+    .object(
+      Object.fromEntries(
+        CORRECTABLE_FIELDS.map((field) => [field, correctionValue.optional()]),
+      ) as Record<
+        (typeof CORRECTABLE_FIELDS)[number],
+        z.ZodOptional<typeof correctionValue>
+      >,
+    )
+    .strict(),
+  accountingOutcome: z.enum(["keep_bill", "update_bill"]).optional(),
+});
+
+export const invoiceRevisionSchema = z.object({
+  id: z.string().uuid(),
+  revision: z.number().int().min(0),
+});
+
+/** One action applied to several selected invoices, each at the revision seen. */
+export const bulkInvoiceActionSchema = z.object({
+  action: z.enum(["reextract", "rerun_questions", "retry_delivery"]),
+  items: z.array(invoiceRevisionSchema).min(1).max(50),
 });
 
 export const updateInboxSchema = z.object({

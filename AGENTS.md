@@ -60,6 +60,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Extraction:** TypeSafe (text-only, selects among options, never generates): code mines candidates from laid-out text (PDF text layer, else tesseract OCR), TypeSafe picks; see `docs/document-intake.md#extraction`. Text PDF, scanned PDF, PNG and JPEG share one pipeline and record shape; HEIC is refused. The input matrix and limits are in `docs/document-intake.md#supported-inputs`
 - **Supplier identity:** each processed document resolves to a workspace `suppliers` row (explicit VAT/company number first; a name only when unique), and supplier-scoped, bounded history drives `inbox.supplier_checks` and the history-based judgments; corrections are audited, reversible `supplier_events`. Rules and outcomes are in `docs/document-intake.md#supplier-identity-and-history`; never compare an invoice with another supplier's or workspace's history
 - **Validation:** plain-code checks of every extraction (arithmetic with explicit tolerances, currency pairs, credit notes, duplicate identity) persist in `inbox.validation` and gate accounting delivery; rules and the reviewed fixture corpus (`packages/documents/src/test/corpus`, gated by `thresholds.json`) are in `docs/document-intake.md#validation`
+- **Exception workflow:** re-extract, rerun questions, retry delivery and field corrections each carry the processing revision the user saw (one transition per revision); corrections keep the reading (`inbox.extraction_original`, audited `invoice_corrections`), re-run validation, and a posted bill is kept or updated in place, never posted twice. See `docs/delivery.md#corrections-reprocessing-and-retries` (`packages/jobs/src/exceptions.ts`)
 - **Integrations:** self-hosted Nango on hp-slice for Xero/QuickBooks (auth + proxy only, so bill adapters live in `packages/jobs`; see `docs/accounting-integrations.md`), Polar (billing), API/MCP/webhooks
 - **Outbound to customer URLs:** webhooks send only through the egress guard `packages/jobs/src/egress.ts` (resolve, refuse private/metadata addresses, connect to the pinned address, bounded); never `fetch` a customer-supplied URL. Management and semantics: `docs/delivery.md#webhooks`
 
@@ -99,7 +100,7 @@ TypeSafe, Nango and Polar values are documented in `docs/development.md`. Real
 `migrations/`. Applied state is recorded in `drizzle.__drizzle_migrations`. Member tables include
 `users`, `teams`, `users_on_team`, `user_questions`, `inbox` (with extraction, judgments, intake
 lifecycle, supplier and accounting-delivery columns), `suppliers`, `supplier_events`,
-`inbox_redeliveries` and `workflow_jobs`. Bank and transaction tables are
+`inbox_redeliveries`, `invoice_corrections` and `workflow_jobs`. Bank and transaction tables are
 unused but still defined in the schema; `inbox` keeps the accepted document, its source reference and financial fields.
 
 After `drizzle-kit generate`, set the new `_journal.json` entry's `when` above the previous

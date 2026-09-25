@@ -72,6 +72,22 @@ export const PostAccountingDraftPayload = Schema.Struct({
 });
 export type PostAccountingDraftPayload = typeof PostAccountingDraftPayload.Type;
 
+export const RerunJudgmentsPayload = Schema.Struct({
+  invoiceId: Schema.String,
+  teamId: Schema.String,
+  /** The invoice revision the rerun was requested for. */
+  revision: Schema.Number,
+});
+export type RerunJudgmentsPayload = typeof RerunJudgmentsPayload.Type;
+
+export const UpdateAccountingBillPayload = Schema.Struct({
+  correctionId: Schema.String,
+  invoiceId: Schema.String,
+  teamId: Schema.String,
+});
+export type UpdateAccountingBillPayload =
+  typeof UpdateAccountingBillPayload.Type;
+
 export const PurgeDeletedDataPayload = Schema.Struct({
   deletionId: Schema.String,
 });
@@ -121,6 +137,14 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("post-accounting-draft"),
     payload: PostAccountingDraftPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("rerun-judgments"),
+    payload: RerunJudgmentsPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("update-accounting-bill"),
+    payload: UpdateAccountingBillPayload,
   }),
   Schema.Struct({
     name: Schema.Literal("purge-deleted-data"),

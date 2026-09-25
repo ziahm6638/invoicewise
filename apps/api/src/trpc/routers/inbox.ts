@@ -1,26 +1,100 @@
 import {
+  bulkInvoiceActionSchema,
+  correctInboxSchema,
   deleteInboxSchema,
   getInboxByIdSchema,
   getInboxSchema,
+  invoiceRevisionSchema,
   retryInboxSchema,
   updateInboxSchema,
 } from "@api/schemas/inbox";
 import { createTRPCRouter, workspaceProcedure } from "@api/trpc/init";
+import type { Database } from "@invoicewise/db/client";
 import {
+  type TeamRole,
   deleteInbox,
   getInbox,
   getInboxById,
   getInvoiceAccountingStatus,
   getInvoiceDeliveryStatus,
+  getInvoiceOriginalExtraction,
+  getLatestBillUpdate,
+  listInvoiceCorrections,
   updateInbox,
 } from "@invoicewise/db/queries";
 import { signedUrl } from "@invoicewise/db/storage";
+import { providerBillUrl } from "@invoicewise/jobs/accounting";
 import { retryInvoiceDelivery } from "@invoicewise/jobs/delivery";
+import {
+  InvoiceActionError,
+  correctInvoice,
+  requestQuestionRerun,
+} from "@invoicewise/jobs/exceptions";
 import {
   resolveTeamDocumentBinding,
   retryIntakeProcessing,
 } from "@invoicewise/jobs/intake";
 import { TRPCError } from "@trpc/server";
+
+const ACTION_ERROR_CODE = {
+  not_found: "NOT_FOUND",
+  conflict: "CONFLICT",
+  invalid: "BAD_REQUEST",
+  forbidden: "FORBIDDEN",
+} as const;
+
+/** Refused invoice actions reach the dashboard as typed tRPC errors. */
+const asTRPCError = (error: unknown) =>
+  error instanceof InvoiceActionError
+    ? new TRPCError({
+        code: ACTION_ERROR_CODE[error.code],
+        message: error.message,
+      })
+    : error;
+
+const reextract = async (
+  db: Database,
+  input: { teamId: string; id: string; revision?: number },
+) => {
+  const result = await retryIntakeProcessing(db, {
+    teamId: input.teamId,
+    inboxId: input.id,
+    expectedRevision: input.revision,
+  }).catch((error) => {
+    throw asTRPCError(error);
+  });
+  if (!result) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+  }
+  return result;
+};
+
+const rerunQuestions = (
+  db: Database,
+  input: { teamId: string; id: string; revision: number },
+) =>
+  requestQuestionRerun(db, {
+    invoiceId: input.id,
+    teamId: input.teamId,
+    expectedRevision: input.revision,
+  }).catch((error) => {
+    throw asTRPCError(error);
+  });
+
+const retryDelivery = async (
+  db: Database,
+  input: { teamId: string; id: string; teamRole: TeamRole | null },
+) => {
+  const result = await retryInvoiceDelivery(db, {
+    invoiceId: input.id,
+    teamId: input.teamId,
+    teamRole: input.teamRole,
+  });
+  if (!result) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Invoice not found" });
+  }
+  return result;
+};
 
 export const inboxRouter = createTRPCRouter({
   get: workspaceProcedure
@@ -77,8 +151,111 @@ export const inboxRouter = createTRPCRouter({
    */
   retry: workspaceProcedure
     .input(retryInboxSchema)
-    .mutation(async ({ ctx: { db, teamId }, input }) => {
-      return retryIntakeProcessing(db, { teamId: teamId!, inboxId: input.id });
+    .mutation(async ({ ctx: { db, teamId }, input }) =>
+      reextract(db, {
+        teamId: teamId!,
+        id: input.id,
+        revision: input.revision,
+      }),
+    ),
+
+  /**
+   * Corrects extracted fields of the revision the user saw; see
+   * `correctInvoice` for validation, history and what happens to the bill.
+   */
+  correct: workspaceProcedure
+    .input(correctInboxSchema)
+    .mutation(async ({ ctx: { db, teamId, teamRole, session }, input }) =>
+      correctInvoice(db, {
+        invoiceId: input.id,
+        teamId: teamId!,
+        actorId: session.user.id,
+        teamRole: teamRole ?? null,
+        expectedRevision: input.revision,
+        reason: input.reason,
+        changes: input.changes,
+        accountingOutcome: input.accountingOutcome,
+      }).catch((error) => {
+        throw asTRPCError(error);
+      }),
+    ),
+
+  /** Answers the workspace's questions again for the revision the user saw. */
+  rerunQuestions: workspaceProcedure
+    .input(invoiceRevisionSchema)
+    .mutation(async ({ ctx: { db, teamId }, input }) =>
+      rerunQuestions(db, {
+        teamId: teamId!,
+        id: input.id,
+        revision: input.revision,
+      }),
+    ),
+
+  /**
+   * One action over the selected invoices. Each item runs on its own, at the
+   * revision the user saw, and reports its own outcome.
+   */
+  bulkAction: workspaceProcedure
+    .input(bulkInvoiceActionSchema)
+    .mutation(async ({ ctx: { db, teamId, teamRole }, input }) => {
+      const results = [];
+      for (const item of input.items) {
+        try {
+          if (input.action === "reextract") {
+            await reextract(db, { teamId: teamId!, ...item });
+          } else if (input.action === "rerun_questions") {
+            await rerunQuestions(db, { teamId: teamId!, ...item });
+          } else {
+            await retryDelivery(db, {
+              teamId: teamId!,
+              id: item.id,
+              teamRole: teamRole ?? null,
+            });
+          }
+          results.push({ id: item.id, ok: true as const, error: null });
+        } catch (error) {
+          results.push({
+            id: item.id,
+            ok: false as const,
+            error: error instanceof Error ? error.message : "The action failed",
+          });
+        }
+      }
+      return { action: input.action, results };
+    }),
+
+  /**
+   * The invoice's correction history, the reading it was corrected from and
+   * where its bill is in the accounting provider.
+   */
+  history: workspaceProcedure
+    .input(getInboxByIdSchema)
+    .query(async ({ ctx: { db, teamId }, input }) => {
+      const item = await getInboxById(db, { id: input.id, teamId: teamId! });
+      if (!item) return null;
+      const target = { invoiceId: item.id, teamId: teamId! };
+      const [corrections, original, accounting] = await Promise.all([
+        listInvoiceCorrections(db, target),
+        getInvoiceOriginalExtraction(db, target),
+        getInvoiceAccountingStatus(db, target),
+      ]);
+      return {
+        revision: item.processingRevision,
+        corrections,
+        original,
+        bill:
+          accounting?.provider && accounting.providerId
+            ? {
+                provider: accounting.provider,
+                providerId: accounting.providerId,
+                postedAt: accounting.postedAt,
+                url: providerBillUrl(
+                  accounting.provider,
+                  accounting.providerId,
+                ),
+              }
+            : null,
+      };
     }),
 
   /**
@@ -90,12 +267,13 @@ export const inboxRouter = createTRPCRouter({
     .query(async ({ ctx: { db, teamId }, input }) => {
       const item = await getInboxById(db, { id: input.id, teamId: teamId! });
       if (!item) return null;
-      const [webhooks, accounting] = await Promise.all([
+      const [webhooks, accounting, billUpdate] = await Promise.all([
         getInvoiceDeliveryStatus(db, { invoiceId: item.id, teamId: teamId! }),
         getInvoiceAccountingStatus(db, {
           invoiceId: item.id,
           teamId: teamId!,
         }),
+        getLatestBillUpdate(db, { invoiceId: item.id, teamId: teamId! }),
       ]);
       return {
         revision: item.processingRevision,
@@ -105,7 +283,20 @@ export const inboxRouter = createTRPCRouter({
             delivery.revision === item.processingRevision &&
             delivery.event !== "delivery.failed",
         ),
-        accounting,
+        accounting: accounting && {
+          ...accounting,
+          url:
+            accounting.provider && accounting.providerId
+              ? providerBillUrl(accounting.provider, accounting.providerId)
+              : null,
+        },
+        billUpdate: billUpdate && {
+          version: billUpdate.version,
+          status: billUpdate.updateStatus,
+          error: billUpdate.updateError,
+          retryable: billUpdate.updateRetryable,
+          updatedAt: billUpdate.updatedAt,
+        },
       };
     }),
 
@@ -116,20 +307,13 @@ export const inboxRouter = createTRPCRouter({
    */
   retryDelivery: workspaceProcedure
     .input(retryInboxSchema)
-    .mutation(async ({ ctx: { db, teamId, teamRole }, input }) => {
-      const result = await retryInvoiceDelivery(db, {
-        invoiceId: input.id,
+    .mutation(async ({ ctx: { db, teamId, teamRole }, input }) =>
+      retryDelivery(db, {
         teamId: teamId!,
+        id: input.id,
         teamRole: teamRole ?? null,
-      });
-      if (!result) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Invoice not found",
-        });
-      }
-      return result;
-    }),
+      }),
+    ),
 
   update: workspaceProcedure
     .input(updateInboxSchema)
