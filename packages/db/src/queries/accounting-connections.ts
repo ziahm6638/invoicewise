@@ -1,5 +1,5 @@
 import type { Database } from "@db/client";
-import { accountingConnections, inbox } from "@db/schema";
+import { accountingConnections, accountingPostClaims, inbox } from "@db/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
 
 export type AccountingProvider = "xero" | "quickbooks";
@@ -106,15 +106,56 @@ export async function getAccountingPostInvoice(
       filePath: inbox.filePath,
       contentType: inbox.contentType,
       extraction: inbox.extraction,
+      validation: inbox.validation,
       accountingProvider: inbox.accountingProvider,
       accountingPostStatus: inbox.accountingPostStatus,
       accountingProviderId: inbox.accountingProviderId,
       accountingIdempotencyKey: inbox.accountingIdempotencyKey,
+      accountingPostReleased: inbox.accountingPostReleased,
     })
     .from(inbox)
     .where(and(eq(inbox.id, input.invoiceId), eq(inbox.teamId, input.teamId)))
     .limit(1);
   return invoice;
+}
+
+/**
+ * Claims the right to post the bill for one document type and number. The insert is
+ * its own committed statement, so of two copies posting at once exactly one
+ * wins; returns the document holding the claim (possibly this one, when it
+ * is retrying its own post), or undefined when it was released meanwhile.
+ */
+export async function claimAccountingPost(
+  db: Database,
+  input: { teamId: string; identityKey: string; invoiceId: string },
+) {
+  await db.insert(accountingPostClaims).values(input).onConflictDoNothing();
+  const [claim] = await db
+    .select({ invoiceId: accountingPostClaims.invoiceId })
+    .from(accountingPostClaims)
+    .where(
+      and(
+        eq(accountingPostClaims.teamId, input.teamId),
+        eq(accountingPostClaims.identityKey, input.identityKey),
+      ),
+    )
+    .limit(1);
+  return claim?.invoiceId;
+}
+
+export async function releaseAccountingPostClaim(
+  db: Database,
+  input: { teamId: string; identityKey: string; invoiceId: string },
+) {
+  await db
+    .delete(accountingPostClaims)
+    .where(
+      and(
+        eq(accountingPostClaims.teamId, input.teamId),
+        eq(accountingPostClaims.identityKey, input.identityKey),
+        eq(accountingPostClaims.invoiceId, input.invoiceId),
+      ),
+    );
 }
 
 export async function recordAccountingPostSuccess(
@@ -143,6 +184,23 @@ export async function recordAccountingPostSuccess(
   return invoice;
 }
 
+/** A user's release of a post held for review; see `postAccountingDraft`. */
+export async function releaseAccountingPostForReview(
+  db: Database,
+  input: { invoiceId: string; teamId: string },
+) {
+  await db
+    .update(inbox)
+    .set({ accountingPostReleased: true })
+    .where(
+      and(
+        eq(inbox.id, input.invoiceId),
+        eq(inbox.teamId, input.teamId),
+        eq(inbox.accountingPostStatus, "needs_review"),
+      ),
+    );
+}
+
 export async function recordAccountingAlreadyPosted(
   db: Database,
   input: { invoiceId: string; teamId: string },
@@ -163,13 +221,14 @@ export async function recordAccountingPostFailure(
     provider: AccountingProvider;
     idempotencyKey: string;
     error: string;
+    status?: "failed" | "needs_review";
   },
 ) {
   const [invoice] = await db
     .update(inbox)
     .set({
       accountingProvider: input.provider,
-      accountingPostStatus: "failed",
+      accountingPostStatus: input.status ?? "failed",
       accountingIdempotencyKey: input.idempotencyKey,
       accountingPostError: input.error,
     })

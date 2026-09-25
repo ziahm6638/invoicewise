@@ -49,16 +49,43 @@ callback). The bill adapters read them from the connection.
 
 ## What each provider receives
 
+Only an invoice whose validation allows it (`validation.accounting.ready`) is
+posted: an invoice document (not a credit note) with supplier name, invoice
+number, invoice date, currency and gross total, whose totals reconcile and
+which is not a duplicate. Otherwise nothing is sent and the invoice's
+accounting status is `failed` with `Not sent to Xero: <reasons>` (or
+QuickBooks); see [Validation](document-intake.md#validation).
+
+**One document type and number, one bill.** Two documents of the same type
+with the same invoice number (ignoring spacing, punctuation and case) are
+never both posted automatically, whatever their suppliers were read as.
+Before calling the provider a post claims the type and number
+(`accounting_post_claims`, one row per workspace, taken by a single committed
+insert); only the holder posts, even when documents post at the same time.
+A document that loses the claim is not sent:
+
+- from the same supplier (same VAT number, or the same name when either has
+  no VAT number) it is marked a duplicate of the holder (`failed`);
+- from another supplier it is held with accounting status `needs_review`
+  (possible duplicate invoice number from a different supplier). Retrying it
+  (`POST /accounting/invoices/{id}/retry`) is the user's decision that it is
+  a separate invoice: it is then sent as its own bill, under its own claim
+  and idempotency key.
+
+The claim is kept after a successful post and released only when the
+provider refuses the bill for good, so a retry can take it.
+
 - **Xero**: an `ACCPAY` invoice in `DRAFT` (a bill awaiting approval, never
   approved or paid), contact by supplier name, line items, amounts exclusive
   of tax. The request carries
-  `Idempotency-Key: invoicewise:<invoice UUID>`, so a retried post returns the
-  original bill. The source document is then uploaded to the bill's
+  `Idempotency-Key: invoicewise:<hash of workspace, type and number>`, so a
+  retried post, or another copy of the same invoice, returns the original
+  bill. The source document is then uploaded to the bill's
   attachments by file name (a repeat replaces it rather than duplicating it).
 - **QuickBooks Online**: QuickBooks has no draft bill, so an open, unpaid
   `Bill`. The vendor is found by display name or created; lines post to the
-  first expense account; `requestid=invoicewise:<invoice UUID>` makes the
-  create idempotent. The document is uploaded as an `Attachable` linked to the
+  first expense account; `requestid=invoicewise:<hash of workspace, type and number>`
+  makes the create idempotent. The document is uploaded as an `Attachable` linked to the
   bill unless one already is.
 
 Both post the extracted line items only when every line has an amount and they
@@ -112,8 +139,11 @@ Xero and QuickBooks request shapes, idempotency and error handling) and
 `src/verify-accounting.ts`, which `bun run verify` runs against a loopback
 stub. It stores a workspace-bound connection, posts a Xero draft bill through
 the proxy with its attachment, refuses a duplicate, retries an ambiguous
-timeout with the same idempotency key and gets the original bill, then
-disconnects. Verification pins `NANGO_BASE_URL` to loopback, so it can never
+timeout with the same idempotency key and gets the original bill, refuses an
+invoice whose total does not reconcile without calling the provider, sends
+exactly one bill for copies of one invoice (processed out of order, posting
+concurrently, or read with and without the VAT number), holds another
+supplier's same-numbered invoice for review, then disconnects. Verification pins `NANGO_BASE_URL` to loopback, so it can never
 reach a real Nango.
 
 ## Sandbox proof

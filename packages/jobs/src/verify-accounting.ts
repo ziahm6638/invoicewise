@@ -5,8 +5,9 @@ import {
   getWorkflowJob,
   updateInboxWithProcessedData,
 } from "@invoicewise/db/queries";
-import { teams } from "@invoicewise/db/schema";
+import { inbox, teams } from "@invoicewise/db/schema";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
+import type { InvoiceExtraction } from "@invoicewise/documents";
 import { eq } from "drizzle-orm";
 import { Effect, Logger } from "effect";
 import {
@@ -15,7 +16,9 @@ import {
   disconnectAccountingConnection,
   enqueueAccountingPost,
   postAccountingDraft,
+  retryAccountingPost,
 } from "./accounting";
+import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
 
 const required = (name: string) => {
@@ -48,6 +51,7 @@ async function main() {
   // attachments stored on each bill by file name.
   const providerIds = new Map<string, string>();
   const attachments = new Map<string, Map<string, number>>();
+  // Provider calls per invoice number, whatever idempotency key they used.
   const billAttempts = new Map<string, number>();
   let workspaceId = "";
   let connected = true;
@@ -142,7 +146,10 @@ async function main() {
         };
         const [bill] = body.Invoices;
         const key = request.headers.get("nango-proxy-idempotency-key") ?? "";
-        billAttempts.set(key, (billAttempts.get(key) ?? 0) + 1);
+        const number = String(bill?.InvoiceNumber);
+        billAttempts.set(number, (billAttempts.get(number) ?? 0) + 1);
+        // Hold concurrent posts open together, as a slow provider would.
+        if (number === "CONCURRENT") await Bun.sleep(100);
         const contact = bill?.Contact as Record<string, unknown> | undefined;
         const lines = bill?.LineItems as Record<string, unknown>[] | undefined;
         if (
@@ -150,7 +157,9 @@ async function main() {
           !key.startsWith("invoicewise:") ||
           bill?.Type !== "ACCPAY" ||
           bill.Status !== "DRAFT" ||
-          contact?.Name !== "Acme Supplies Ltd" ||
+          !["Acme Supplies Ltd", "Northgate Timber Ltd"].includes(
+            String(contact?.Name),
+          ) ||
           bill.CurrencyCode !== "GBP" ||
           bill.LineAmountTypes !== "Exclusive" ||
           lines?.[0]?.UnitAmount !== 100
@@ -230,8 +239,8 @@ async function main() {
     });
     if (!connection) throw new Error("Unable to store accounting connection");
 
-    const createInvoice = async (invoiceNumber: string) => {
-      const path = [teamId!, "inbox", `${invoiceNumber}.pdf`];
+    const createDocument = async (fileName: string) => {
+      const path = [teamId!, "inbox", `${fileName}.pdf`];
       paths.push(path);
       await storage.upload({
         bucket: "vault",
@@ -243,12 +252,45 @@ async function main() {
         teamId: teamId!,
         displayName: "Acme Supplies Ltd",
         filePath: path,
-        fileName: `${invoiceNumber}.pdf`,
+        fileName: `${fileName}.pdf`,
         contentType: "application/pdf",
         size: 42,
         status: "pending",
       });
       if (!created) throw new Error("Unable to create verification invoice");
+      return created;
+    };
+    const extractionOf = (
+      invoiceNumber: string,
+      amounts: { netAmount: number; vatAmount: number; grossAmount: number } = {
+        netAmount: 100,
+        vatAmount: 20,
+        grossAmount: 120,
+      },
+    ) => ({
+      documentType: "invoice" as const,
+      supplierName: "Acme Supplies Ltd",
+      supplierVatNumber: "GB123456789",
+      invoiceNumber,
+      invoiceDate: "2026-09-22",
+      dueDate: "2026-10-22",
+      currency: "GBP",
+      ...amounts,
+      lineItems: [
+        {
+          description: "Materials",
+          quantity: 1,
+          unitPrice: 100,
+          total: 100,
+        },
+      ],
+    });
+    const createInvoice = async (
+      invoiceNumber: string,
+      amounts?: { netAmount: number; vatAmount: number; grossAmount: number },
+      fileName = invoiceNumber,
+    ) => {
+      const created = await createDocument(fileName);
       return updateInboxWithProcessedData(database.db, {
         id: created.id,
         displayName: "Acme Supplies Ltd",
@@ -257,27 +299,52 @@ async function main() {
         date: "2026-10-22",
         type: "invoice",
         status: "pending",
-        extraction: {
-          supplierName: "Acme Supplies Ltd",
-          supplierVatNumber: "GB123456789",
-          invoiceNumber,
-          invoiceDate: "2026-09-22",
-          dueDate: "2026-10-22",
-          currency: "GBP",
-          netAmount: 100,
-          vatAmount: 20,
-          grossAmount: 120,
-          lineItems: [
-            {
-              description: "Materials",
-              quantity: 1,
-              unitPrice: 100,
-              total: 100,
-            },
-          ],
-        },
+        extraction: extractionOf(invoiceNumber, amounts),
         judgments: [],
       });
+    };
+    // Saves a copy as the processing job does (validated against every other
+    // copy) and queues its accounting post.
+    const processCopy = async (
+      id: string,
+      invoiceNumber: string,
+      supplier: Partial<ReturnType<typeof extractionOf>> = {},
+    ) => {
+      await saveProcessedDocument(database.db, {
+        id,
+        teamId: teamId!,
+        displayName: "Acme Supplies Ltd",
+        type: "invoice",
+        status: "pending",
+        extraction: {
+          ...extractionOf(invoiceNumber),
+          ...supplier,
+        } as unknown as InvoiceExtraction,
+        judgments: [],
+      });
+      await enqueueAccountingPost(database.db, {
+        invoiceId: id,
+        teamId: teamId!,
+      });
+    };
+    const callsFor = (invoiceNumber: string) =>
+      billAttempts.get(invoiceNumber) ?? 0;
+    const statusOf = async (id: string) =>
+      (
+        await getInvoiceAccountingStatus(database.db, {
+          invoiceId: id,
+          teamId: teamId!,
+        })
+      )?.status;
+    const duplicateOfFor = async (id: string) => {
+      const [row] = await database.db
+        .select({ validation: inbox.validation })
+        .from(inbox)
+        .where(eq(inbox.id, id));
+      return (
+        (row?.validation as { identity?: { duplicateOf?: string | null } })
+          ?.identity?.duplicateOf ?? null
+      );
     };
 
     const postedInvoice = await createInvoice("POST-ONCE");
@@ -292,9 +359,7 @@ async function main() {
       invoiceId: postedInvoice.id,
       teamId,
     });
-    const callsBeforeDuplicate = billAttempts.get(
-      `invoicewise:${postedInvoice.id}`,
-    );
+    const callsBeforeDuplicate = callsFor("POST-ONCE");
     const duplicate = await Effect.runPromise(
       postAccountingDraft(
         database.db,
@@ -303,9 +368,7 @@ async function main() {
         process.env,
       ),
     );
-    const duplicateRefused =
-      callsBeforeDuplicate ===
-      billAttempts.get(`invoicewise:${postedInvoice.id}`);
+    const duplicateRefused = callsBeforeDuplicate === callsFor("POST-ONCE");
 
     const retryInvoice = await createInvoice("FAIL-RETRY");
     if (!retryInvoice) throw new Error("Unable to persist retry invoice");
@@ -336,6 +399,139 @@ async function main() {
       invoiceId: retryInvoice.id,
       teamId,
     });
+    // An invoice whose total does not reconcile is refused before the
+    // provider is called, with the reason recorded on the invoice.
+    const blockedInvoice = await createInvoice("BLOCKED-TOTAL", {
+      netAmount: 100,
+      vatAmount: 20,
+      grossAmount: 150,
+    });
+    if (!blockedInvoice) throw new Error("Unable to persist blocked invoice");
+    const blockedJob = await enqueueAccountingPost(database.db, {
+      invoiceId: blockedInvoice.id,
+      teamId,
+    });
+    if (!blockedJob) throw new Error("Blocked accounting post was not queued");
+    await runBatch();
+    const blockedStatus = await getInvoiceAccountingStatus(database.db, {
+      invoiceId: blockedInvoice.id,
+      teamId,
+    });
+    const blockedRun = await getWorkflowJob(database.db, {
+      id: blockedJob.job.id,
+      teamId,
+    });
+    const blockedCalls = callsFor("BLOCKED-TOTAL");
+
+    // Two copies of one invoice processed out of arrival order: the later
+    // copy is extracted first, then the original. The original is the one
+    // delivered; the later copy becomes its duplicate before either post runs.
+    const original = await createDocument("OUT-OF-ORDER-original");
+    const laterCopy = await createDocument("OUT-OF-ORDER-copy");
+    await processCopy(laterCopy.id, "OUT-OF-ORDER");
+    await processCopy(original.id, "OUT-OF-ORDER");
+    await runBatch();
+    const outOfOrder = {
+      calls: callsFor("OUT-OF-ORDER"),
+      status: [await statusOf(original.id), await statusOf(laterCopy.id)],
+      duplicateOf: [
+        await duplicateOfFor(original.id),
+        await duplicateOfFor(laterCopy.id),
+      ],
+    };
+    // A later copy already sent before the original was read: the original
+    // is never sent as a second bill.
+    const lateOriginal = await createDocument("SENT-FIRST-original");
+    const sentCopy = await createDocument("SENT-FIRST-copy");
+    await processCopy(sentCopy.id, "SENT-FIRST");
+    await runBatch();
+    await processCopy(lateOriginal.id, "SENT-FIRST");
+    await runBatch();
+    const sentFirst = {
+      calls: callsFor("SENT-FIRST"),
+      status: [await statusOf(lateOriginal.id), await statusOf(sentCopy.id)],
+    };
+    // Two copies, each valid on its own record, posting at the same time:
+    // exactly one wins the invoice's claim and reaches the provider; the
+    // other becomes its duplicate without a provider call.
+    const concurrentCopies = [
+      await createInvoice("CONCURRENT", undefined, "CONCURRENT-a"),
+      await createInvoice("CONCURRENT", undefined, "CONCURRENT-b"),
+    ].map((copy) => {
+      if (!copy) throw new Error("Unable to persist concurrent copy");
+      return copy.id;
+    });
+    await Promise.all(
+      concurrentCopies.map((invoiceId) =>
+        Effect.runPromise(
+          Effect.either(
+            postAccountingDraft(
+              database.db,
+              storage,
+              { invoiceId, teamId: teamId! },
+              process.env,
+            ),
+          ),
+        ),
+      ),
+    );
+    const concurrentStatus = await Promise.all(concurrentCopies.map(statusOf));
+    const winner = concurrentCopies[concurrentStatus.indexOf("posted")];
+    const loser = concurrentCopies.find((id) => id !== winner);
+    const concurrent = {
+      calls: callsFor("CONCURRENT"),
+      status: [...concurrentStatus].sort(),
+      loserDuplicateOfWinner:
+        winner !== undefined &&
+        loser !== undefined &&
+        (await duplicateOfFor(loser)) === winner,
+    };
+
+    // One copy read with the supplier's VAT number is sent; a copy of the
+    // same invoice read with only the supplier's name, processed later, is
+    // its duplicate and is never sent.
+    const nameOnlyOriginal = await createDocument("VAT-NAME-original");
+    const vatCopy = await createDocument("VAT-NAME-copy");
+    await processCopy(vatCopy.id, "VAT-NAME");
+    await runBatch();
+    await processCopy(nameOnlyOriginal.id, "VAT-NAME", {
+      supplierVatNumber: null as unknown as string,
+    });
+    await runBatch();
+    const vatAndName = {
+      calls: callsFor("VAT-NAME"),
+      status: [await statusOf(nameOnlyOriginal.id), await statusOf(vatCopy.id)],
+      duplicateOf: await duplicateOfFor(nameOnlyOriginal.id),
+    };
+    // Another supplier's invoice with a number already sent is never posted
+    // automatically: it is held for review until a user retries it.
+    const acmeNumber = await createDocument("SAME-NUMBER-acme");
+    const otherNumber = await createDocument("SAME-NUMBER-other");
+    await processCopy(acmeNumber.id, "SAME-NUMBER");
+    await runBatch();
+    await processCopy(otherNumber.id, "SAME-NUMBER", {
+      supplierName: "Northgate Timber Ltd",
+      supplierVatNumber: "GB987654321",
+    });
+    await runBatch();
+    const held = {
+      calls: callsFor("SAME-NUMBER"),
+      status: await statusOf(otherNumber.id),
+      duplicateOf: await duplicateOfFor(otherNumber.id),
+    };
+    await retryAccountingPost(database.db, {
+      invoiceId: otherNumber.id,
+      teamId,
+    });
+    await runBatch();
+    const differentSupplier = {
+      held,
+      released: {
+        calls: callsFor("SAME-NUMBER"),
+        status: [await statusOf(acmeNumber.id), await statusOf(otherNumber.id)],
+      },
+    };
+
     const disconnected = await disconnectAccountingConnection(database.db, {
       teamId,
       provider: "xero",
@@ -350,15 +546,48 @@ async function main() {
       retriedJob?.status !== "succeeded" ||
       retriedJob.attempts !== 2 ||
       retriedStatus?.status !== "posted" ||
+      blockedStatus?.status !== "failed" ||
+      !blockedStatus.lastError?.startsWith("Not sent to Xero:") ||
+      blockedRun?.status !== "succeeded" ||
+      blockedCalls !== 0 ||
       retriedStatus.providerId !==
-        providerIds.get(`invoicewise:${retryInvoice.id}`) ||
-      providerIds.size !== 2 ||
+        providerIds.get(retriedStatus.idempotencyKey ?? "") ||
+      !Bun.deepEquals(outOfOrder, {
+        calls: 1,
+        status: ["posted", "failed"],
+        duplicateOf: [null, original.id],
+      }) ||
+      !Bun.deepEquals(sentFirst, { calls: 1, status: ["failed", "posted"] }) ||
+      !Bun.deepEquals(concurrent, {
+        calls: 1,
+        status: ["failed", "posted"],
+        loserDuplicateOfWinner: true,
+      }) ||
+      !Bun.deepEquals(vatAndName, {
+        calls: 1,
+        status: ["failed", "posted"],
+        duplicateOf: vatCopy.id,
+      }) ||
+      !Bun.deepEquals(differentSupplier, {
+        held: { calls: 1, status: "needs_review", duplicateOf: null },
+        released: { calls: 2, status: ["posted", "posted"] },
+      }) ||
+      providerIds.size !== 8 ||
       [...attachments.values()].some((files) => files.size !== 1) ||
       connected ||
       !disconnected
     ) {
       throw new Error(
-        "Accounting verification did not reach the expected state",
+        `Accounting verification did not reach the expected state: ${JSON.stringify(
+          {
+            outOfOrder,
+            sentFirst,
+            concurrent,
+            vatAndName,
+            differentSupplier,
+            bills: providerIds.size,
+          },
+        )}`,
       );
     }
 
@@ -377,6 +606,18 @@ async function main() {
             attached:
               attachments.get(postedStatus.providerId ?? "")?.size === 1,
             duplicateRefused,
+          },
+          blocked: {
+            providerCalls: blockedCalls,
+            status: blockedStatus.status,
+            reason: blockedStatus.lastError,
+          },
+          copies: {
+            outOfOrder,
+            sentFirst,
+            concurrent,
+            vatAndName,
+            differentSupplier,
           },
           retry: {
             failedWith: failedStatus.lastError,

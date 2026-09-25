@@ -4,6 +4,7 @@ import {
   linesFromPlainText,
   runsFromTesseractTsv,
 } from "../layout";
+import { lineItem } from "../test/oracle";
 import {
   accountNumberCandidates,
   addressCandidates,
@@ -162,13 +163,20 @@ describe("line items", () => {
       ),
     );
     expect(rows.map((row) => row.value)).toEqual([
-      { description: "Site survey", quantity: 3, unitPrice: 60, total: 180 },
-      {
+      lineItem({
+        description: "Site survey",
+        quantity: 3,
+        unitPrice: 60,
+        taxRate: 20,
+        total: 180,
+      }),
+      lineItem({
         description: "Design work including two revision rounds",
         quantity: 10.5,
         unitPrice: 80,
+        taxRate: 20,
         total: 840,
-      },
+      }),
     ]);
   });
 
@@ -184,18 +192,20 @@ describe("line items", () => {
       ),
     );
     expect(rows.map((row) => row.value)).toEqual([
-      {
+      lineItem({
         description: "Boiler service and safety inspection",
         quantity: 1,
         unitPrice: 180,
+        taxRate: 20,
         total: 180,
-      },
-      {
+      }),
+      lineItem({
         description: "Replacement thermostatic radiator valve",
         quantity: 4,
         unitPrice: 35,
+        taxRate: 20,
         total: 140,
-      },
+      }),
     ]);
   });
 
@@ -210,12 +220,12 @@ describe("line items", () => {
       ),
     );
     expect(rows.map((row) => row.value)).toEqual([
-      {
+      lineItem({
         description: "Printer paper A4 box",
         quantity: 4,
         unitPrice: 12.5,
         total: 50,
-      },
+      }),
     ]);
   });
 });
