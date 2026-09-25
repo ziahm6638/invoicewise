@@ -73,7 +73,8 @@ the **Activity** section of the invoice page trace one invoice from receipt to
 every destination, oldest first. Each entry has a time, stage (`receipt`,
 `extraction`, `judgments`, `matching`, `correction`, `delivery`, `accounting`,
 `action`),
-a title, a status (`ok`, `pending`, `failed`, `refused`, `info`), the reason in
+a title, a status (`ok`, `pending`, `review`, `failed`, `refused`, `info`;
+`review` is an open hold waiting for an owner or admin), the reason in
 plain words when it failed or is waiting, who acted, and `refs`: the
 correlation identifiers that tie it to the rest of the system (the received
 message's Message-ID, the queue job and its attempts, the processing

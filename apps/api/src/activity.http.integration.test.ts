@@ -985,6 +985,29 @@ suite("invoice activity and operator recovery over real HTTP", () => {
       })
       .returning();
 
+    // The open hold on the current revision waits for a person, so the
+    // customer's trace marks it as needing review, not as work in progress.
+    const heldView = await trpc(owner.cookie, "inbox.activity", {
+      id: invoiceId,
+    });
+    const holds = (heldView.data.entries as Json[]).filter((entry) =>
+      String(entry.id).startsWith("decision:"),
+    );
+    expect(holds).toHaveLength(1);
+    expect(holds[0]).toMatchObject({
+      stage: "delivery",
+      status: "review",
+      title: expect.stringContaining("Held by the delivery rules"),
+      reason: expect.stringContaining(
+        "correct or re-extract the invoice, or dismiss it",
+      ),
+    });
+    expect(
+      (heldView.data.entries as Json[]).some(
+        (entry) => entry.status === "pending",
+      ),
+    ).toBe(false);
+
     const body = { purpose: "incident", reason: "Webhook endpoint recovered" };
     const retried = await operator(`/ops/jobs/${post!.id}/retry`, {
       method: "POST",
