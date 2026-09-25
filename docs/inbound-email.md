@@ -158,10 +158,9 @@ Email lists the recent messages with their status and reasons.
   first `Authentication-Results` and the first `ARC-Authentication-Results:
   i=1` after it count, each with authserv-id `mx.cloudflare.net`, and both
   must be present and show the pass (Cloudflare adds both on every message).
-  Cloudflare
-  prepends its block above everything the sender supplied, so a sender's own
-  `mx.cloudflare.net` claim always comes after Cloudflare's and is ignored;
-  without the pass the message is ordinary mail.
+  Cloudflare prepends its block above everything the sender supplied, so a
+  sender's own `mx.cloudflare.net` claim always comes after Cloudflare's and
+  is ignored; without the pass the message is ordinary mail.
 - **Unreadable MIME**: `failed` at once ("This message could not be read as
   email."), not retried.
 - **Transient intake failure** (storage, parser capacity): the job retries; on
@@ -304,7 +303,8 @@ Settings → Email once to provision the address, then read it with
 
    So Cloudflare's `Received` is the topmost header and its two result
    headers follow it; `isGoogleSigned` trusts exactly those (the first of each
-   after that `Received`) and requires both to show the pass. The unit and integration tests use this layout.
+   after that `Received`) and requires both to show the pass. The unit and
+   integration tests use this layout.
 
 ## Tests
 
