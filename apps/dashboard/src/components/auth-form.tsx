@@ -1,5 +1,6 @@
 "use client";
 
+import { TwoFactorChallenge } from "@/components/two-factor-challenge";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@invoicewise/ui/button";
 import { Input } from "@invoicewise/ui/input";
@@ -14,6 +15,7 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
   const [message, setMessage] = useState<string>();
   const [pending, setPending] = useState(false);
   const [unverifiedEmail, setUnverifiedEmail] = useState<string>();
+  const [secondFactor, setSecondFactor] = useState(false);
   const isSignUp = mode === "sign-up";
 
   const rawReturnTo = searchParams.get("return_to");
@@ -44,7 +46,10 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
     setPending(false);
 
     if (result.error) {
-      const failure = result.error.message ?? "Authentication failed";
+      const failure =
+        result.error.status === 429
+          ? "Too many attempts. Wait a moment and try again."
+          : (result.error.message ?? "Authentication failed");
       setError(failure);
       // A blocked sign-in is the moment a lost verification link matters, so
       // offer the retry here instead of leaving the account stranded.
@@ -56,6 +61,17 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
 
     if (isSignUp) {
       setMessage("Check your email to verify your account.");
+      return;
+    }
+
+    // The password was right, but the account needs its second factor before
+    // a session is issued.
+    if (
+      result.data &&
+      "twoFactorRedirect" in result.data &&
+      result.data.twoFactorRedirect
+    ) {
+      setSecondFactor(true);
       return;
     }
 
@@ -80,6 +96,15 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
 
     setMessage(`Verification sent to ${unverifiedEmail}.`);
     setUnverifiedEmail(undefined);
+  }
+
+  if (secondFactor) {
+    return (
+      <TwoFactorChallenge
+        onVerified={() => window.location.assign(returnTo)}
+        onCancel={() => setSecondFactor(false)}
+      />
+    );
   }
 
   return (

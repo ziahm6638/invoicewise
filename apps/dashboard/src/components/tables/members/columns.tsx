@@ -16,6 +16,7 @@ import {
   AvatarFallback,
   AvatarImageNext,
 } from "@invoicewise/ui/avatar";
+import { Badge } from "@invoicewise/ui/badge";
 import { Button } from "@invoicewise/ui/button";
 import {
   DropdownMenu,
@@ -83,6 +84,14 @@ export const columns: ColumnDef<TeamMember>[] = [
                 {row.original.user?.email}
               </span>
             </div>
+            {typeof row.original.user?.twoFactorEnabled === "boolean" && (
+              <Badge
+                variant={row.original.user.twoFactorEnabled ? "tag" : "outline"}
+                title="Two-factor authentication"
+              >
+                {row.original.user.twoFactorEnabled ? "2FA on" : "2FA off"}
+              </Badge>
+            )}
           </div>
         </div>
       );

@@ -13,6 +13,7 @@ export async function getTeamMembersByTeamId(db: Database, teamId: string) {
         fullName: users.fullName,
         avatarUrl: users.avatarUrl,
         email: users.email,
+        twoFactorEnabled: users.twoFactorEnabled,
       },
     })
     .from(usersOnTeam)

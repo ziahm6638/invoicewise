@@ -52,7 +52,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Runtime:** Bun `1.3.13` (pinned in `packageManager`, CI and docs)
 - **Framework:** Next.js 15 (dashboard, website), Hono + Effect (API)
 - **Database:** Postgres 17 with pgvector, accessed with Drizzle; local services from `docker-compose.yml`
-- **Auth:** Better Auth (users, sessions, memberships, invitations) in the primary database
+- **Auth:** Better Auth (users, sessions, memberships, invitations, TOTP second factor, DB-backed rate limits) in the primary database; production boot policy in `apps/api/src/auth-policy.ts`, flows in `docs/development.md#account-security`
 - **Background jobs:** Postgres-backed Effect workflow queue (`packages/jobs`)
 - **Storage:** private local filesystem or S3-compatible (MinIO locally, R2 in production)
 - **Email:** transactional mail via Purelymail SMTP (nodemailer); **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)

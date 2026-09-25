@@ -76,9 +76,24 @@ export const teamRouter = createTRPCRouter({
       });
     }),
 
-  members: workspaceProcedure.query(async ({ ctx: { db, teamId } }) => {
-    return getTeamMembersByTeamId(db, teamId!);
-  }),
+  members: workspaceProcedure.query(
+    async ({ ctx: { db, teamId, teamRole } }) => {
+      const members = await getTeamMembersByTeamId(db, teamId!);
+      // Account-security state is shown to workspace owners only; everyone
+      // else receives `null` rather than another member's second-factor status.
+      const showSecurityState = teamRole === "owner";
+
+      return members.map((member) => ({
+        ...member,
+        user: member.user && {
+          ...member.user,
+          twoFactorEnabled: showSecurityState
+            ? member.user.twoFactorEnabled
+            : null,
+        },
+      }));
+    },
+  ),
 
   list: protectedProcedure.query(async ({ ctx: { db, session } }) => {
     const teams = await getTeamsByUserId(db, session.user.id);
