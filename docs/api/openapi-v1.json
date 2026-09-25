@@ -1,0 +1,3920 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "InvoiceWise API",
+    "version": "1.0.0",
+    "description": "Versioned InvoiceWise API. Authenticate with an API key as a bearer token. Errors are `{\"error\":{\"code\",\"message\"}}`. Guide: https://github.com/ziahm6638/invoicewise/blob/main/docs/api.md"
+  },
+  "paths": {
+    "/v1/invoices": {
+      "post": {
+        "tags": ["invoices"],
+        "operationId": "invoices.submit",
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "description": "Optional client key (1-255 visible ASCII characters). Repeating a request with the same key and bytes returns the same invoice; the same key with different bytes is refused with 409 `idempotency_key_reused`."
+            },
+            "required": false,
+            "description": "Optional client key (1-255 visible ASCII characters). Repeating a request with the same key and bytes returns the same invoice; the same key with different bytes is refused with 409 `idempotency_key_reused`."
+          }
+        ],
+        "security": [],
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "status",
+                    "revision",
+                    "deduplicated",
+                    "fileName",
+                    "contentType",
+                    "size",
+                    "sha256",
+                    "links"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["processing", "processed", "failed"],
+                      "description": "`processing` while the document is being read; `processed` once it was read (see `validation` and `delivery` for what followed); `failed` when reading failed (see `processingError`, and re-extract)."
+                    },
+                    "revision": {
+                      "$ref": "#/components/schemas/Int"
+                    },
+                    "deduplicated": {
+                      "type": "boolean",
+                      "description": "True when this content (or this idempotency key) was already accepted: the existing invoice is returned and nothing is processed or delivered again."
+                    },
+                    "fileName": {
+                      "type": "string"
+                    },
+                    "contentType": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "$ref": "#/components/schemas/Int"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "links": {
+                      "type": "object",
+                      "required": ["invoice"],
+                      "properties": {
+                        "invoice": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conflict"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "PayloadTooLarge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadTooLarge"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailable"
+                }
+              }
+            }
+          }
+        },
+        "description": "Accepts one document as multipart/form-data (`file`) and queues it for processing. Validation, storage and processing are the dashboard's own intake. Poll `GET /v1/invoices/{id}` until `status` is no longer `processing`.",
+        "summary": "Submit a document",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      },
+      "get": {
+        "tags": ["invoices"],
+        "operationId": "invoices.list",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["processing", "processed", "failed"]
+            },
+            "required": false
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "needs_attention",
+                "processing",
+                "failed",
+                "invalid",
+                "needs_review",
+                "delivering",
+                "delivery_failed",
+                "delivered",
+                "corrected"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string at most 200 character(s) long",
+              "title": "maxLength(200)",
+              "maxLength": 200
+            },
+            "required": false,
+            "description": "a string at most 200 character(s) long"
+          },
+          {
+            "name": "supplierId",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": false
+          },
+          {
+            "name": "createdFrom",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          {
+            "name": "createdTo",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["desc", "asc"],
+              "description": "By creation time; newest first by default."
+            },
+            "required": false,
+            "description": "By creation time; newest first by default."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string at most 512 character(s) long",
+              "title": "maxLength(512)",
+              "maxLength": 512
+            },
+            "required": false,
+            "description": "a string at most 512 character(s) long"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a number between 1 and 100",
+              "title": "between(1, 100)"
+            },
+            "required": false,
+            "description": "a number between 1 and 100"
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["data", "hasMore", "nextCursor"],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "revision",
+                          "status",
+                          "createdAt",
+                          "document",
+                          "supplierId",
+                          "supplierName",
+                          "invoiceNumber",
+                          "invoiceDate",
+                          "dueDate",
+                          "currency",
+                          "amount",
+                          "processingError",
+                          "corrected",
+                          "extraction",
+                          "validation",
+                          "supplierChecks",
+                          "judgments",
+                          "questionRerun",
+                          "delivery",
+                          "accounting"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "description": "Processing revision. It grows on every re-extraction and correction; send it back with an action.",
+                            "title": "int"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["processing", "processed", "failed"],
+                            "description": "`processing` while the document is being read; `processed` once it was read (see `validation` and `delivery` for what followed); `failed` when reading failed (see `processingError`, and re-extract)."
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "document": {
+                            "type": "object",
+                            "required": [
+                              "fileName",
+                              "displayName",
+                              "contentType",
+                              "size",
+                              "sha256",
+                              "source",
+                              "idempotencyKey"
+                            ],
+                            "properties": {
+                              "fileName": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "displayName": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "contentType": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "size": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "sha256": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "source": {
+                                "type": "string",
+                                "enum": ["api", "upload", "email", "mailbox"]
+                              },
+                              "idempotencyKey": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The `Idempotency-Key` it was submitted with, if any."
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "supplierId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "supplierName": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "invoiceNumber": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "invoiceDate": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "dueDate": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "currency": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "amount": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "The document's gross total as printed, in `currency`."
+                          },
+                          "processingError": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "corrected": {
+                            "type": "boolean"
+                          },
+                          "extraction": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "required": [],
+                                "properties": {},
+                                "additionalProperties": {
+                                  "$id": "/schemas/unknown",
+                                  "title": "unknown"
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "The canonical extraction record with per-value evidence; see docs/document-intake.md#persisted-result."
+                          },
+                          "validation": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "required": [],
+                                "properties": {},
+                                "additionalProperties": {
+                                  "$id": "/schemas/unknown",
+                                  "title": "unknown"
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Deterministic checks and accounting readiness; see docs/document-intake.md#validation."
+                          },
+                          "supplierChecks": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "required": [],
+                                "properties": {},
+                                "additionalProperties": {
+                                  "$id": "/schemas/unknown",
+                                  "title": "unknown"
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Supplier-history checks; see docs/document-intake.md#supplier-identity-and-history."
+                          },
+                          "judgments": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "questionKey",
+                                "questionVersion",
+                                "questionVersionId",
+                                "label",
+                                "question",
+                                "type",
+                                "status",
+                                "answer",
+                                "probability",
+                                "confidence",
+                                "certainty",
+                                "currency",
+                                "reason",
+                                "source",
+                                "evaluator",
+                                "answeredAt",
+                                "runId"
+                              ],
+                              "properties": {
+                                "questionKey": {
+                                  "type": "string",
+                                  "description": "The workspace question's stable key."
+                                },
+                                "questionVersion": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/components/schemas/Int"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "The revision of the question that was asked."
+                                },
+                                "questionVersionId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "label": {
+                                  "type": "string"
+                                },
+                                "question": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "type": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "boolean",
+                                        "choice",
+                                        "score",
+                                        "number"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "answered",
+                                    "unknown",
+                                    "not_applicable",
+                                    "failed"
+                                  ],
+                                  "description": "`unknown`, `not_applicable` and `failed` are never a No or a zero."
+                                },
+                                "answer": {
+                                  "anyOf": [
+                                    {
+                                      "anyOf": [
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "probability": {
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Boolean questions: the probability the answer is yes."
+                                },
+                                "confidence": {
+                                  "anyOf": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "certainty": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "currency": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Currency questions: the invoice's currency."
+                                },
+                                "reason": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "Why an answer is `unknown` or `not_applicable`, or why evaluation `failed`."
+                                },
+                                "source": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": ["default", "custom"]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "evaluator": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "required": ["model", "version"],
+                                      "properties": {
+                                        "model": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "version": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "answeredAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "runId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "description": "The deliberate rerun that recorded the answer; null for processing's answer."
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "questionRerun": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "required": ["status", "error"],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": ["queued", "failed"]
+                                  },
+                                  "error": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "delivery": {
+                            "type": "object",
+                            "required": [
+                              "state",
+                              "total",
+                              "succeeded",
+                              "pending",
+                              "failed",
+                              "cancelled"
+                            ],
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "none",
+                                  "pending",
+                                  "delivered",
+                                  "failed",
+                                  "cancelled"
+                                ]
+                              },
+                              "total": {
+                                "$ref": "#/components/schemas/Int"
+                              },
+                              "succeeded": {
+                                "$ref": "#/components/schemas/Int"
+                              },
+                              "pending": {
+                                "$ref": "#/components/schemas/Int"
+                              },
+                              "failed": {
+                                "$ref": "#/components/schemas/Int"
+                              },
+                              "cancelled": {
+                                "$ref": "#/components/schemas/Int"
+                              }
+                            },
+                            "additionalProperties": false,
+                            "description": "Outcome of the current revision's destinations (webhooks and accounting)."
+                          },
+                          "accounting": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "required": [
+                                  "provider",
+                                  "status",
+                                  "providerId"
+                                ],
+                                "properties": {
+                                  "provider": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "status": {
+                                    "type": "string"
+                                  },
+                                  "providerId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Pass as `cursor` with the same filters for the next page; null on the last page."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List invoices"
+      }
+    },
+    "/v1/invoices/{id}": {
+      "get": {
+        "tags": ["invoices"],
+        "operationId": "invoices.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "revision",
+                    "status",
+                    "createdAt",
+                    "document",
+                    "supplierId",
+                    "supplierName",
+                    "invoiceNumber",
+                    "invoiceDate",
+                    "dueDate",
+                    "currency",
+                    "amount",
+                    "processingError",
+                    "corrected",
+                    "extraction",
+                    "validation",
+                    "supplierChecks",
+                    "judgments",
+                    "questionRerun",
+                    "delivery",
+                    "accounting"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "description": "Processing revision. It grows on every re-extraction and correction; send it back with an action.",
+                      "title": "int"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["processing", "processed", "failed"],
+                      "description": "`processing` while the document is being read; `processed` once it was read (see `validation` and `delivery` for what followed); `failed` when reading failed (see `processingError`, and re-extract)."
+                    },
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "document": {
+                      "type": "object",
+                      "required": [
+                        "fileName",
+                        "displayName",
+                        "contentType",
+                        "size",
+                        "sha256",
+                        "source",
+                        "idempotencyKey"
+                      ],
+                      "properties": {
+                        "fileName": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "displayName": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "contentType": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "size": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "sha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": ["api", "upload", "email", "mailbox"]
+                        },
+                        "idempotencyKey": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "The `Idempotency-Key` it was submitted with, if any."
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "supplierId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "supplierName": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "invoiceNumber": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "invoiceDate": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "dueDate": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "currency": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "amount": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The document's gross total as printed, in `currency`."
+                    },
+                    "processingError": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "corrected": {
+                      "type": "boolean"
+                    },
+                    "extraction": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [],
+                          "properties": {},
+                          "additionalProperties": {
+                            "$id": "/schemas/unknown",
+                            "title": "unknown"
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The canonical extraction record with per-value evidence; see docs/document-intake.md#persisted-result."
+                    },
+                    "validation": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [],
+                          "properties": {},
+                          "additionalProperties": {
+                            "$id": "/schemas/unknown",
+                            "title": "unknown"
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Deterministic checks and accounting readiness; see docs/document-intake.md#validation."
+                    },
+                    "supplierChecks": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [],
+                          "properties": {},
+                          "additionalProperties": {
+                            "$id": "/schemas/unknown",
+                            "title": "unknown"
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Supplier-history checks; see docs/document-intake.md#supplier-identity-and-history."
+                    },
+                    "judgments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "questionKey",
+                          "questionVersion",
+                          "questionVersionId",
+                          "label",
+                          "question",
+                          "type",
+                          "status",
+                          "answer",
+                          "probability",
+                          "confidence",
+                          "certainty",
+                          "currency",
+                          "reason",
+                          "source",
+                          "evaluator",
+                          "answeredAt",
+                          "runId"
+                        ],
+                        "properties": {
+                          "questionKey": {
+                            "type": "string",
+                            "description": "The workspace question's stable key."
+                          },
+                          "questionVersion": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Int"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "The revision of the question that was asked."
+                          },
+                          "questionVersionId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "question": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["boolean", "choice", "score", "number"]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "answered",
+                              "unknown",
+                              "not_applicable",
+                              "failed"
+                            ],
+                            "description": "`unknown`, `not_applicable` and `failed` are never a No or a zero."
+                          },
+                          "answer": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "probability": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Boolean questions: the probability the answer is yes."
+                          },
+                          "confidence": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "certainty": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "currency": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Currency questions: the invoice's currency."
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Why an answer is `unknown` or `not_applicable`, or why evaluation `failed`."
+                          },
+                          "source": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["default", "custom"]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "evaluator": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "required": ["model", "version"],
+                                "properties": {
+                                  "model": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "version": {
+                                    "type": "string"
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "answeredAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "runId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "The deliberate rerun that recorded the answer; null for processing's answer."
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "questionRerun": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": ["status", "error"],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["queued", "failed"]
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "delivery": {
+                      "type": "object",
+                      "required": [
+                        "state",
+                        "total",
+                        "succeeded",
+                        "pending",
+                        "failed",
+                        "cancelled"
+                      ],
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "none",
+                            "pending",
+                            "delivered",
+                            "failed",
+                            "cancelled"
+                          ]
+                        },
+                        "total": {
+                          "$ref": "#/components/schemas/Int"
+                        },
+                        "succeeded": {
+                          "$ref": "#/components/schemas/Int"
+                        },
+                        "pending": {
+                          "$ref": "#/components/schemas/Int"
+                        },
+                        "failed": {
+                          "$ref": "#/components/schemas/Int"
+                        },
+                        "cancelled": {
+                          "$ref": "#/components/schemas/Int"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "description": "Outcome of the current revision's destinations (webhooks and accounting)."
+                    },
+                    "accounting": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": ["provider", "status", "providerId"],
+                          "properties": {
+                            "provider": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "providerId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get an invoice and its processing status"
+      }
+    },
+    "/v1/invoices/{id}/judgments": {
+      "get": {
+        "tags": ["invoices"],
+        "operationId": "invoices.judgments",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["invoiceId", "revision", "judgments", "history"],
+                  "properties": {
+                    "invoiceId": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "$ref": "#/components/schemas/Int"
+                    },
+                    "judgments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "questionKey",
+                          "questionVersion",
+                          "questionVersionId",
+                          "label",
+                          "question",
+                          "type",
+                          "status",
+                          "answer",
+                          "probability",
+                          "confidence",
+                          "certainty",
+                          "currency",
+                          "reason",
+                          "source",
+                          "evaluator",
+                          "answeredAt",
+                          "runId"
+                        ],
+                        "properties": {
+                          "questionKey": {
+                            "type": "string",
+                            "description": "The workspace question's stable key."
+                          },
+                          "questionVersion": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Int"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "The revision of the question that was asked."
+                          },
+                          "questionVersionId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "question": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["boolean", "choice", "score", "number"]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "answered",
+                              "unknown",
+                              "not_applicable",
+                              "failed"
+                            ],
+                            "description": "`unknown`, `not_applicable` and `failed` are never a No or a zero."
+                          },
+                          "answer": {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "probability": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Boolean questions: the probability the answer is yes."
+                          },
+                          "confidence": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "certainty": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "currency": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Currency questions: the invoice's currency."
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Why an answer is `unknown` or `not_applicable`, or why evaluation `failed`."
+                          },
+                          "source": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["default", "custom"]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "evaluator": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "required": ["model", "version"],
+                                "properties": {
+                                  "model": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "version": {
+                                    "type": "string"
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "answeredAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "runId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "The deliberate rerun that recorded the answer; null for processing's answer."
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "history": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "runId",
+                          "questionKey",
+                          "questionVersion",
+                          "questionVersionId",
+                          "invoiceRevision",
+                          "recordedAt",
+                          "answer",
+                          "previous"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "runId": {
+                            "type": "string"
+                          },
+                          "questionKey": {
+                            "type": "string"
+                          },
+                          "questionVersion": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Int"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "questionVersionId": {
+                            "type": "string"
+                          },
+                          "invoiceRevision": {
+                            "$ref": "#/components/schemas/Int"
+                          },
+                          "recordedAt": {
+                            "type": "string"
+                          },
+                          "answer": {
+                            "type": "object",
+                            "required": [
+                              "questionKey",
+                              "questionVersion",
+                              "questionVersionId",
+                              "label",
+                              "question",
+                              "type",
+                              "status",
+                              "answer",
+                              "probability",
+                              "confidence",
+                              "certainty",
+                              "currency",
+                              "reason",
+                              "source",
+                              "evaluator",
+                              "answeredAt",
+                              "runId"
+                            ],
+                            "properties": {
+                              "questionKey": {
+                                "type": "string",
+                                "description": "The workspace question's stable key."
+                              },
+                              "questionVersion": {
+                                "anyOf": [
+                                  {
+                                    "$ref": "#/components/schemas/Int"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The revision of the question that was asked."
+                              },
+                              "questionVersionId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "question": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "type": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "boolean",
+                                      "choice",
+                                      "score",
+                                      "number"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "answered",
+                                  "unknown",
+                                  "not_applicable",
+                                  "failed"
+                                ],
+                                "description": "`unknown`, `not_applicable` and `failed` are never a No or a zero."
+                              },
+                              "answer": {
+                                "anyOf": [
+                                  {
+                                    "anyOf": [
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "string"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "probability": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Boolean questions: the probability the answer is yes."
+                              },
+                              "confidence": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "certainty": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "currency": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Currency questions: the invoice's currency."
+                              },
+                              "reason": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Why an answer is `unknown` or `not_applicable`, or why evaluation `failed`."
+                              },
+                              "source": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": ["default", "custom"]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "evaluator": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "required": ["model", "version"],
+                                    "properties": {
+                                      "model": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "version": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "answeredAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "runId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The deliberate rerun that recorded the answer; null for processing's answer."
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "previous": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "required": [
+                                  "questionKey",
+                                  "questionVersion",
+                                  "questionVersionId",
+                                  "label",
+                                  "question",
+                                  "type",
+                                  "status",
+                                  "answer",
+                                  "probability",
+                                  "confidence",
+                                  "certainty",
+                                  "currency",
+                                  "reason",
+                                  "source",
+                                  "evaluator",
+                                  "answeredAt",
+                                  "runId"
+                                ],
+                                "properties": {
+                                  "questionKey": {
+                                    "type": "string",
+                                    "description": "The workspace question's stable key."
+                                  },
+                                  "questionVersion": {
+                                    "anyOf": [
+                                      {
+                                        "$ref": "#/components/schemas/Int"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "The revision of the question that was asked."
+                                  },
+                                  "questionVersionId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "question": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "type": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "boolean",
+                                          "choice",
+                                          "score",
+                                          "number"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "answered",
+                                      "unknown",
+                                      "not_applicable",
+                                      "failed"
+                                    ],
+                                    "description": "`unknown`, `not_applicable` and `failed` are never a No or a zero."
+                                  },
+                                  "answer": {
+                                    "anyOf": [
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "type": "boolean"
+                                          },
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "string"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "probability": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "Boolean questions: the probability the answer is yes."
+                                  },
+                                  "confidence": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "certainty": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "currency": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "Currency questions: the invoice's currency."
+                                  },
+                                  "reason": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "Why an answer is `unknown` or `not_applicable`, or why evaluation `failed`."
+                                  },
+                                  "source": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["default", "custom"]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "evaluator": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "required": ["model", "version"],
+                                        "properties": {
+                                          "model": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "version": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "answeredAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "runId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "The deliberate rerun that recorded the answer; null for processing's answer."
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "description": "Answers recorded by deliberate reruns, oldest first."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get judgments with their rerun history"
+      }
+    },
+    "/v1/invoices/{id}/delivery": {
+      "get": {
+        "tags": ["invoices"],
+        "operationId": "invoices.delivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "invoiceId",
+                    "revision",
+                    "state",
+                    "webhooks",
+                    "accounting"
+                  ],
+                  "properties": {
+                    "invoiceId": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "$ref": "#/components/schemas/Int"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "pending",
+                        "delivered",
+                        "failed",
+                        "cancelled"
+                      ]
+                    },
+                    "webhooks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "endpointId",
+                          "endpointUrl",
+                          "event",
+                          "eventId",
+                          "revision",
+                          "status",
+                          "attempts",
+                          "lastError",
+                          "retryable",
+                          "deliveredAt",
+                          "createdAt"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "endpointId": {
+                            "type": "string"
+                          },
+                          "endpointUrl": {
+                            "type": "string"
+                          },
+                          "event": {
+                            "type": "string"
+                          },
+                          "eventId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "revision": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Int"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "attempts": {
+                            "$ref": "#/components/schemas/Int"
+                          },
+                          "lastError": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "retryable": {
+                            "anyOf": [
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deliveredAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "accounting": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "provider",
+                            "status",
+                            "providerId",
+                            "lastError",
+                            "retryable",
+                            "revision",
+                            "postedAt"
+                          ],
+                          "properties": {
+                            "provider": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "providerId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "lastError": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "retryable": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "revision": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/Int"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "postedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get webhook and accounting delivery"
+      }
+    },
+    "/v1/invoices/{id}/document": {
+      "get": {
+        "tags": ["invoices"],
+        "operationId": "invoices.document",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["url", "expiresAt", "fileName"],
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    },
+                    "fileName": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get a 60-second signed link to the document"
+      }
+    },
+    "/v1/invoices/{id}/reextract": {
+      "post": {
+        "tags": ["invoices"],
+        "operationId": "invoices.reextract",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id", "action", "revision", "deduplicated"],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": ["reextract", "rerun_questions"]
+                    },
+                    "revision": {
+                      "$ref": "#/components/schemas/Int"
+                    },
+                    "deduplicated": {
+                      "type": "boolean",
+                      "description": "True when the same action was already queued."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conflict"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Queues a new reading of the stored document for the revision you read. Concurrent requests share one job. Creates a new revision; a posted bill is never posted again.",
+        "summary": "Read the stored document again",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["revision"],
+                "properties": {
+                  "revision": {
+                    "$ref": "#/components/schemas/Int",
+                    "description": "The invoice `revision` you read. A different current revision is refused with 409 `conflict`.",
+                    "title": "nonNegative",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/v1/invoices/{id}/questions/rerun": {
+      "post": {
+        "tags": ["invoices"],
+        "operationId": "invoices.rerunQuestions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id", "action", "revision", "deduplicated"],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": ["reextract", "rerun_questions"]
+                    },
+                    "revision": {
+                      "$ref": "#/components/schemas/Int"
+                    },
+                    "deduplicated": {
+                      "type": "boolean",
+                      "description": "True when the same action was already queued."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conflict"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Changes only judgments: no new revision and no accounting post. Each recorded answer is announced once as `invoice.judgments.attached`.",
+        "summary": "Answer the workspace's questions again",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["revision"],
+                "properties": {
+                  "revision": {
+                    "$ref": "#/components/schemas/Int",
+                    "description": "The invoice `revision` you read. A different current revision is refused with 409 `conflict`.",
+                    "title": "nonNegative",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/v1/invoices/{id}/delivery/retry": {
+      "post": {
+        "tags": ["invoices"],
+        "operationId": "invoices.retryDelivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "revision",
+                    "started",
+                    "webhooks",
+                    "accounting",
+                    "billUpdate"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "$ref": "#/components/schemas/Int"
+                    },
+                    "started": {
+                      "type": "boolean",
+                      "description": "Whether anything was re-queued."
+                    },
+                    "webhooks": {
+                      "type": "object",
+                      "required": ["requeued", "skipped"],
+                      "properties": {
+                        "requeued": {
+                          "$ref": "#/components/schemas/Int"
+                        },
+                        "skipped": {
+                          "$ref": "#/components/schemas/Int"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "accounting": {
+                      "type": "string",
+                      "enum": [
+                        "requeued",
+                        "already_posted",
+                        "in_progress",
+                        "no_active_connection",
+                        "not_scheduled",
+                        "admin_required"
+                      ]
+                    },
+                    "billUpdate": {
+                      "type": "string",
+                      "enum": [
+                        "requeued",
+                        "in_progress",
+                        "not_needed",
+                        "no_active_connection",
+                        "admin_required"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFound"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conflict"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Re-drives the failed or cancelled destinations of the current revision with the same delivery rows and event ids, so nothing is delivered twice under a new id. Re-posting to accounting needs an owner or admin key and is otherwise reported as `admin_required`.",
+        "summary": "Retry failed delivery of the revision",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["revision"],
+                "properties": {
+                  "revision": {
+                    "$ref": "#/components/schemas/Int",
+                    "description": "The invoice `revision` you read. A different current revision is refused with 409 `conflict`.",
+                    "title": "nonNegative",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/v1/exports/invoices.csv": {
+      "get": {
+        "tags": ["exports"],
+        "operationId": "exports.invoices",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["processing", "processed", "failed"]
+            },
+            "required": false
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "needs_attention",
+                "processing",
+                "failed",
+                "invalid",
+                "needs_review",
+                "delivering",
+                "delivery_failed",
+                "delivered",
+                "corrected"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string at most 200 character(s) long",
+              "title": "maxLength(200)",
+              "maxLength": 200
+            },
+            "required": false,
+            "description": "a string at most 200 character(s) long"
+          },
+          {
+            "name": "supplierId",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": false
+          },
+          {
+            "name": "createdFrom",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          {
+            "name": "createdTo",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["desc", "asc"],
+              "description": "By creation time; newest first by default."
+            },
+            "required": false,
+            "description": "By creation time; newest first by default."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string at most 512 character(s) long",
+              "title": "maxLength(512)",
+              "maxLength": 512
+            },
+            "required": false,
+            "description": "a string at most 512 character(s) long"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a number between 1 and 1000",
+              "title": "between(1, 1000)"
+            },
+            "required": false,
+            "description": "a number between 1 and 1000"
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "a string",
+            "content": {
+              "text/csv; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "description": "One row per invoice with identifiers, revision, currency, amounts, validation, delivery and a `question:<key>` column per workspace question. When more rows follow, the response has an `X-Next-Cursor` header and a `Link: <...>; rel=\"next\"` header. Text that a spreadsheet would run as a formula is prefixed with `'`.",
+        "summary": "Export invoices as CSV, one page per call"
+      }
+    },
+    "/v1/exports/judgments.csv": {
+      "get": {
+        "tags": ["exports"],
+        "operationId": "exports.judgments",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["processing", "processed", "failed"]
+            },
+            "required": false
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "needs_attention",
+                "processing",
+                "failed",
+                "invalid",
+                "needs_review",
+                "delivering",
+                "delivery_failed",
+                "delivered",
+                "corrected"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string at most 200 character(s) long",
+              "title": "maxLength(200)",
+              "maxLength": 200
+            },
+            "required": false,
+            "description": "a string at most 200 character(s) long"
+          },
+          {
+            "name": "supplierId",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/UUID"
+            },
+            "required": false
+          },
+          {
+            "name": "createdFrom",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          {
+            "name": "createdTo",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "required": false,
+            "description": "a string matching the pattern ^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["desc", "asc"],
+              "description": "By creation time; newest first by default."
+            },
+            "required": false,
+            "description": "By creation time; newest first by default."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a string at most 512 character(s) long",
+              "title": "maxLength(512)",
+              "maxLength": 512
+            },
+            "required": false,
+            "description": "a string at most 512 character(s) long"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "a number between 1 and 1000",
+              "title": "between(1, 1000)"
+            },
+            "required": false,
+            "description": "a number between 1 and 1000"
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "a string",
+            "content": {
+              "text/csv; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid: `invalid_request`, `invalid_cursor`, `invalid_idempotency_key`, `malformed` or an intake refusal code.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Unauthorized"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Forbidden"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequests"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalError"
+                }
+              }
+            }
+          }
+        },
+        "description": "One row per current answer (`entry=current`) and per answer a rerun recorded (`entry=rerun`, with the answer it replaced), with the question revision and evaluator. Paged by invoice like the invoice export.",
+        "summary": "Export judgments and their history as CSV"
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Int": {
+        "type": "integer",
+        "description": "an integer",
+        "title": "int"
+      },
+      "BadRequest": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable, machine-readable reason. See docs/api.md#errors."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation. Do not parse it."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Unauthorized": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable, machine-readable reason. See docs/api.md#errors."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation. Do not parse it."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Forbidden": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable, machine-readable reason. See docs/api.md#errors."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation. Do not parse it."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "TooManyRequests": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable, machine-readable reason. See docs/api.md#errors."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation. Do not parse it."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "InternalError": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable, machine-readable reason. See docs/api.md#errors."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation. Do not parse it."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Conflict": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable, machine-readable reason. See docs/api.md#errors."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation. Do not parse it."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "PayloadTooLarge": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable, machine-readable reason. See docs/api.md#errors."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation. Do not parse it."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServiceUnavailable": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable, machine-readable reason. See docs/api.md#errors."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation. Do not parse it."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "UUID": {
+        "type": "string",
+        "description": "a Universally Unique Identifier",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+      },
+      "NotFound": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable, machine-readable reason. See docs/api.md#errors."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation. Do not parse it."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "apiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An InvoiceWise API key (`mid_...`) from Settings → Developer, or an OAuth access token."
+      }
+    }
+  },
+  "security": [
+    {
+      "apiKey": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "invoices"
+    },
+    {
+      "name": "exports"
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://api.invoicewise.uk",
+      "description": "Production"
+    }
+  ]
+}
