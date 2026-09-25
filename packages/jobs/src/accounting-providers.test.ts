@@ -3,13 +3,23 @@ import {
   BillRejectedError,
   type DraftBill,
   attachProviderDocument,
+  getXeroSetupOptions,
   isRetryable,
   postProviderBill,
   quickBooksRequestId,
+  readProviderOrganisation,
   updateProviderBill,
 } from "./accounting-providers";
-import { NangoRequestError, getNangoConfig } from "./nango";
+import {
+  type NangoCallEvent,
+  NangoRequestError,
+  getNangoConfig,
+  nangoProxy,
+  nangoRequest,
+  observeNangoCalls,
+} from "./nango";
 import { createQuickBooksFake } from "./quickbooks-fake";
+import { createXeroFake } from "./xero-fake";
 
 // A stand-in for self-hosted Nango: the connection lookup plus the proxy,
 // answering as Xero and QuickBooks would. It records every proxied call.
@@ -25,15 +35,17 @@ type Call = {
 
 let calls: Call[] = [];
 let connectionConfig: Record<string, unknown> = {};
-let bills = new Map<string, string>();
-let failNextBill = false;
+const xeroOrganisations = [
+  { id: "tenant-1", name: "Synthetic Demo Ltd", currencies: ["EUR"] },
+  { id: "tenant-2", name: "Second Synthetic Ltd" },
+];
+let xero = createXeroFake(xeroOrganisations);
 let quickBooks = createQuickBooksFake("9130", {
   name: "Synthetic Trading Ltd",
   country: "GB",
   homeCurrency: "GBP",
   multiCurrency: false,
 });
-let uploadStatus = 200;
 
 const stub = Bun.serve({
   port: 0,
@@ -71,41 +83,11 @@ const stub = Bun.serve({
     calls.push(call);
 
     // Xero
-    if (path === "/api.xro/2.0/Invoices") {
-      const key = request.headers.get("nango-proxy-idempotency-key")!;
-      const id = bills.get(key) ?? `xero-${bills.size + 1}`;
-      bills.set(key, id);
-      if (failNextBill) {
-        failNextBill = false;
-        return Response.json(
-          { error: { message: "Gateway timeout" } },
-          { status: 504 },
-        );
-      }
-      return Response.json({ Invoices: [{ InvoiceID: id }] });
-    }
-    // An update names the bill in the path and the body; it never creates.
-    const xeroUpdate = path.match(/^\/api\.xro\/2\.0\/Invoices\/([^/]+)$/);
-    if (xeroUpdate) {
-      const id = decodeURIComponent(xeroUpdate[1]!);
-      const [sent] = (call.json as { Invoices: { InvoiceID: string }[] })
-        .Invoices;
-      if (![...bills.values()].includes(id) || sent?.InvoiceID !== id) {
-        return Response.json(
-          { Message: "A validation exception occurred" },
-          { status: 400 },
-        );
-      }
-      return Response.json({ Invoices: [{ InvoiceID: id }] });
-    }
-    if (path.startsWith("/api.xro/2.0/Invoices/")) {
-      return uploadStatus === 200
-        ? Response.json({ Attachments: [{}] })
-        : Response.json(
-            { Message: "Attachment too large" },
-            { status: uploadStatus },
-          );
-    }
+    const xeroAnswer = await xero.handle(request, path, url, {
+      json: call.json as Record<string, unknown> | undefined,
+      bytes: call.bytes,
+    });
+    if (xeroAnswer) return xeroAnswer;
 
     // QuickBooks
     const quickBooksAnswer = await quickBooks.handle(request, path, url, {
@@ -128,15 +110,13 @@ afterAll(() => stub.stop(true));
 
 beforeEach(() => {
   calls = [];
-  bills = new Map();
-  failNextBill = false;
+  xero = createXeroFake(xeroOrganisations);
   quickBooks = createQuickBooksFake("9130", {
     name: "Synthetic Trading Ltd",
     country: "GB",
     homeCurrency: "GBP",
     multiCurrency: false,
   });
-  uploadStatus = 200;
 });
 
 const env = {
@@ -171,122 +151,408 @@ const attachment = {
   data: new TextEncoder().encode("%PDF-1.4 synthetic").buffer as ArrayBuffer,
 };
 
-const connection = { connectionId: "conn-1" };
-
 describe("Xero", () => {
   const config = getNangoConfig("xero", env);
+  const configured = {
+    connectionId: "conn-1",
+    organisationId: "tenant-1" as string | null,
+    settings: {
+      expenseAccountId: "429" as string | null,
+      taxCodeIds: [] as string[],
+    },
+  };
+  const post = (
+    draft: DraftBill = bill,
+    file: typeof attachment | null = attachment,
+    target: typeof configured = configured,
+  ) => postProviderBill("xero", config, target, draft, file);
+  const bills = (tenantId = "tenant-1") => xero.records(tenantId, "Invoices");
 
-  test("creates a DRAFT ACCPAY bill for the organisation and attaches the PDF", async () => {
+  beforeEach(() => {
     connectionConfig = { tenant_id: "tenant-1" };
-    const posted = await postProviderBill(
-      "xero",
-      config,
-      connection,
-      bill,
-      attachment,
-    );
-    expect(posted).toEqual({
-      providerId: "xero-1",
+  });
+
+  test("creates a DRAFT ACCPAY bill on the chosen account and tax rate for a new contact, and attaches once", async () => {
+    const posted = await post({
+      ...bill,
+      sourceUrl: "https://app.test/inbox?inboxId=i-1",
+    });
+    expect(posted).toMatchObject({
       entity: "bill",
       attached: true,
       attachmentError: null,
-      attachmentRetryable: false,
     });
-
-    const [create, upload] = calls;
-    expect(create!.headers.get("connection-id")).toBe("conn-1");
-    expect(create!.headers.get("provider-config-key")).toBe("xero");
-    expect(create!.headers.get("nango-proxy-xero-tenant-id")).toBe("tenant-1");
-    expect(create!.headers.get("nango-proxy-idempotency-key")).toBe(
-      bill.idempotencyKey,
-    );
-    expect(create!.json).toEqual({
-      Invoices: [
+    const [created] = bills();
+    expect(created).toMatchObject({
+      InvoiceID: posted.providerId,
+      Type: "ACCPAY",
+      Status: "DRAFT",
+      InvoiceNumber: "INV-42",
+      Date: "2026-09-22",
+      DueDate: "2026-10-22",
+      CurrencyCode: "GBP",
+      LineAmountTypes: "Exclusive",
+      LineItems: [
         {
-          Type: "ACCPAY",
-          Status: "DRAFT",
-          Contact: { Name: "O'Brien Supplies Ltd" },
-          InvoiceNumber: "INV-42",
-          Date: "2026-09-22",
-          DueDate: "2026-10-22",
-          CurrencyCode: "GBP",
-          LineAmountTypes: "Exclusive",
-          LineItems: [
-            { Description: "Materials", Quantity: 2, UnitAmount: 50 },
-            { Description: "Labour", Quantity: 1, UnitAmount: 50 },
-          ],
+          Description: "Materials",
+          Quantity: 2,
+          UnitAmount: 50,
+          AccountCode: "429",
+          TaxType: "INPUT2",
+        },
+        {
+          Description: "Labour",
+          Quantity: 1,
+          UnitAmount: 50,
+          AccountCode: "429",
+          TaxType: "INPUT2",
         },
       ],
     });
-    expect(upload!.method).toBe("POST");
-    expect(upload!.path).toBe(
-      "/api.xro/2.0/Invoices/xero-1/Attachments/INV%2042.pdf",
+    // The contact was created once and the bill names it by ID.
+    const [contact] = xero.contacts("tenant-1");
+    expect(contact?.Name).toBe("O'Brien Supplies Ltd");
+    expect(created?.Contact).toEqual({ ContactID: contact?.ContactID });
+    // "Go to InvoiceWise" opens the invoice and marks the bill as ours.
+    const link = new URL(String(created?.Url));
+    expect(link.searchParams.get("inboxId")).toBe("i-1");
+    expect(link.searchParams.get("posting")).toBe(bill.idempotencyKey);
+    expect(xero.attachments("tenant-1", posted.providerId)).toEqual([
+      "INV 42.pdf",
+    ]);
+    const create = calls.find(
+      (call) => call.method === "POST" && call.path === "/api.xro/2.0/Invoices",
+    )!;
+    expect(create.headers.get("connection-id")).toBe("conn-1");
+    expect(create.headers.get("provider-config-key")).toBe("xero");
+    expect(create.headers.get("nango-proxy-xero-tenant-id")).toBe("tenant-1");
+    expect(create.headers.get("nango-proxy-idempotency-key")).toBe(
+      bill.idempotencyKey,
     );
-    expect(upload!.headers.get("nango-proxy-content-type")).toBe(
-      "application/pdf",
-    );
-    expect(upload!.bytes).toBe(attachment.data.byteLength);
+    // The second organisation was never touched.
+    expect(bills("tenant-2")).toHaveLength(0);
   });
 
-  test("a retry after an ambiguous timeout reuses the key and gets the same bill", async () => {
-    connectionConfig = { tenant_id: "tenant-1" };
-    failNextBill = true;
-    const error = await postProviderBill(
-      "xero",
-      config,
-      connection,
-      bill,
+  test("posts to the organisation the workspace chose, not the one Nango recorded", async () => {
+    await post(bill, null, { ...configured, organisationId: "tenant-2" });
+    expect(bills("tenant-1")).toHaveLength(0);
+    expect(bills("tenant-2")).toHaveLength(1);
+  });
+
+  test("reuses an existing contact by name, ignoring case, and refuses an archived one", async () => {
+    await post({ ...bill, supplierName: "o'brien supplies ltd" }, null);
+    await post(
+      {
+        ...bill,
+        idempotencyKey: "invoicewise:second",
+        invoiceNumber: "INV-43",
+      },
       null,
-    ).catch((caught) => caught);
+    );
+    expect(xero.contacts("tenant-1")).toHaveLength(1);
+    xero.contacts("tenant-1")[0]!.ContactStatus = "ARCHIVED";
+    const refused = await post(
+      { ...bill, idempotencyKey: "invoicewise:third", invoiceNumber: "INV-44" },
+      null,
+    ).catch((error) => error);
+    expect(refused).toBeInstanceOf(BillRejectedError);
+    expect(refused.message).toContain("is archived; restore it in Xero");
+  });
+
+  test("a retry after an ambiguous timeout returns the bill Xero already created", async () => {
+    xero.fail({
+      on: "Invoices",
+      method: "POST",
+      status: 504,
+      afterApply: true,
+    });
+    const error = await post(bill, null).catch((caught) => caught);
     expect(error).toBeInstanceOf(NangoRequestError);
-    expect((error as NangoRequestError).retryable).toBe(true);
-
-    const posted = await postProviderBill(
-      "xero",
-      config,
-      connection,
-      bill,
-      null,
-    );
-    expect(posted.providerId).toBe("xero-1");
-    expect(bills.size).toBe(1);
+    expect(isRetryable(error)).toBe(true);
+    const posted = await post(bill, null);
+    expect(bills()).toHaveLength(1);
+    expect(posted.providerId).toBe(String(bills()[0]!.InvoiceID));
   });
 
-  test("keeps the bill when only the attachment fails", async () => {
-    connectionConfig = { tenant_id: "tenant-1" };
-    uploadStatus = 413;
-    const posted = await postProviderBill(
-      "xero",
-      config,
-      connection,
-      bill,
-      attachment,
-    );
-    expect(posted).toEqual({
-      providerId: "xero-1",
-      entity: "bill",
+  test("finds its bill by number and contact after Xero forgot the idempotency key", async () => {
+    xero.fail({
+      on: "Invoices",
+      method: "POST",
+      status: 504,
+      afterApply: true,
+    });
+    await post(bill, null).catch(() => undefined);
+    xero.expireIdempotencyKeys();
+    const posted = await post(bill, null);
+    expect(bills()).toHaveLength(1);
+    expect(posted.providerId).toBe(String(bills()[0]!.InvoiceID));
+  });
+
+  test("refuses a same-numbered bill from the same contact that InvoiceWise did not create", async () => {
+    await post({ ...bill, idempotencyKey: "invoicewise:someone-else" }, null);
+    const refused = await post(bill, null).catch((error) => error);
+    expect(refused).toBeInstanceOf(BillRejectedError);
+    expect(refused.message).toContain("that InvoiceWise did not create");
+    expect(bills()).toHaveLength(1);
+  });
+
+  test("a deleted or voided bill of the same number does not block a new one", async () => {
+    await post({ ...bill, idempotencyKey: "invoicewise:someone-else" }, null);
+    bills()[0]!.Status = "DELETED";
+    await post(bill, null);
+    expect(bills()).toHaveLength(2);
+  });
+
+  test("throttling and a failed token refresh are retryable and create nothing", async () => {
+    xero.fail({ on: "Organisation", status: 429 });
+    const throttled = await post(bill, null).catch((error) => error);
+    expect(isRetryable(throttled)).toBe(true);
+    xero.fail({
+      on: "Organisation",
+      status: 424,
+      body: { error: { message: "Token refresh failed" } },
+    });
+    const refresh = await post(bill, null).catch((error) => error);
+    expect(isRetryable(refresh)).toBe(true);
+    expect(bills()).toHaveLength(0);
+  });
+
+  test("a failed upload keeps the bill and is retried on its own, attaching exactly once", async () => {
+    xero.fail({
+      on: "Attachments",
+      method: "POST",
+      status: 503,
+      afterApply: true,
+    });
+    const posted = await post();
+    expect(posted).toMatchObject({
       attached: false,
-      attachmentError: "Attachment too large",
-      // A 413 will not pass on a retry unchanged.
+      attachmentRetryable: true,
+    });
+    for (let retry = 0; retry < 2; retry++) {
+      await attachProviderDocument(
+        "xero",
+        config,
+        configured,
+        { providerId: posted.providerId, entity: "bill" },
+        attachment,
+      );
+    }
+    expect(bills()).toHaveLength(1);
+    expect(xero.attachments("tenant-1", posted.providerId)).toEqual([
+      "INV 42.pdf",
+    ]);
+    expect(xero.state.writes.Attachments).toBe(1);
+  });
+
+  test("a refused upload keeps the bill and is not retried", async () => {
+    xero.fail({
+      on: "Attachments",
+      method: "POST",
+      status: 400,
+      body: {
+        Elements: [{ ValidationErrors: [{ Message: "File is too large" }] }],
+      },
+    });
+    const posted = await post();
+    expect(posted).toMatchObject({
+      attached: false,
+      attachmentError: "Xero refused the attachment: File is too large",
       attachmentRetryable: false,
     });
+    expect(bills()).toHaveLength(1);
+  });
+
+  test("a credit note becomes a draft ACCPAYCREDIT credit note, found again by its history note", async () => {
+    const credit: DraftBill = {
+      ...bill,
+      idempotencyKey: "invoicewise:credit-1",
+      documentType: "credit_note",
+      invoiceNumber: "CN-7",
+    };
+    const posted = await post(credit);
+    expect(posted).toMatchObject({ entity: "vendor_credit", attached: true });
+    const [note] = xero.records("tenant-1", "CreditNotes");
+    expect(note).toMatchObject({
+      CreditNoteID: posted.providerId,
+      Type: "ACCPAYCREDIT",
+      Status: "DRAFT",
+      CreditNoteNumber: "CN-7",
+    });
+    expect(note).not.toHaveProperty("DueDate");
+    expect(note).not.toHaveProperty("Url");
+    expect(xero.history("tenant-1", posted.providerId)).toEqual([
+      "InvoiceWise invoicewise:credit-1",
+    ]);
+    xero.expireIdempotencyKeys();
+    const again = await post(credit, null);
+    expect(again.providerId).toBe(posted.providerId);
+    expect(xero.records("tenant-1", "CreditNotes")).toHaveLength(1);
+    expect(bills()).toHaveLength(0);
+  });
+
+  describe("a credit note left without its history note", () => {
+    const credit: DraftBill = {
+      ...bill,
+      idempotencyKey: "invoicewise:credit-2",
+      documentType: "credit_note",
+      invoiceNumber: "CN-8",
+    };
+    const notes = () => xero.records("tenant-1", "CreditNotes");
+
+    test("recovers on retry after its create answer was lost and Xero forgot the key", async () => {
+      xero.fail({
+        on: "CreditNotes",
+        method: "POST",
+        status: 504,
+        afterApply: true,
+      });
+      const lost = await post(credit, null).catch((error) => error);
+      expect(isRetryable(lost)).toBe(true);
+      xero.expireIdempotencyKeys();
+      const posted = await post(credit, null);
+      expect(notes()).toHaveLength(1);
+      expect(posted.providerId).toBe(String(notes()[0]!.CreditNoteID));
+      expect(xero.history("tenant-1", posted.providerId)).toEqual([
+        "InvoiceWise invoicewise:credit-2",
+      ]);
+      expect((await post(credit, null)).providerId).toBe(posted.providerId);
+      expect(xero.history("tenant-1", posted.providerId)).toHaveLength(1);
+    });
+
+    test("recovers on retry after its history note failed", async () => {
+      xero.fail({ on: "History", method: "PUT", status: 500 });
+      const failed = await post(credit, null).catch((error) => error);
+      expect(isRetryable(failed)).toBe(true);
+      const [created] = notes();
+      expect(xero.history("tenant-1", String(created!.CreditNoteID))).toEqual(
+        [],
+      );
+      xero.expireIdempotencyKeys();
+      const posted = await post(credit, null);
+      expect(notes()).toHaveLength(1);
+      expect(posted.providerId).toBe(String(created!.CreditNoteID));
+      expect(xero.history("tenant-1", posted.providerId)).toEqual([
+        "InvoiceWise invoicewise:credit-2",
+      ]);
+    });
+
+    test("still refuses a same-numbered credit note with other lines", async () => {
+      xero.fail({ on: "History", method: "PUT", status: 500 });
+      await post(credit, null).catch(() => undefined);
+      xero.expireIdempotencyKeys();
+      const refused = await post(
+        {
+          ...credit,
+          netAmount: 50,
+          vatAmount: 10,
+          grossAmount: 60,
+          lineItems: [],
+        },
+        null,
+      ).catch((error) => error);
+      expect(refused).toBeInstanceOf(BillRejectedError);
+      expect(refused.message).toContain("that InvoiceWise did not create");
+      expect(notes()).toHaveLength(1);
+    });
+  });
+
+  test("prefers the chosen tax rate where several share one, and refuses an ambiguous or unmatched rate", async () => {
+    const zeroRated: DraftBill = {
+      ...bill,
+      vatAmount: 0,
+      grossAmount: 150,
+    };
+    const ambiguous = await post(zeroRated, null).catch((error) => error);
+    expect(ambiguous).toBeInstanceOf(BillRejectedError);
+    expect(ambiguous.message).toContain("Several Xero purchase tax codes");
+    await post(zeroRated, null, {
+      ...configured,
+      settings: { expenseAccountId: "429", taxCodeIds: ["ZERORATEDINPUT"] },
+    });
+    expect(
+      (bills()[0]!.LineItems as { TaxType: string }[]).map(
+        (line) => line.TaxType,
+      ),
+    ).toEqual(["ZERORATEDINPUT", "ZERORATEDINPUT"]);
+    const unmatched = await post(
+      {
+        ...bill,
+        idempotencyKey: "invoicewise:twelve",
+        invoiceNumber: "INV-12",
+        vatAmount: 18,
+        grossAmount: 168,
+      },
+      null,
+    ).catch((error) => error);
+    expect(unmatched.message).toContain(
+      "No active Xero purchase tax code matches the 12% tax",
+    );
+  });
+
+  test("refuses a currency the organisation does not use and posts one it does", async () => {
+    const usd = await post({ ...bill, currency: "USD" }, null).catch(
+      (error) => error,
+    );
+    expect(usd).toBeInstanceOf(BillRejectedError);
+    expect(usd.message).toContain("add USD in Xero's currency settings");
+    await post({ ...bill, currency: "EUR" }, null);
+    expect(bills()[0]?.CurrencyCode).toBe("EUR");
+  });
+
+  test("names what to fix when setup, the supplier or the organisation is missing", async () => {
+    const noAccount = await post(bill, null, {
+      ...configured,
+      settings: { expenseAccountId: null, taxCodeIds: [] },
+    }).catch((error) => error);
+    expect(noAccount.message).toBe(
+      "Choose the Xero account for bill lines in Settings → Accounting",
+    );
+    const noSupplier = await post({ ...bill, supplierName: null }, null).catch(
+      (error) => error,
+    );
+    expect(noSupplier.message).toBe("Xero needs the supplier name");
+    connectionConfig = {};
+    const noOrganisation = await post(bill, null, {
+      ...configured,
+      organisationId: null,
+    }).catch((error) => error);
+    expect(noOrganisation).toBeInstanceOf(BillRejectedError);
+    // An organisation the authorisation no longer reaches is refused by Xero
+    // with 403, which asks for a reconnect rather than being retried.
+    xero.state.reachable = ["tenant-2"];
+    const unreachable = await post(bill, null).catch((error) => error);
+    expect(unreachable).toBeInstanceOf(NangoRequestError);
+    expect(isRetryable(unreachable)).toBe(false);
+    expect(bills()).toHaveLength(0);
+  });
+
+  test("surfaces Xero's validation errors as a permanent refusal", async () => {
+    const refused = await post(bill, null, {
+      ...configured,
+      settings: { expenseAccountId: "499", taxCodeIds: [] },
+    }).catch((error) => error);
+    expect(refused).toBeInstanceOf(BillRejectedError);
+    expect(refused.message).toBe(
+      "Xero refused the bill: Account code '499' is not a valid code for this document.",
+    );
   });
 
   const postedXeroLines = async (
     lineItems: DraftBill["lineItems"],
     netAmount: number,
   ) => {
-    connectionConfig = { tenant_id: "tenant-1" };
-    await postProviderBill(
-      "xero",
-      config,
-      connection,
-      { ...bill, lineItems, netAmount },
+    await post(
+      { ...bill, lineItems, netAmount, vatAmount: netAmount * 0.2 },
       null,
     );
-    const create = calls.find((call) => call.path === "/api.xro/2.0/Invoices")!;
-    return (create.json as { Invoices: [{ LineItems: unknown[] }] }).Invoices[0]
-      .LineItems;
+    return (bills()[0]!.LineItems as Record<string, unknown>[]).map(
+      ({ Description, Quantity, UnitAmount }) => ({
+        Description,
+        Quantity,
+        UnitAmount,
+      }),
+    );
   };
 
   test("sends a line whose unit price disagrees with its total as one unit of the total", async () => {
@@ -307,11 +573,35 @@ describe("Xero", () => {
     ).toEqual([{ Description: "Labour", Quantity: 1, UnitAmount: 100 }]);
   });
 
-  test("refuses a connection without an organisation", async () => {
-    connectionConfig = {};
+  test("reads the organisations a connection reaches and keeps the chosen one", async () => {
+    connectionConfig = { tenant_id: "tenant-1" };
     expect(
-      postProviderBill("xero", config, connection, bill, null),
-    ).rejects.toBeInstanceOf(BillRejectedError);
+      await readProviderOrganisation("xero", config, "conn-1", "tenant-2"),
+    ).toEqual({ id: "tenant-2", name: "Second Synthetic Ltd" });
+    // No choice yet: the one Nango recorded at connect.
+    expect(await readProviderOrganisation("xero", config, "conn-1")).toEqual({
+      id: "tenant-1",
+      name: "Synthetic Demo Ltd",
+    });
+    // A choice the authorisation no longer reaches falls back, so the health
+    // check sees a different organisation.
+    xero.state.reachable = ["tenant-1"];
+    expect(
+      (await readProviderOrganisation("xero", config, "conn-1", "tenant-2")).id,
+    ).toBe("tenant-1");
+    const setup = await getXeroSetupOptions(config, configured);
+    expect(setup.organisations.map((organisation) => organisation.id)).toEqual([
+      "tenant-1",
+    ]);
+    expect(setup.accounts.map((account) => account.id)).toEqual(["429", "310"]);
+    expect(setup.taxCodes.map((code) => code.id)).toEqual([
+      "INPUT2",
+      "RRINPUT",
+      "ZERORATEDINPUT",
+      "EXEMPTEXPENSES",
+      "NONE",
+    ]);
+    expect(setup.currencies).toEqual(["GBP", "EUR"]);
   });
 });
 
@@ -682,13 +972,18 @@ describe("bill update", () => {
     vatAmount: 20,
   };
 
+  const xeroTarget = {
+    connectionId: "conn-1",
+    organisationId: "tenant-1",
+    settings: { expenseAccountId: "429", taxCodeIds: [] },
+  };
+
   test("Xero updates the same bill in place, leaving its status alone", async () => {
-    connectionConfig = { tenant_id: "tenant-1" };
     const config = getNangoConfig("xero", env);
     const posted = await postProviderBill(
       "xero",
       config,
-      connection,
+      xeroTarget,
       bill,
       null,
     );
@@ -696,38 +991,48 @@ describe("bill update", () => {
     const updated = await updateProviderBill(
       "xero",
       config,
-      connection,
+      xeroTarget,
       posted.providerId,
-      corrected,
+      { ...corrected, netAmount: 150, vatAmount: 30, grossAmount: 180 },
     );
     expect(updated).toEqual({ providerId: posted.providerId });
-    expect(calls).toHaveLength(1);
-    const [call] = calls;
-    expect(call?.path).toBe(`/api.xro/2.0/Invoices/${posted.providerId}`);
-    expect(call?.headers.get("nango-proxy-idempotency-key")).toBe(
+    const call = calls.find((entry) => entry.method === "POST")!;
+    expect(call.path).toBe(`/api.xro/2.0/Invoices/${posted.providerId}`);
+    expect(call.headers.get("nango-proxy-idempotency-key")).toBe(
       corrected.idempotencyKey,
     );
-    const [sent] = (call?.json as { Invoices: Record<string, unknown>[] })
+    const [sent] = (call.json as { Invoices: Record<string, unknown>[] })
       .Invoices;
     expect(sent?.InvoiceID).toBe(posted.providerId);
     expect(sent).not.toHaveProperty("Status");
     expect(sent).not.toHaveProperty("Type");
     // No second bill exists.
-    expect(bills.size).toBe(1);
+    expect(xero.records("tenant-1", "Invoices")).toHaveLength(1);
   });
 
-  test("Xero refusing the update is a permanent failure", async () => {
-    connectionConfig = { tenant_id: "tenant-1" };
+  test("Xero refuses a correction that changes the document type", async () => {
+    const config = getNangoConfig("xero", env);
+    const refused = await updateProviderBill(
+      "xero",
+      config,
+      xeroTarget,
+      "some-bill",
+      { ...corrected, documentType: "credit_note" },
+    ).catch((error) => error);
+    expect(refused).toBeInstanceOf(BillRejectedError);
+  });
+
+  test("Xero without the bill fails permanently rather than creating one", async () => {
     const config = getNangoConfig("xero", env);
     const failure = await updateProviderBill(
       "xero",
       config,
-      connection,
+      xeroTarget,
       "unknown-bill",
-      corrected,
+      { ...corrected, netAmount: 150, vatAmount: 30, grossAmount: 180 },
     ).catch((error) => error);
-    expect(failure).toBeInstanceOf(NangoRequestError);
-    expect((failure as NangoRequestError).retryable).toBe(false);
+    expect(isRetryable(failure)).toBe(false);
+    expect(xero.records("tenant-1", "Invoices")).toHaveLength(0);
   });
 
   test("QuickBooks updates the bill with its current SyncToken", async () => {
@@ -777,5 +1082,31 @@ describe("bill update", () => {
     ).catch((error) => error);
     expect(failure).toBeInstanceOf(BillRejectedError);
     expect(quickBooks.records("Bill")).toHaveLength(0);
+  });
+});
+
+describe("Nango metering", () => {
+  test("Nango answering that an integration does not exist is not a provider failure", async () => {
+    const events: NangoCallEvent[] = [];
+    observeNangoCalls((event) => events.push(event));
+    try {
+      const config = getNangoConfig("xero", env);
+      await nangoRequest(config, "/integrations/xero", { method: "GET" }).catch(
+        () => undefined,
+      );
+      await nangoProxy(config, "conn-1", {
+        method: "GET",
+        path: "/api.xro/2.0/NoSuchResource",
+        headers: { "Xero-Tenant-Id": "tenant-1" },
+      }).catch(() => undefined);
+    } finally {
+      observeNangoCalls(undefined);
+    }
+    expect(
+      events.map(({ operation, outcome }) => [operation, outcome]),
+    ).toEqual([
+      ["api:xero", "ok"],
+      ["proxy:xero", "failed"],
+    ]);
   });
 });

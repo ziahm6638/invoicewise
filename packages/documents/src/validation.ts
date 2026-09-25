@@ -1004,13 +1004,6 @@ export function validateInvoice(
   const blockers = issues
     .filter((issue) => issue.severity === "error")
     .map(({ code, message }) => ({ code, message }));
-  if (credit) {
-    blockers.push({
-      code: "credit_note_unsupported",
-      message:
-        "This is a credit note. QuickBooks receives it as a vendor credit, but Xero delivery creates draft bills only, so record it in Xero by hand.",
-    });
-  }
 
   const hasErrors = issues.some((issue) => issue.severity === "error");
   return {

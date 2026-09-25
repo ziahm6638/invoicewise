@@ -18,7 +18,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { QuickBooksSetup } from "./quickbooks-setup";
+import { AccountingSetup } from "./accounting-setup";
 
 type Provider =
   RouterOutputs["accounting"]["get"]["providers"][number]["provider"];
@@ -27,7 +27,8 @@ const PROVIDERS: { provider: Provider; name: string; outcome: string }[] = [
   {
     provider: "xero",
     name: "Xero",
-    outcome: "Invoices arrive in Xero as draft bills awaiting your approval.",
+    outcome:
+      "Invoices arrive in Xero as draft bills (credit notes as draft credit notes) awaiting your approval, after you choose the organisation's account and switch on automatic bills below.",
   },
   {
     provider: "quickbooks",
@@ -181,7 +182,7 @@ export function AccountingConnections() {
                       ? `Connected ${formatDistanceToNow(new Date(connection.connectedAt))} ago. ${outcome}`
                       : available
                         ? outcome
-                        : `${name} is not available yet.`}
+                        : `${name} is not set up for InvoiceWise yet.`}
                   </span>
                   {connection ? (
                     <span className="text-xs">
@@ -252,9 +253,7 @@ export function AccountingConnections() {
                   </Button>
                 )}
               </div>
-              {connection && provider === "quickbooks" ? (
-                <QuickBooksSetup />
-              ) : null}
+              {connection ? <AccountingSetup provider={provider} /> : null}
             </div>
           );
         })}

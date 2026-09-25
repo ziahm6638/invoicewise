@@ -2647,15 +2647,15 @@ export const accountingConnections = pgTable(
     organisationName: text("organisation_name"),
     // Whether the Nango integration reaches the provider's sandbox.
     sandbox: boolean("sandbox").default(false).notNull(),
-    // Provider-specific posting choices (QuickBooks: expense account, tax
+    // Posting choices for the organisation (expense account, purchase tax
     // codes); see AccountingSettings in packages/jobs.
     settings: jsonb("settings")
       .$type<Record<string, unknown>>()
       .default(sql`'{}'::jsonb`)
       .notNull(),
     // The workspace's opt-in to creating provider records automatically;
-    // null means nothing is posted on processing. Xero drafts are opted in
-    // at connect; QuickBooks bills are open and unpaid, so an admin opts in.
+    // null means nothing is posted on processing. An admin opts in after
+    // the setup, confirming the organisation (both providers).
     autoPostEnabledAt: timestamp("auto_post_enabled_at", {
       withTimezone: true,
       mode: "string",
@@ -3436,6 +3436,7 @@ export const deliveryDecisions = pgTable(
         "held",
         "off",
         "not_connected",
+        // Recorded for credit notes before every provider took them.
         "not_applicable",
         "already_posted",
         "not_scheduled",

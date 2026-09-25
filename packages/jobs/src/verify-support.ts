@@ -4,7 +4,12 @@
  */
 
 import type { Database } from "@invoicewise/db/client";
+import {
+  updateAccountingConnectionSettings,
+  upsertAccountingConnection,
+} from "@invoicewise/db/queries";
 import { DEFAULT_DELIVERY_POLICY } from "@invoicewise/documents";
+import { updateAccountingSettings } from "./accounting";
 import { saveDeliveryPolicy } from "./delivery-rules";
 
 /**
@@ -171,13 +176,23 @@ export const startTypeSafeStub = () =>
     },
   });
 
+/** The account and tax rates a verification Xero organisation offers. */
+export const XERO_VERIFICATION_SETTINGS = {
+  expenseAccountId: "429",
+  taxCodeIds: [] as string[],
+};
+
 /**
- * The Nango and Xero answers a connect-time check reads, for the loopback
- * Nango stubs: the integration (a production app) and the organisation the
- * connection reaches. Returns null for any other request.
+ * The Nango and Xero answers the loopback Nango stubs share: the integration
+ * (a production app), the one organisation the connection reaches
+ * (`xero-tenant`, "Verification Organisation"), its account, tax rates and
+ * currency, a contact for any supplier name, and no existing bill or
+ * attachment. Only reads: each stub answers the writes it proves. Returns
+ * null for any other request.
  */
 export const xeroConnectStub = (request: Request, url: URL) => {
-  if (request.method === "GET" && url.pathname.startsWith("/integrations/")) {
+  if (request.method !== "GET") return null;
+  if (url.pathname.startsWith("/integrations/")) {
     return Response.json({
       data: {
         unique_key: decodeURIComponent(url.pathname.split("/")[2]!),
@@ -185,13 +200,119 @@ export const xeroConnectStub = (request: Request, url: URL) => {
       },
     });
   }
-  if (
-    request.method === "GET" &&
-    url.pathname === "/proxy/api.xro/2.0/Organisation"
-  ) {
-    return Response.json({
-      Organisations: [{ Name: "Verification Organisation" }],
-    });
+  if (url.pathname === "/proxy/connections") {
+    return Response.json([
+      {
+        tenantId: "xero-tenant",
+        tenantType: "ORGANISATION",
+        tenantName: "Verification Organisation",
+      },
+    ]);
+  }
+  if (!url.pathname.startsWith("/proxy/api.xro/2.0/")) return null;
+  const path = url.pathname.slice("/proxy/api.xro/2.0".length);
+  switch (path) {
+    case "/Organisation":
+      return Response.json({
+        Organisations: [
+          {
+            Name: "Verification Organisation",
+            BaseCurrency: "GBP",
+            CountryCode: "GB",
+          },
+        ],
+      });
+    case "/Currencies":
+      return Response.json({ Currencies: [{ Code: "GBP" }] });
+    case "/Accounts":
+      return Response.json({
+        Accounts: [
+          {
+            Code: XERO_VERIFICATION_SETTINGS.expenseAccountId,
+            Name: "General Expenses",
+            Class: "EXPENSE",
+            Type: "OVERHEADS",
+            Status: "ACTIVE",
+          },
+        ],
+      });
+    case "/TaxRates":
+      return Response.json({
+        TaxRates: [
+          {
+            TaxType: "INPUT2",
+            Name: "20% (VAT on Expenses)",
+            EffectiveRate: 20,
+          },
+          { TaxType: "NONE", Name: "No VAT", EffectiveRate: 0 },
+        ].map((rate) => ({
+          ...rate,
+          Status: "ACTIVE",
+          CanApplyToExpenses: true,
+        })),
+      });
+    case "/Contacts": {
+      const name = url.searchParams.get("searchTerm") ?? "";
+      return Response.json({
+        Contacts: [
+          {
+            ContactID: xeroVerificationContactId(name),
+            Name: name,
+            ContactStatus: "ACTIVE",
+          },
+        ],
+      });
+    }
+    case "/Invoices":
+    case "/CreditNotes":
+      return Response.json({ [path.slice(1)]: [] });
+  }
+  if (/^\/(Invoices|CreditNotes)\/[^/]+\/Attachments$/.test(path)) {
+    return Response.json({ Attachments: [] });
   }
   return null;
 };
+
+/** The contact `xeroConnectStub` answers for a supplier name. */
+export const xeroVerificationContactId = (name: string) =>
+  `contact-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+
+/**
+ * Stores a Xero connection already set up and opted in to automatic posting,
+ * for verifiers that prove what happens after connecting.
+ */
+export async function seedXeroConnection(
+  db: Database,
+  input: { teamId: string; connectionId: string },
+) {
+  await upsertAccountingConnection(db, {
+    teamId: input.teamId,
+    provider: "xero",
+    integrationId: "xero-invoicewise",
+    connectionId: input.connectionId,
+    organisationId: "xero-tenant",
+    organisationName: "Verification Organisation",
+    sandbox: false,
+  });
+  return updateAccountingConnectionSettings(db, {
+    teamId: input.teamId,
+    provider: "xero",
+    settings: XERO_VERIFICATION_SETTINGS,
+    autoPost: { enabledBy: null },
+  });
+}
+
+/**
+ * Completes the admin's Xero setup through the real settings path (read
+ * live from the stub): the account, and automatic posting confirmed for the
+ * verification organisation.
+ */
+export const enableXeroPosting = (db: Database, teamId: string) =>
+  updateAccountingSettings(db, {
+    teamId,
+    userId: null,
+    provider: "xero",
+    ...XERO_VERIFICATION_SETTINGS,
+    autoPost: true,
+    confirmOrganisationId: "xero-tenant",
+  });

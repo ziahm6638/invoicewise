@@ -39,7 +39,7 @@ import {
 import { saveDeliveryPolicy } from "./delivery-rules";
 import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
-import { required, xeroConnectStub } from "./verify-support";
+import { enableXeroPosting, required, xeroConnectStub } from "./verify-support";
 
 const runBatch = () =>
   Effect.runPromise(
@@ -212,6 +212,7 @@ async function main() {
       provider: "xero",
       connectionId: "xero-connection",
     });
+    await enableXeroPosting(db, workspace);
 
     const drain = async () => {
       for (let round = 0; round < 60; round++) {

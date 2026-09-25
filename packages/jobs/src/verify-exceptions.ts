@@ -42,6 +42,7 @@ import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
 import {
   deliverPossibleDuplicates,
+  enableXeroPosting,
   required,
   startTypeSafeStub,
   xeroConnectStub,
@@ -302,6 +303,7 @@ async function main() {
       provider: "xero",
       connectionId: "xero-connection",
     });
+    await enableXeroPosting(db, teamId);
 
     const extractionOf = (
       invoiceNumber: string,

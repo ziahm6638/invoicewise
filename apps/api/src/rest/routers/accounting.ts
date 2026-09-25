@@ -3,6 +3,7 @@ import {
   accountingConnectSessionSchema,
   accountingConnectionSchema,
   accountingInvoiceParamSchema,
+  accountingOrganisationSchema,
   accountingProviderParamSchema,
   accountingSettingsSchema,
 } from "@api/schemas/accounting";
@@ -16,6 +17,7 @@ import {
   disconnectAccountingConnection,
   getAccountingSetup,
   retryAccountingPost,
+  selectAccountingOrganisation,
   updateAccountingSettings,
 } from "@invoicewise/jobs/accounting";
 import { withRequiredScope, withRequiredTeamRole } from "../middleware";
@@ -122,7 +124,8 @@ app.delete(
 );
 
 // Posting setup for the active connection: the live company's expense
-// accounts and purchase tax codes (QuickBooks) with the current choices.
+// accounts and purchase tax codes (and for Xero the organisations the
+// authorisation reaches) with the current choices.
 app.get(
   "/connections/:provider/setup",
   withRequiredScope("inbox.read"),
@@ -169,6 +172,43 @@ app.put(
       return c.json({
         id: connection?.id ?? null,
         settings: connection?.settings ?? null,
+        autoPostEnabledAt: connection?.autoPostEnabledAt ?? null,
+      });
+    } catch (error) {
+      return c.json(
+        { error: message(error) },
+        error instanceof AccountingSettingsError ? 400 : 502,
+      );
+    }
+  },
+);
+
+// Chooses which organisation a Xero connection posts to; another
+// organisation starts its setup and automatic-posting opt-in over.
+app.put(
+  "/connections/:provider/organisation",
+  withRequiredScope("inbox.write"),
+  withRequiredTeamRole("admin"),
+  async (c) => {
+    const parsed = accountingOrganisationSchema.safeParse({
+      ...((await c.req.json().catch(() => ({}))) as object),
+      provider: c.req.param("provider"),
+    });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid organisation", issues: parsed.error.issues },
+        400,
+      );
+    }
+    try {
+      const connection = await selectAccountingOrganisation(c.get("db"), {
+        ...parsed.data,
+        teamId: c.get("teamId"),
+      });
+      return c.json({
+        id: connection?.id ?? null,
+        organisationId: connection?.organisationId ?? null,
+        organisationName: connection?.organisationName ?? null,
         autoPostEnabledAt: connection?.autoPostEnabledAt ?? null,
       });
     } catch (error) {

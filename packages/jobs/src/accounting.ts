@@ -18,6 +18,7 @@ import {
   recordAccountingPostSuccess,
   recordBillUpdateOutcome,
   releaseAccountingPostClaim,
+  setAccountingConnectionOrganisation,
   updateAccountingConnectionSettings,
   updateInboxValidation,
   upsertAccountingConnection,
@@ -31,7 +32,9 @@ import {
   type ProviderEntity,
   attachProviderDocument,
   getQuickBooksSetupOptions,
+  getXeroSetupOptions,
   isRetryable,
+  listXeroOrganisations,
   postProviderBill,
   readProviderOrganisation,
   updateProviderBill,
@@ -76,7 +79,9 @@ export const providerBillUrl = (
 ) => {
   const id = encodeURIComponent(providerId);
   if (provider === "xero") {
-    return `https://go.xero.com/AccountsPayable/Edit.aspx?InvoiceID=${id}`;
+    return options.entity === "vendor_credit"
+      ? `https://go.xero.com/AccountsPayable/ViewCreditNote.aspx?creditNoteID=${id}`
+      : `https://go.xero.com/AccountsPayable/Edit.aspx?InvoiceID=${id}`;
   }
   const host = options.sandbox
     ? "https://app.sandbox.qbo.intuit.com"
@@ -154,6 +159,18 @@ export const draftBillFrom = (
       };
     }),
   };
+};
+
+/**
+ * The invoice's page in the dashboard, linked from the provider record
+ * ("Go to InvoiceWise" on a Xero bill). The dashboard's own origin is
+ * BETTER_AUTH_URL; a non-https one (local development) uses production's.
+ */
+export const invoicePageUrl = (invoiceId: string, env = process.env) => {
+  const origin = env.BETTER_AUTH_URL?.startsWith("https://")
+    ? env.BETTER_AUTH_URL.replace(/\/$/, "")
+    : "https://app.invoicewise.uk";
+  return `${origin}/inbox?inboxId=${encodeURIComponent(invoiceId)}`;
 };
 
 export class AccountingPostError extends Schema.TaggedError<AccountingPostError>()(
@@ -269,6 +286,9 @@ async function verifyAccountingConnection(
  * this workspace's tag (set when the workspace started the connect session),
  * and the company it reaches is read live through the proxy and stored, so
  * the admin sees which organisation was bound before anything posts to it.
+ * A Xero reconnect keeps the organisation the workspace chose while the new
+ * authorisation still reaches it. Nothing posts until an admin completes the
+ * setup and switches on automatic posting for that organisation.
  */
 export async function completeAccountingConnection(
   db: Database,
@@ -285,13 +305,16 @@ export async function completeAccountingConnection(
   }
   const config = await verifyAccountingConnection(input, env);
   const [organisation, sandbox] = await Promise.all([
-    readProviderOrganisation(input.provider, config, input.connectionId).catch(
-      (error) => {
-        throw new Error(
-          `The connection was made, but ${PROVIDER_NAME[input.provider]} did not say which company it reaches: ${failureMessage(error)}`,
-        );
-      },
-    ),
+    readProviderOrganisation(
+      input.provider,
+      config,
+      input.connectionId,
+      active?.organisationId ?? null,
+    ).catch((error) => {
+      throw new Error(
+        `The connection was made, but ${PROVIDER_NAME[input.provider]} did not say which company it reaches: ${failureMessage(error)}`,
+      );
+    }),
     integrationIsSandbox(config),
   ]);
   const connection = await upsertAccountingConnection(db, {
@@ -300,9 +323,6 @@ export async function completeAccountingConnection(
     organisationId: organisation.id,
     organisationName: organisation.name,
     sandbox,
-    // A Xero draft awaits approval in Xero, so posting starts at connect; a
-    // QuickBooks bill is open and unpaid, so an admin opts in first.
-    autoPostOnConnect: input.provider === "xero",
   });
   // A reconnect replaces the Nango connection: the one it replaced no
   // longer serves the workspace, so its credentials are deleted.
@@ -411,6 +431,7 @@ export async function checkAccountingConnection(
       connection.provider,
       config,
       connection.connectionId,
+      connection.organisationId,
     );
     if (
       connection.organisationId &&
@@ -433,12 +454,10 @@ export async function checkAccountingConnection(
 
 /** Settings an admin must choose before a provider can post. */
 export const accountingSetupMissing = (
-  provider: AccountingProvider,
+  _provider: AccountingProvider,
   settings: unknown,
 ): "expense_account"[] =>
-  provider === "quickbooks" && !settingsOf(settings).expenseAccountId
-    ? ["expense_account"]
-    : [];
+  settingsOf(settings).expenseAccountId ? [] : ["expense_account"];
 
 const settingsOf = (value: unknown): AccountingSettings => {
   const record = asRecord(value);
@@ -454,9 +473,10 @@ const settingsOf = (value: unknown): AccountingSettings => {
 };
 
 /**
- * What an admin chooses from to set up posting to the connected company
- * (QuickBooks: its expense accounts and purchase tax codes), with the
- * current choices and what is still missing.
+ * What an admin chooses from to set up posting to the connected company (its
+ * expense accounts and purchase tax codes; for Xero also the organisations
+ * the authorisation reaches), with the current choices and what is still
+ * missing.
  */
 export async function getAccountingSetup(
   db: Database,
@@ -475,8 +495,21 @@ export async function getAccountingSetup(
     autoPostEnabledAt: connection.autoPostEnabledAt,
     missing: accountingSetupMissing(connection.provider, settings),
   };
-  if (connection.provider !== "quickbooks") {
-    return { ...base, company: null, accounts: [], taxCodes: [] };
+  if (connection.provider === "xero") {
+    const { organisation, organisations, currencies, ...options } =
+      await getXeroSetupOptions(getNangoConfig("xero", env), {
+        connectionId: connection.connectionId,
+        organisationId: connection.organisationId,
+      }).catch((error) => {
+        throw new Error(accountingFailure("xero", error).reason);
+      });
+    return {
+      ...base,
+      ...options,
+      company: null,
+      organisation: { ...organisation, currencies },
+      organisations,
+    };
   }
   const options = await getQuickBooksSetupOptions(
     getNangoConfig("quickbooks", env),
@@ -484,7 +517,7 @@ export async function getAccountingSetup(
   ).catch((error) => {
     throw new Error(accountingFailure("quickbooks", error).reason);
   });
-  return { ...base, ...options };
+  return { ...base, ...options, organisation: null, organisations: [] };
 }
 
 export class AccountingSettingsError extends Error {}
@@ -493,7 +526,8 @@ export class AccountingSettingsError extends Error {}
  * Saves an admin's posting choices. Choices are checked against the live
  * company, and automatic posting can be switched on only when the setup is
  * complete and the admin confirms the company it posts to (the organisation
- * ID shown to them), since a QuickBooks bill is created open and unpaid.
+ * ID shown to them): a QuickBooks bill is created open and unpaid, and a Xero
+ * draft must land in the organisation the admin intended.
  */
 export async function updateAccountingSettings(
   db: Database,
@@ -514,30 +548,29 @@ export async function updateAccountingSettings(
       `${PROVIDER_NAME[input.provider]} is not connected`,
     );
   }
+  const name = PROVIDER_NAME[input.provider];
   let settings = settingsOf(connection.settings);
-  if (input.provider === "quickbooks") {
-    const setup = await getAccountingSetup(db, input, env);
-    const expenseAccountId =
-      input.expenseAccountId === undefined
-        ? settings.expenseAccountId
-        : input.expenseAccountId;
-    if (
-      expenseAccountId &&
-      !setup?.accounts.some((account) => account.id === expenseAccountId)
-    ) {
-      throw new AccountingSettingsError(
-        "Choose an active expense account from the connected QuickBooks company",
-      );
-    }
-    const taxCodeIds = input.taxCodeIds ?? settings.taxCodeIds ?? [];
-    const known = new Set(setup?.taxCodes.map((code) => code.id));
-    if (taxCodeIds.some((id) => !known.has(id))) {
-      throw new AccountingSettingsError(
-        "Choose purchase tax codes from the connected QuickBooks company",
-      );
-    }
-    settings = { expenseAccountId: expenseAccountId ?? null, taxCodeIds };
+  const setup = await getAccountingSetup(db, input, env);
+  const expenseAccountId =
+    input.expenseAccountId === undefined
+      ? settings.expenseAccountId
+      : input.expenseAccountId;
+  if (
+    expenseAccountId &&
+    !setup?.accounts.some((account) => account.id === expenseAccountId)
+  ) {
+    throw new AccountingSettingsError(
+      `Choose an active expense account from the connected ${name} company`,
+    );
   }
+  const taxCodeIds = input.taxCodeIds ?? settings.taxCodeIds ?? [];
+  const known = new Set(setup?.taxCodes.map((code) => code.id));
+  if (taxCodeIds.some((id) => !known.has(id))) {
+    throw new AccountingSettingsError(
+      `Choose purchase tax codes from the connected ${name} company`,
+    );
+  }
+  settings = { expenseAccountId: expenseAccountId ?? null, taxCodeIds };
   if (input.autoPost) {
     const missing = accountingSetupMissing(input.provider, settings);
     if (missing.length) {
@@ -551,7 +584,7 @@ export async function updateAccountingSettings(
         input.confirmOrganisationId !== connection.organisationId)
     ) {
       throw new AccountingSettingsError(
-        `Confirm the ${PROVIDER_NAME[input.provider]} company automatic bills are created in`,
+        `Confirm the ${name} company automatic bills are created in`,
       );
     }
   }
@@ -560,6 +593,55 @@ export async function updateAccountingSettings(
     provider: input.provider,
     settings,
     autoPost: input.autoPost ? { enabledBy: input.userId } : null,
+  });
+}
+
+/**
+ * Chooses which of the organisations a Xero authorisation reaches the
+ * workspace posts to. Choosing another organisation clears the settings and
+ * the automatic-posting opt-in (its accounts and tax rates are its own), so
+ * nothing posts there until an admin sets it up and confirms it.
+ */
+export async function selectAccountingOrganisation(
+  db: Database,
+  input: {
+    teamId: string;
+    provider: AccountingProvider;
+    organisationId: string;
+  },
+  env = process.env,
+) {
+  const connection = await getActiveAccountingConnection(db, input.teamId);
+  if (!connection || connection.provider !== input.provider) {
+    throw new AccountingSettingsError(
+      `${PROVIDER_NAME[input.provider]} is not connected`,
+    );
+  }
+  if (input.provider !== "xero") {
+    throw new AccountingSettingsError(
+      "A QuickBooks connection reaches one company; reconnect to choose another",
+    );
+  }
+  const organisations = await listXeroOrganisations(
+    getNangoConfig("xero", env),
+    connection.connectionId,
+  ).catch((error) => {
+    throw new Error(accountingFailure("xero", error).reason);
+  });
+  const chosen = organisations.find(
+    (organisation) => organisation.id === input.organisationId,
+  );
+  if (!chosen) {
+    throw new AccountingSettingsError(
+      "This Xero connection does not reach that organisation; reconnect Xero and authorise it",
+    );
+  }
+  if (chosen.id === connection.organisationId) return connection;
+  return setAccountingConnectionOrganisation(db, {
+    teamId: input.teamId,
+    provider: input.provider,
+    organisationId: chosen.id,
+    organisationName: chosen.name,
   });
 }
 
@@ -701,7 +783,7 @@ export const postAccountingDraft = (
     }
 
     // Provider-required fields that are missing or invalid, an inconsistent
-    // total, a duplicate or a credit note Xero cannot take: the bill is not
+    // total or a duplicate: the bill is not
     // attempted, and the reasons are recorded as a failure a retry cannot
     // fix until the invoice is corrected (see
     // docs/document-intake.md#validation).
@@ -894,7 +976,10 @@ export const postAccountingDraft = (
       }
       attachment = loaded.right;
     }
-    const bill = draftBillFrom(invoice.extraction, idempotencyKey);
+    const bill = {
+      ...draftBillFrom(invoice.extraction, idempotencyKey),
+      sourceUrl: invoicePageUrl(invoice.id, env),
+    };
     const posted = yield* Effect.tryPromise({
       try: () =>
         postProviderBill(

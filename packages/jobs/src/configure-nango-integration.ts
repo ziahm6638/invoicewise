@@ -26,15 +26,23 @@ const PROVIDERS = {
     clientSecret: "INTUIT_CLIENT_SECRET",
     nangoProviders: ["quickbooks-sandbox", "quickbooks"],
     providerSetting: "QUICKBOOKS_NANGO_PROVIDER",
-    scopes: "com.intuit.quickbooks.accounting",
+    scopes: ["com.intuit.quickbooks.accounting"],
   },
   xero: {
     clientId: "XERO_CLIENT_ID",
     clientSecret: "XERO_CLIENT_SECRET",
     nangoProviders: ["xero"],
     providerSetting: undefined,
-    scopes:
-      "offline_access accounting.invoices accounting.contacts accounting.attachments",
+    // Invoices and credit notes (with their history), contacts, their
+    // attachments, and read-only settings: the organisation, accounts, tax
+    // rates and currencies a bill is mapped onto.
+    scopes: [
+      "offline_access",
+      "accounting.invoices",
+      "accounting.contacts",
+      "accounting.attachments",
+      "accounting.settings.read",
+    ],
   },
 } as const;
 
@@ -64,7 +72,9 @@ async function main(provider: keyof typeof PROVIDERS) {
     type: "OAUTH2",
     client_id: clientId,
     client_secret: clientSecret,
-    scopes: spec.scopes,
+    // Nango takes a comma-separated list and joins it with the provider's
+    // own separator (a space for Xero) when it builds the consent URL.
+    scopes: spec.scopes.join(","),
   };
   const path = `/integrations/${encodeURIComponent(config.integrationId)}`;
 
