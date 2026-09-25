@@ -4,7 +4,8 @@
  *
  * A workspace policy is a small, fixed vocabulary, not a rules engine: a few
  * built-in checks over the validation, the supplier-history checks and the
- * question answers already stored with every invoice, a list of questions
+ * question answers already stored with every invoice, its reconciliation
+ * with the authorization sources it bills, a list of questions
  * that must be answered with confidence, and at most
  * `DELIVERY_POLICY_LIMITS.maxConditions` conditions of two shapes. The same
  * inputs always give the same decision.
@@ -14,8 +15,10 @@
  * `docs/delivery.md#delivery-rules` publishes them.
  */
 
+import type { ReconciliationForPolicy } from "./reconciliation";
+
 /** Bumped whenever an evaluation rule changes; stored on every decision. */
-export const DELIVERY_RULES_VERSION = 1;
+export const DELIVERY_RULES_VERSION = 2;
 
 export const DELIVERY_POLICY_LIMITS = {
   maxConditions: 10,
@@ -32,6 +35,21 @@ export const CONFIGURABLE_DELIVERY_RULES = [
   "uncertain_reading",
   "new_supplier",
   "validation_warnings",
+  "authorization_discrepancy",
+  "authorization_unresolved",
+  "authorization_missing",
+] as const;
+
+/**
+ * Checks over the invoice's reconciliation with its authorization sources
+ * (docs/reconciliation.md). They deliver by default, so no workspace gets an
+ * approval step it did not choose; a workspace that holds on any of them has
+ * each revision decided once it is reconciled.
+ */
+export const RECONCILIATION_DELIVERY_RULES = [
+  "authorization_discrepancy",
+  "authorization_unresolved",
+  "authorization_missing",
 ] as const;
 
 export type ConfigurableDeliveryRule =
@@ -90,10 +108,17 @@ export const DEFAULT_DELIVERY_POLICY: DeliveryPolicy = {
     uncertain_reading: "hold",
     new_supplier: "deliver",
     validation_warnings: "deliver",
+    authorization_discrepancy: "deliver",
+    authorization_unresolved: "deliver",
+    authorization_missing: "deliver",
   },
   requiredQuestions: [],
   conditions: [],
 };
+
+/** Whether a policy's decision waits for the invoice's reconciliation. */
+export const policyUsesReconciliation = (policy: DeliveryPolicy) =>
+  RECONCILIATION_DELIVERY_RULES.some((rule) => policy.rules[rule] === "hold");
 
 /** Checks that always hold an invoice; only a corrected or re-read invoice clears them. */
 export const LOCKED_DELIVERY_RULES = [
@@ -109,7 +134,8 @@ export type DeliveryRuleId =
   | ConfigurableDeliveryRule
   | "required_questions"
   | "conditions"
-  | "approval";
+  | "approval"
+  | "reconciliation";
 
 /** The rules in words, in the order the dashboard and docs list them. */
 export const DELIVERY_RULE_DESCRIPTIONS: Record<
@@ -171,6 +197,26 @@ export const DELIVERY_RULE_DESCRIPTIONS: Record<
     description:
       "A member corrected an invoice while it was held; an owner or admin releases it.",
   },
+  authorization_discrepancy: {
+    label: "Over or outside its authorization",
+    description:
+      "The invoice goes over the remaining authorized amount or quantity, charges more than the authorized rate, charges tax a source does not authorize, bills work outside the source's scope or period, or bills a closed or cancelled source.",
+  },
+  authorization_unresolved: {
+    label: "Authorization not confirmed",
+    description:
+      "The invoice's source is a proposal, ambiguous or unconfirmed, or it could not be compared: different currencies, an unknown tax basis, a missing amount or a line whose scope is unclear.",
+  },
+  authorization_missing: {
+    label: "No authorization",
+    description:
+      "The invoice is not matched to any job, purchase order or contract.",
+  },
+  reconciliation: {
+    label: "Waiting for reconciliation",
+    description:
+      "The rules hold on authorization checks, so the invoice is decided once it is matched and reconciled.",
+  },
 };
 
 export type DeliveryReasonCode =
@@ -187,7 +233,11 @@ export type DeliveryReasonCode =
   | "required_answer_uncertain"
   | "condition_matched"
   | "condition_unverifiable"
-  | "awaiting_approval";
+  | "awaiting_approval"
+  | "authorization_discrepancy"
+  | "authorization_unresolved"
+  | "authorization_missing"
+  | "awaiting_reconciliation";
 
 export type DeliveryReason = {
   code: DeliveryReasonCode;
@@ -268,6 +318,14 @@ export function normalizeDeliveryPolicy(
     }
   }
   for (const key of CONFIGURABLE_DELIVERY_RULES) {
+    // Rules added after a client was written may be left out: they keep
+    // their default, which delivers.
+    if (
+      rules[key] === undefined &&
+      (RECONCILIATION_DELIVERY_RULES as readonly string[]).includes(key)
+    ) {
+      continue;
+    }
     if (rules[key] !== "hold" && rules[key] !== "deliver") {
       issues.push({
         path: `rules.${key}`,
@@ -343,7 +401,10 @@ export function normalizeDeliveryPolicy(
         webhooks: destinations.webhooks as "eligible" | "all",
       },
       rules: Object.fromEntries(
-        CONFIGURABLE_DELIVERY_RULES.map((key) => [key, rules[key]]),
+        CONFIGURABLE_DELIVERY_RULES.map((key) => [
+          key,
+          rules[key] ?? DEFAULT_DELIVERY_POLICY.rules[key],
+        ]),
       ) as DeliveryPolicy["rules"],
       requiredQuestions: [...new Set(required as string[])],
       conditions: normalized,
@@ -531,6 +592,11 @@ export function evaluateDeliveryPolicy(input: {
   validation: unknown;
   supplierChecks: unknown;
   judgments: unknown;
+  /**
+   * The revision's reconciliation with its authorization sources; null when
+   * it has none (not matched yet, or matching failed).
+   */
+  reconciliation?: ReconciliationForPolicy | null;
 }): DeliveryEvaluation {
   const { policy } = input;
   const reasons: DeliveryReason[] = [];
@@ -737,6 +803,55 @@ export function evaluateDeliveryPolicy(input: {
         code: "condition_matched",
         rule: "conditions",
         message: `The condition "${conditionText(condition, labelOf(condition.questionKey, judgment))}" matched: the answer was ${formatAnswer(judgment)}.`,
+        locked: false,
+      });
+    }
+  }
+
+  const reconciliation = input.reconciliation ?? null;
+  const sentences = (items: readonly { message: string }[]) =>
+    items.map((item) => item.message).join(" ");
+  if (
+    policy.rules.authorization_missing === "hold" &&
+    reconciliation?.status === "unmatched"
+  ) {
+    hold({
+      code: "authorization_missing",
+      rule: "authorization_missing",
+      message:
+        "The invoice is not matched to any job, purchase order or contract. Link it to its source, or release it if it needs none.",
+      locked: false,
+    });
+  }
+  if (
+    policy.rules.authorization_discrepancy === "hold" &&
+    reconciliation &&
+    reconciliation.discrepancies.length > 0
+  ) {
+    hold({
+      code: "authorization_discrepancy",
+      rule: "authorization_discrepancy",
+      message: `${sentences(reconciliation.discrepancies)} Release it if the extra is agreed, or dismiss it.`,
+      locked: false,
+    });
+  }
+  if (policy.rules.authorization_unresolved === "hold") {
+    if (!reconciliation) {
+      hold({
+        code: "authorization_unresolved",
+        rule: "authorization_unresolved",
+        message:
+          "The invoice could not be reconciled with its authorization sources. Check it against its source, then release it.",
+        locked: false,
+      });
+    } else if (
+      reconciliation.status !== "unmatched" &&
+      reconciliation.unresolved.length > 0
+    ) {
+      hold({
+        code: "authorization_unresolved",
+        rule: "authorization_unresolved",
+        message: `${sentences(reconciliation.unresolved)} Release it once checked.`,
         locked: false,
       });
     }

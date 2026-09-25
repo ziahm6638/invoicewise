@@ -5,7 +5,7 @@ sources](authorization-sources.md) it bills: the jobs, purchase orders and
 contracts of its own workspace. The match says which sources (and which of
 their versions) the invoice bills, how much of it goes to each, how sure the
 link is and why. Comparing the amounts and quantities with what was authorized
-is the next step (variance, #58), built on this record.
+is [reconciliation](reconciliation.md), built on this record.
 
 The rules are plain code in `packages/documents/src/source-matching.ts`
 (`SOURCE_MATCHING_VERSION`, `SOURCE_MATCH_THRESHOLDS`,
@@ -201,11 +201,9 @@ are in `apps/api/src/trpc/routers/team.permissions.integration.test.ts` and
 `apps/api/src/permissions.http.integration.test.ts`; the `sources.read`
 summary is in `apps/api/src/effect/invoice-read.test.ts`.
 
-## For variance (#58)
+## Reconciliation
 
-Variance should read the current decision's links and allocations
-(`invoice_source_links`, `invoice_source_allocations`), compare them with the
-cited version's lines and totals (respecting `taxBasis`, never across
-currencies), sum each source's allocations across its invoices for the
-remaining balance, and treat `needsConfirmation`, `ambiguous` and
-`insufficient_evidence` as unresolved rather than as consumption.
+Every decision is reconciled with the sources it links: see
+[reconciliation](reconciliation.md). A proposal (`needsConfirmation`), an
+ambiguous match and `insufficient_evidence` are unresolved there and are
+never counted against a source's balance.

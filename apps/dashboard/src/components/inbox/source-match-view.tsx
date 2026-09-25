@@ -57,7 +57,7 @@ const TYPE: Record<string, string> = {
   contract: "Contract",
 };
 
-type Tone = "good" | "warn" | "neutral" | "unknown";
+export type Tone = "good" | "warn" | "neutral" | "unknown";
 
 const OUTCOME_TONE: Record<MatchEvidence["outcome"], Tone> = {
   supports: "good",
@@ -66,7 +66,7 @@ const OUTCOME_TONE: Record<MatchEvidence["outcome"], Tone> = {
   unknown: "unknown",
 };
 
-function ToneIcon({ tone }: { tone: Tone }) {
+export function ToneIcon({ tone }: { tone: Tone }) {
   const className = "size-4 shrink-0";
   if (tone === "good") {
     return (
@@ -196,6 +196,7 @@ export function SourceMatchView({
     `${amount}${currency ? ` ${currency}` : ""}`,
   invoiceLines = [],
   onChoose,
+  reconciliation,
   actions,
 }: {
   current: SourceMatchDecision | null;
@@ -206,6 +207,8 @@ export function SourceMatchView({
   /** Descriptions of the invoice's lines, to name allocated lines. */
   invoiceLines?: (string | null)[];
   onChoose?: (sourceId: string) => void;
+  /** The match's reconciliation with the sources' authorized terms. */
+  reconciliation?: ReactNode;
   actions?: ReactNode;
 }) {
   if (!current) {
@@ -330,6 +333,8 @@ export function SourceMatchView({
           </ul>
         </div>
       )}
+
+      {reconciliation}
 
       {actions}
 

@@ -5,11 +5,13 @@ import { useTRPC } from "@/trpc/client";
 import type { RouterOutputs } from "@api/trpc/routers/_app";
 import {
   CONFIGURABLE_DELIVERY_RULES,
+  type ConfigurableDeliveryRule,
   DELIVERY_POLICY_LIMITS,
   DELIVERY_RULE_DESCRIPTIONS,
   type DeliveryCondition,
   type DeliveryPolicy,
   LOCKED_DELIVERY_RULES,
+  RECONCILIATION_DELIVERY_RULES,
 } from "@invoicewise/documents/delivery-policy";
 import { Badge } from "@invoicewise/ui/badge";
 import { Button } from "@invoicewise/ui/button";
@@ -71,6 +73,9 @@ const describeCondition = (
         : String(condition.value);
   return `${question?.label ?? `${condition.questionKey} (no longer exists)`} ${OPERATOR_LABEL[condition.operator]} ${value}`;
 };
+
+/** The checks over an invoice's reconciliation, listed in their own group. */
+const authorizationRules = new Set<string>(RECONCILIATION_DELIVERY_RULES);
 
 function Section({
   title,
@@ -309,6 +314,33 @@ export function DeliveryRules() {
   const questions = data.questions;
   const update = (next: Partial<DeliveryPolicy>) =>
     setDraft((current) => ({ ...current, ...next }));
+  const ruleRow = (rule: ConfigurableDeliveryRule) => (
+    <RuleRow key={rule} {...DELIVERY_RULE_DESCRIPTIONS[rule]}>
+      <Select
+        value={draft.rules[rule]}
+        disabled={!canEdit}
+        onValueChange={(action) =>
+          update({
+            rules: {
+              ...draft.rules,
+              [rule]: action as "hold" | "deliver",
+            },
+          })
+        }
+      >
+        <SelectTrigger
+          className="w-[110px]"
+          aria-label={DELIVERY_RULE_DESCRIPTIONS[rule].label}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="hold">Hold</SelectItem>
+          <SelectItem value="deliver">Deliver</SelectItem>
+        </SelectContent>
+      </Select>
+    </RuleRow>
+  );
 
   return (
     <Card>
@@ -398,33 +430,18 @@ export function DeliveryRules() {
           description="Hold for a person to release, or deliver as usual."
         >
           <ul className="divide-y">
-            {CONFIGURABLE_DELIVERY_RULES.map((rule) => (
-              <RuleRow key={rule} {...DELIVERY_RULE_DESCRIPTIONS[rule]}>
-                <Select
-                  value={draft.rules[rule]}
-                  disabled={!canEdit}
-                  onValueChange={(action) =>
-                    update({
-                      rules: {
-                        ...draft.rules,
-                        [rule]: action as "hold" | "deliver",
-                      },
-                    })
-                  }
-                >
-                  <SelectTrigger
-                    className="w-[110px]"
-                    aria-label={DELIVERY_RULE_DESCRIPTIONS[rule].label}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="hold">Hold</SelectItem>
-                    <SelectItem value="deliver">Deliver</SelectItem>
-                  </SelectContent>
-                </Select>
-              </RuleRow>
-            ))}
+            {CONFIGURABLE_DELIVERY_RULES.filter(
+              (rule) => !authorizationRules.has(rule),
+            ).map(ruleRow)}
+          </ul>
+        </Section>
+
+        <Section
+          title="Authorization checks"
+          description="Compare each invoice with the job, purchase order or contract it bills. They deliver by default; when one is set to Hold, each invoice is decided once it has been matched and reconciled, and waits until then."
+        >
+          <ul className="divide-y">
+            {RECONCILIATION_DELIVERY_RULES.map(ruleRow)}
           </ul>
         </Section>
 

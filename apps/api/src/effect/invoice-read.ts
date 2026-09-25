@@ -70,6 +70,17 @@ export const InvoiceItem = Schema.Struct({
    */
   sourceMatch: Schema.optional(Schema.NullOr(Schema.Unknown)),
   /**
+   * The current reconciliation of that match with the sources' authorized
+   * terms (docs/reconciliation.md): `status` (`reconciled`, `discrepancy`,
+   * `unresolved`, `unmatched`), per source the line and total variances
+   * (quantity, rate, tax, amount) and the `balance` (authorized, committed
+   * before and after this invoice, remaining), the `discrepancies` and
+   * `unresolved` findings with their evidence, and the tolerances applied.
+   * Null until reconciled. A credential without `sources.read` gets only
+   * `status` and the findings' codes.
+   */
+  reconciliation: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  /**
    * The delivery rules' decision for the current revision: the policy
    * version it was made under, `outcome` (`deliver` or `hold`), the
    * `reasons` it was held, what each destination was told and how a hold
@@ -403,13 +414,38 @@ export const summarizeSourceMatch = (value: unknown) => {
   };
 };
 
-const withSourceDetails = <T extends { sourceMatch?: unknown }>(
+/**
+ * The reconciliation as a credential without `sources.read` sees it: its
+ * status and which kinds of findings it has, never the sources' amounts,
+ * terms or evidence.
+ */
+export const summarizeReconciliation = (value: unknown) => {
+  if (value === null || value === undefined) return value;
+  const reconciliation = record(value);
+  const codes = (items: unknown) =>
+    Array.isArray(items) ? items.map((item) => record(item).code) : [];
+  return {
+    status: reconciliation.status,
+    discrepancies: codes(reconciliation.discrepancies),
+    unresolved: codes(reconciliation.unresolved),
+  };
+};
+
+const withSourceDetails = <
+  T extends { sourceMatch?: unknown; reconciliation?: unknown },
+>(
   item: T,
   sourceDetails: SourceDetails,
 ): T =>
   sourceDetails === "full"
     ? item
-    : { ...item, sourceMatch: summarizeSourceMatch(item.sourceMatch) };
+    : {
+        ...item,
+        sourceMatch: summarizeSourceMatch(item.sourceMatch),
+        ...("reconciliation" in item
+          ? { reconciliation: summarizeReconciliation(item.reconciliation) }
+          : {}),
+      };
 
 const csvCell = (value: unknown) => {
   const text = value === null || value === undefined ? "" : String(value);

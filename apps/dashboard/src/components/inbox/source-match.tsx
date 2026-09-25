@@ -26,6 +26,7 @@ import { Textarea } from "@invoicewise/ui/textarea";
 import { useToast } from "@invoicewise/ui/use-toast";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ReconciliationView } from "./reconciliation-view";
 import { type SourceMatchDecision, SourceMatchView } from "./source-match-view";
 
 const UNALLOCATED = "__none__";
@@ -72,9 +73,12 @@ export function SourceMatch({
   const [lineTargets, setLineTargets] = useState<Record<number, string>>({});
   const [reason, setReason] = useState("");
 
-  const { data, isLoading } = useQuery(
-    trpc.sourceMatches.forInvoice.queryOptions({ inboxId }),
-  );
+  const { data, isLoading } = useQuery({
+    ...trpc.sourceMatches.forInvoice.queryOptions({ inboxId }),
+    // A newer decision or revision is shown as reconciling until it is.
+    refetchInterval: (query) =>
+      query.state.data?.reconciliation.reconciling ? 3000 : false,
+  });
   const sources = useQuery(
     trpc.authorizationSources.list.queryOptions(
       { q: search.trim() || null, pageSize: 20 },
@@ -133,7 +137,7 @@ export function SourceMatch({
 
   const current = data.current as unknown as SourceMatchDecision | null;
   const history = data.history as unknown as SourceMatchDecision[];
-  const format = (value: string) => formatDate(value, user?.dateFormat);
+  const format = (value: string | Date) => formatDate(value, user?.dateFormat);
   const expectedMatchId = current?.id ?? null;
 
   const openChange = (preselect?: string) => {
@@ -224,6 +228,14 @@ export function SourceMatch({
         formatAmount={money}
         invoiceLines={lines.map((line) => line.description)}
         onChoose={data.canDecide ? openChange : undefined}
+        reconciliation={
+          <ReconciliationView
+            reconciliation={data.reconciliation}
+            formatDate={format}
+            formatAmount={money}
+            invoiceLines={lines.map((line) => line.description)}
+          />
+        }
         actions={actions}
       />
 

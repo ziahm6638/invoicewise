@@ -54,6 +54,7 @@ suite("data lifecycle (integration)", () => {
   let runner: typeof import("@invoicewise/jobs/runner");
   let supplierJobs: typeof import("@invoicewise/jobs/suppliers");
   let sourceJobs: typeof import("@invoicewise/jobs/authorization-sources");
+  let reconciliationJobs: typeof import("@invoicewise/jobs/reconciliation");
   let effect: typeof import("effect");
   let caller: (ctx: any) => Record<string, any>;
   let storageRoot: string;
@@ -85,6 +86,7 @@ suite("data lifecycle (integration)", () => {
     runner = await import("@invoicewise/jobs/runner");
     supplierJobs = await import("@invoicewise/jobs/suppliers");
     sourceJobs = await import("@invoicewise/jobs/authorization-sources");
+    reconciliationJobs = await import("@invoicewise/jobs/reconciliation");
     effect = await import("effect");
     const { appRouter } = await import("@api/trpc/routers/_app");
     const { createCallerFactory } = await import("@api/trpc/init");
@@ -452,6 +454,13 @@ suite("data lifecycle (integration)", () => {
       reason: "Export test",
       sources: [{ sourceId: purchaseOrder.sourceId }],
     });
+    // ...and reconciled with it, as its queued job would.
+    const reconciled = await reconciliationJobs.reconcileInvoiceMatch(db, {
+      teamId,
+      invoiceId: invoices[0]!.id,
+      matchId: linked.id,
+      revision: linked.processingRevision,
+    });
     const received = await seedInboundEmail(teamId, {
       status: "processed",
       subject: "Invoice from Acme",
@@ -684,6 +693,16 @@ suite("data lifecycle (integration)", () => {
           allocations: [{ invoiceLineIndex: null, amount: "120.00" }],
         },
       ],
+    });
+    const reconciliations = JSON.parse(
+      entries.get("reconciliations.json")!.toString(),
+    );
+    expect(reconciliations).toHaveLength(1);
+    expect(reconciliations[0]).toMatchObject({
+      id: (reconciled as { reconciliationId: string }).reconciliationId,
+      invoiceId: invoices[0]!.id,
+      matchId: linked.id,
+      current: true,
     });
     const judgments = JSON.parse(entries.get("judgments.json")!.toString());
     expect(judgments.map((judgment: { id: string }) => judgment.id)).toContain(

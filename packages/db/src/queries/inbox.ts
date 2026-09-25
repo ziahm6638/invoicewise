@@ -6,6 +6,7 @@ import {
   inboxAccounts,
   inboxEmbeddings,
   inboxRedeliveries,
+  invoiceReconciliations,
   invoiceSourceMatches,
   suppliers,
   transactionAttachments,
@@ -74,6 +75,19 @@ const decisionIs = (resolution: "unresolved" | "dismissed") =>
   )`;
 
 /**
+ * The current revision's decision waits for its reconciliation (the rules
+ * hold on an authorization check); nothing has been scheduled yet.
+ */
+const decisionPending = () =>
+  sql`exists (
+    select 1 from delivery_decisions dd
+    where dd.invoice_id = ${inbox.id}
+      and dd.team_id = ${inbox.teamId}
+      and dd.revision = ${inbox.processingRevision}
+      and dd.outcome = 'pending'
+  )`;
+
+/**
  * Outcome of the destinations the current processing revision was delivered
  * to: its webhook deliveries (not `delivery.failed` notifications) and the
  * invoice's accounting post. "held" means the delivery rules withheld a
@@ -87,6 +101,7 @@ const invoiceDeliverySummary = () =>
     select json_build_object(
       'state', case
         when ${decisionIs("unresolved")} then 'held'
+        when ${decisionPending()} then 'pending'
         when count(*) filter (where d.status = 'failed') > 0 then 'failed'
         when ${decisionIs("dismissed")} then 'dismissed'
         when count(*) filter (where d.status in ('queued', 'delivering')) > 0 then 'pending'
@@ -358,6 +373,27 @@ const currentSourceMatch = () =>
     where m.id = ${inbox.sourceMatchId}
   )`;
 
+/**
+ * The invoice's current reconciliation with its authorization sources as
+ * reads present it (docs/reconciliation.md): the stored result with its
+ * identity and time. Null until reconciled.
+ */
+const currentReconciliation = () =>
+  sql<Record<string, unknown> | null>`(
+    select (r.result - 'scopeJudgments') || jsonb_build_object(
+      'id', r.id,
+      'sequence', r.sequence,
+      'matchId', r.match_id,
+      'processingRevision', r.processing_revision,
+      'status', r.status,
+      'consumes', r.consumes,
+      'rulesVersion', r.rules_version,
+      'reconciledAt', r.created_at
+    )
+    from ${invoiceReconciliations} r
+    where r.id = ${inbox.reconciliationId}
+  )`;
+
 const inboundEmailSource = {
   id: inboundEmails.id,
   messageId: inboundEmails.messageId,
@@ -460,6 +496,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       supplierId: inbox.supplierId,
       supplierChecks: inbox.supplierChecks,
       sourceMatch: currentSourceMatch(),
+      reconciliation: currentReconciliation(),
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
@@ -557,6 +594,7 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       supplierId: inbox.supplierId,
       supplierChecks: inbox.supplierChecks,
       sourceMatch: currentSourceMatch(),
+      reconciliation: currentReconciliation(),
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),

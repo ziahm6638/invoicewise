@@ -57,6 +57,7 @@ const EVENT_LABELS: Record<string, string> = {
   "invoice.processed": "Invoice processed",
   "invoice.judgments.attached": "Judgments attached",
   "invoice.matched": "Matched to authorization sources",
+  "invoice.reconciled": "Reconciled with authorization sources",
   "delivery.failed": "Delivery failed",
   "webhook.test": "Test event",
 };

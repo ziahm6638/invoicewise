@@ -28,6 +28,36 @@ type InvoiceRecord = {
   processingStalled?: boolean | null;
 };
 
+/**
+ * How the delivery rules' decision for a revision reads. A `pending`
+ * decision waits for the invoice's reconciliation (the rules hold on an
+ * authorization check): nothing is held or sent yet and there is nothing to
+ * release or dismiss.
+ */
+export type DeliveryDecisionView = "pending" | "held" | "resolved" | "eligible";
+
+export function deliveryDecisionView(decision: {
+  outcome?: unknown;
+  accounting?: unknown;
+  webhooks?: unknown;
+  resolution?: unknown;
+}): DeliveryDecisionView {
+  if (decision.outcome === "pending") return "pending";
+  if (decision.resolution) return "resolved";
+  if (
+    decision.outcome === "hold" &&
+    (decision.accounting === "held" || decision.webhooks === "held")
+  ) {
+    return "held";
+  }
+  return "eligible";
+}
+
+/** The current revision's decision waits for its reconciliation. */
+export const awaitingReconciliation = (invoice: {
+  deliveryDecision?: { outcome?: unknown } | null;
+}) => invoice.deliveryDecision?.outcome === "pending";
+
 export function getInvoiceState(invoice: InvoiceRecord): InvoiceState {
   if (invoice.processingStalled) return "failed";
   if (["new", "processing", "analyzing"].includes(invoice.status ?? "")) {
@@ -107,6 +137,8 @@ type WorkflowRecord = InvoiceRecord & {
   judgmentsRerunStatus?: string | null;
   judgmentsRerunError?: string | null;
   correctionCount?: number | null;
+  /** The delivery rules' decision for the current revision. */
+  deliveryDecision?: { outcome?: unknown } | null;
   accountingPostStatus?: string | null;
   accountingProviderId?: string | null;
   delivery?: {
@@ -288,73 +320,82 @@ export function describeInvoiceWorkflow(
         summary: "Nothing is delivered until the document has been read.",
         next: null,
       }
-    : summary?.state === "held"
+    : awaitingReconciliation(invoice)
       ? {
           key: "delivery",
           label: "Delivery",
-          status: "attention",
+          status: "in_progress",
           summary:
-            "Held by the delivery rules; nothing held has been sent. The reasons are listed under Delivery.",
-          next: viewer.resolveHeldDeliveries
-            ? "Correct the invoice, or release or dismiss it with a reason."
-            : "Correct the invoice, or ask an owner or admin to release or dismiss it.",
+            "Waiting for reconciliation: the delivery rules decide this invoice once it is matched and reconciled with its authorization sources. Nothing has been sent yet.",
+          next: null,
         }
-      : summary?.state === "dismissed"
+      : summary?.state === "held"
         ? {
             key: "delivery",
             label: "Delivery",
-            status: "done",
+            status: "attention",
             summary:
-              "An owner or admin dismissed it, so it is not delivered. A correction or re-extraction is decided again.",
-            next: null,
+              "Held by the delivery rules; nothing held has been sent. The reasons are listed under Delivery.",
+            next: viewer.resolveHeldDeliveries
+              ? "Correct the invoice, or release or dismiss it with a reason."
+              : "Correct the invoice, or ask an owner or admin to release or dismiss it.",
           }
-        : summary?.state === "failed"
+        : summary?.state === "dismissed"
           ? {
               key: "delivery",
               label: "Delivery",
-              status: "failed",
-              summary: `${summary.failed ?? 0} of ${plural(total, "destination")} failed or ${summary.failed === 1 ? "is" : "are"} held for review.`,
-              next:
-                invoice.accountingPostStatus === "failed" &&
-                validationStatus === "invalid"
-                  ? viewer.postToAccounting
-                    ? "Correct the invoice; once it validates it is sent again."
-                    : "Correct the invoice; once it validates an admin must send it again."
-                  : "Retry delivery for the failed destinations below.",
+              status: "done",
+              summary:
+                "An owner or admin dismissed it, so it is not delivered. A correction or re-extraction is decided again.",
+              next: null,
             }
-          : summary?.state === "pending"
+          : summary?.state === "failed"
             ? {
                 key: "delivery",
                 label: "Delivery",
-                status: "in_progress",
-                summary: `Queued for ${plural(summary.pending ?? total, "destination")}; not delivered yet.`,
-                next: null,
+                status: "failed",
+                summary: `${summary.failed ?? 0} of ${plural(total, "destination")} failed or ${summary.failed === 1 ? "is" : "are"} held for review.`,
+                next:
+                  invoice.accountingPostStatus === "failed" &&
+                  validationStatus === "invalid"
+                    ? viewer.postToAccounting
+                      ? "Correct the invoice; once it validates it is sent again."
+                      : "Correct the invoice; once it validates an admin must send it again."
+                    : "Retry delivery for the failed destinations below.",
               }
-            : summary?.state === "delivered"
+            : summary?.state === "pending"
               ? {
                   key: "delivery",
                   label: "Delivery",
-                  status: "done",
-                  summary: `Delivered to ${plural(summary.succeeded ?? total, "destination")}${posted ? ", including the accounting bill" : ""}.`,
+                  status: "in_progress",
+                  summary: `Queued for ${plural(summary.pending ?? total, "destination")}; not delivered yet.`,
                   next: null,
                 }
-              : summary?.state === "cancelled"
+              : summary?.state === "delivered"
                 ? {
                     key: "delivery",
                     label: "Delivery",
-                    status: "attention",
-                    summary:
-                      "Every destination was removed before delivery, so nothing was sent.",
-                    next: "Reconnect the destination, then retry delivery.",
-                  }
-                : {
-                    key: "delivery",
-                    label: "Delivery",
-                    status: "not_started",
-                    summary:
-                      "No webhook or accounting connection was set up when this revision was saved.",
+                    status: "done",
+                    summary: `Delivered to ${plural(summary.succeeded ?? total, "destination")}${posted ? ", including the accounting bill" : ""}.`,
                     next: null,
-                  };
+                  }
+                : summary?.state === "cancelled"
+                  ? {
+                      key: "delivery",
+                      label: "Delivery",
+                      status: "attention",
+                      summary:
+                        "Every destination was removed before delivery, so nothing was sent.",
+                      next: "Reconnect the destination, then retry delivery.",
+                    }
+                  : {
+                      key: "delivery",
+                      label: "Delivery",
+                      status: "not_started",
+                      summary:
+                        "No webhook or accounting connection was set up when this revision was saved.",
+                      next: null,
+                    };
 
   return [extraction, validation, questions, delivery];
 }

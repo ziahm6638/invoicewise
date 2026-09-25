@@ -108,6 +108,7 @@ export const deliveryDecisionColumns = {
   resolutionReason: deliveryDecisions.resolutionReason,
   resolvedBy: deliveryDecisions.resolvedBy,
   resolvedAt: deliveryDecisions.resolvedAt,
+  deferred: deliveryDecisions.deferred,
   createdAt: deliveryDecisions.createdAt,
 };
 
@@ -228,7 +229,91 @@ export async function webhooksHeldFor(
   params: { invoiceId: string; teamId: string; revision: number },
 ) {
   const decision = await getDeliveryDecision(db, params);
-  return decision?.webhooks === "held" && decision.resolution !== "released";
+  return (
+    decision?.webhooks === "pending" ||
+    (decision?.webhooks === "held" && decision.resolution !== "released")
+  );
+}
+
+/**
+ * Decides a revision whose decision waited for its reconciliation, once: a
+ * second attempt (a replayed job) updates nothing and gets null.
+ */
+export async function finalizeDeliveryDecision(
+  db: Executor,
+  params: {
+    id: string;
+    teamId: string;
+    values: Pick<
+      typeof deliveryDecisions.$inferInsert,
+      | "policyId"
+      | "policyVersion"
+      | "policy"
+      | "rulesVersion"
+      | "outcome"
+      | "reasons"
+      | "accounting"
+      | "webhooks"
+    >;
+  },
+) {
+  const [row] = await db
+    .update(deliveryDecisions)
+    .set(params.values)
+    .where(
+      and(
+        eq(deliveryDecisions.id, params.id),
+        eq(deliveryDecisions.teamId, params.teamId),
+        eq(deliveryDecisions.outcome, "pending"),
+      ),
+    )
+    .returning(deliveryDecisionColumns);
+  return row;
+}
+
+/**
+ * Current revisions still waiting for their reconciliation although no
+ * matching or reconciliation job for the invoice is queued or running: the
+ * job was lost or failed for good. The reconciler decides them.
+ */
+export async function listStalledPendingDecisions(
+  db: Pick<Database, "select">,
+  params: { teamId?: string; invoiceId?: string; limit: number },
+) {
+  return db
+    .select({
+      id: deliveryDecisions.id,
+      teamId: deliveryDecisions.teamId,
+      invoiceId: deliveryDecisions.invoiceId,
+      revision: deliveryDecisions.revision,
+    })
+    .from(deliveryDecisions)
+    .innerJoin(
+      inbox,
+      and(
+        eq(inbox.id, deliveryDecisions.invoiceId),
+        eq(inbox.processingRevision, deliveryDecisions.revision),
+      ),
+    )
+    .where(
+      and(
+        eq(deliveryDecisions.outcome, "pending"),
+        params.teamId ? eq(deliveryDecisions.teamId, params.teamId) : undefined,
+        params.invoiceId
+          ? eq(deliveryDecisions.invoiceId, params.invoiceId)
+          : undefined,
+        sql`not exists (
+          select 1 from workflow_jobs j
+          where j.team_id = ${deliveryDecisions.teamId}
+            and j.name in ('match-invoice', 'reconcile-invoice')
+            and j.payload ->> 'invoiceId' = ${deliveryDecisions.invoiceId}::text
+            and j.status in ('queued', 'running')
+        )`,
+        // Give a just-committed revision's job time to be picked up.
+        sql`${deliveryDecisions.createdAt} < now() - interval '2 minutes'`,
+      ),
+    )
+    .limit(params.limit);
 }
 
 /** A processed invoice as its revision's deliveries carry it, locked. */

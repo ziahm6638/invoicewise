@@ -39,11 +39,13 @@ import { DELIVERY_POLICY_LIMITS } from "@invoicewise/documents";
 import { InvoiceActionError } from "./action-error";
 
 export { InvoiceActionError } from "./action-error";
+import type { ReconciliationForPolicy } from "@invoicewise/documents";
 import { workflowKey } from "./client";
 import {
   decideRevision,
   decisionHeld,
   decisionSummary,
+  finalizeDeferredDecision,
 } from "./delivery-rules";
 
 /**
@@ -164,7 +166,9 @@ const eventRecord = (invoice: CompletedInvoice) => {
  * inside the transaction that commits the revision. A user revision that
  * cannot change the bill (a question rerun) or that decides the bill itself
  * (a correction) passes `accounting: false`; `data` adds to what the webhook
- * events carry; `approval` holds the revision for an admin's release.
+ * events carry; `approval` holds the revision for an admin's release. When
+ * the rules wait for the revision's reconciliation, nothing is scheduled
+ * yet: `decideDeferredRevision` schedules it once it is reconciled.
  */
 export async function scheduleInvoiceDeliveries(
   db: Database,
@@ -182,17 +186,34 @@ export async function scheduleInvoiceDeliveries(
   const decision = await decideRevision(
     db,
     { ...invoice, teamId },
-    { approval: options.approval, accounting: options.accounting },
+    {
+      approval: options.approval,
+      accounting: options.accounting,
+      data: options.data,
+    },
   );
+  if (decision.outcome === "pending") {
+    return { webhooks: 0, accounting: false, decision };
+  }
+  return scheduleDecided(db, { ...invoice, teamId }, decision, options.data);
+}
+
+/** Schedules what a decided revision's decision lets through. */
+async function scheduleDecided(
+  db: Database,
+  invoice: CompletedInvoice & { teamId: string },
+  decision: Awaited<ReturnType<typeof decideRevision>>,
+  extra: Record<string, unknown> | null | undefined,
+) {
   const data = {
     ...eventRecord(invoice),
-    ...options.data,
+    ...extra,
     deliveryDecision: decisionSummary(decision),
   };
 
   const webhooks =
     decision.webhooks === "deliver"
-      ? await scheduleRevisionEvents(db, { ...invoice, teamId }, data)
+      ? await scheduleRevisionEvents(db, invoice, data)
       : 0;
 
   if (decision.accounting !== "deliver") {
@@ -200,12 +221,65 @@ export async function scheduleInvoiceDeliveries(
   }
   const accounting = await scheduleAccountingPost(db, {
     invoiceId: invoice.id,
-    teamId,
+    teamId: invoice.teamId,
     revision: invoice.processingRevision,
     status: invoice.accountingPostStatus,
     providerId: invoice.accountingProviderId,
   });
   return { webhooks, accounting: accounting !== null, decision };
+}
+
+/**
+ * Decides the invoice's current revision now that it is reconciled, when
+ * its decision waited for that, and schedules what the decision lets
+ * through, carrying the reconciliation in the revision's events. Runs in
+ * the reconciliation's transaction, under the invoice's lock. Returns null
+ * when the revision was not waiting (already decided, or never deferred).
+ */
+export async function decideDeferredRevision(
+  db: Database,
+  input: {
+    teamId: string;
+    invoiceId: string;
+    revision: number;
+    reconciliation: ReconciliationForPolicy | null;
+    summary?: Record<string, unknown> | null;
+  },
+) {
+  const found = await getCompletedInvoiceForUpdate(db, {
+    id: input.invoiceId,
+    teamId: input.teamId,
+  });
+  if (
+    !found?.teamId ||
+    found.status === "deleted" ||
+    found.status === "processing" ||
+    found.processingRevision !== input.revision
+  ) {
+    return null;
+  }
+  const pending = await getDeliveryDecision(db, {
+    invoiceId: input.invoiceId,
+    teamId: input.teamId,
+    revision: input.revision,
+  });
+  if (!pending || pending.outcome !== "pending") return null;
+  const { intakeState, processingError, ...record } = found;
+  const invoice = { ...record, teamId: found.teamId };
+  const decision = await finalizeDeferredDecision(
+    db,
+    invoice,
+    pending,
+    input.reconciliation,
+  );
+  if (!decision) return null;
+  const deferred = (pending.deferred ?? {}) as {
+    data?: Record<string, unknown> | null;
+  };
+  return scheduleDecided(db, invoice, decision, {
+    ...deferred.data,
+    ...(input.summary ? { reconciliation: input.summary } : {}),
+  });
 }
 
 /**
@@ -712,6 +786,8 @@ export async function requeueAccountingIntent(
   if (decision?.outcome === "hold" && decision.resolution !== "released") {
     return decision.resolution === "dismissed" ? "dismissed" : "held";
   }
+  // Not decided yet: the revision waits for its reconciliation.
+  if (decision?.outcome === "pending") return "held";
   if (
     input.status !== "failed" &&
     input.status !== "cancelled" &&

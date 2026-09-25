@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   STALLED_PROCESSING_REASON,
+  awaitingReconciliation,
+  deliveryDecisionView,
   describeInvoiceWorkflow,
   getInvoiceState,
 } from "./invoice-state";
@@ -195,6 +197,77 @@ describe("invoice workflow", () => {
       status: "done",
       summary: "Delivered to 1 destination, including the accounting bill.",
     });
+  });
+
+  test("a decision waiting for reconciliation is in progress, not held", () => {
+    const waiting = {
+      ...extracted,
+      // The server's summary reads a pending decision as pending.
+      delivery: { state: "pending", total: 0, pending: 0 },
+      deliveryDecision: {
+        outcome: "pending",
+        accounting: "pending",
+        webhooks: "pending",
+        resolution: null,
+      },
+    };
+    expect(awaitingReconciliation(waiting)).toBe(true);
+    expect(getInvoiceState(waiting)).toBe("delivering");
+    const delivery = stage(waiting, "delivery");
+    expect(delivery.status).toBe("in_progress");
+    expect(delivery.summary).toContain("Waiting for reconciliation");
+    expect(delivery.summary).not.toContain("Held");
+    expect(delivery.next).toBeNull();
+    expect(
+      awaitingReconciliation({
+        deliveryDecision: { outcome: "hold" },
+      }),
+    ).toBe(false);
+    expect(awaitingReconciliation({ deliveryDecision: null })).toBe(false);
+  });
+
+  test("a decision reads as waiting, held, resolved or eligible", () => {
+    expect(
+      deliveryDecisionView({
+        outcome: "pending",
+        accounting: "pending",
+        webhooks: "pending",
+        resolution: null,
+      }),
+    ).toBe("pending");
+    expect(
+      deliveryDecisionView({
+        outcome: "hold",
+        accounting: "held",
+        webhooks: "deliver",
+        resolution: null,
+      }),
+    ).toBe("held");
+    expect(
+      deliveryDecisionView({
+        outcome: "hold",
+        accounting: "held",
+        webhooks: "held",
+        resolution: "released",
+      }),
+    ).toBe("resolved");
+    // A hold with nothing to withhold (no destination) sends nothing either way.
+    expect(
+      deliveryDecisionView({
+        outcome: "hold",
+        accounting: "not_connected",
+        webhooks: "deliver",
+        resolution: null,
+      }),
+    ).toBe("eligible");
+    expect(
+      deliveryDecisionView({
+        outcome: "deliver",
+        accounting: "deliver",
+        webhooks: "deliver",
+        resolution: null,
+      }),
+    ).toBe("eligible");
   });
 
   test("question reruns and corrections are visible", () => {

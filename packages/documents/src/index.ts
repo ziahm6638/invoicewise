@@ -14,3 +14,5 @@ export * from "./authorization-source";
 export * from "./source-matching";
 export * from "./typesafe/source-match";
 export * from "./delivery-policy";
+export * from "./reconciliation";
+export * from "./typesafe/scope";

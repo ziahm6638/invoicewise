@@ -6,6 +6,7 @@ import {
   type PolicyQuestion,
   evaluateDeliveryPolicy,
   normalizeDeliveryPolicy,
+  policyUsesReconciliation,
   releasable,
 } from "./delivery-policy";
 
@@ -440,5 +441,118 @@ describe("normalizeDeliveryPolicy", () => {
       "conditions.12",
     ]);
     expect(result.issues[2]?.message).toContain("always holds");
+  });
+});
+
+describe("reconciliation rules", () => {
+  const holding = {
+    ...DEFAULT_DELIVERY_POLICY,
+    rules: {
+      ...DEFAULT_DELIVERY_POLICY.rules,
+      authorization_discrepancy: "hold" as const,
+      authorization_unresolved: "hold" as const,
+      authorization_missing: "hold" as const,
+    },
+  };
+  const withReconciliation = (
+    reconciliation: Parameters<
+      typeof evaluateDeliveryPolicy
+    >[0]["reconciliation"],
+    policy: DeliveryPolicy = holding,
+  ) =>
+    evaluateDeliveryPolicy({
+      policy,
+      extraction,
+      validation: validValidation,
+      supplierChecks: knownSupplier,
+      judgments: [],
+      reconciliation,
+    });
+  const over = {
+    code: "over_authorized_total",
+    message: "Purchase order PO-1 authorizes GBP 1000.00; GBP 100.00 over.",
+  };
+
+  test("they deliver by default and the default policy never waits for them", () => {
+    expect(policyUsesReconciliation(DEFAULT_DELIVERY_POLICY)).toBe(false);
+    expect(policyUsesReconciliation(holding)).toBe(true);
+    const result = withReconciliation(
+      { status: "discrepancy", discrepancies: [over], unresolved: [] },
+      DEFAULT_DELIVERY_POLICY,
+    );
+    expect(result.outcome).toBe("deliver");
+  });
+
+  test("a discrepancy holds with the reconciliation's own words, releasable", () => {
+    const result = withReconciliation({
+      status: "discrepancy",
+      discrepancies: [over],
+      unresolved: [],
+    });
+    expect(result.outcome).toBe("hold");
+    expect(result.reasons).toEqual([
+      {
+        code: "authorization_discrepancy",
+        rule: "authorization_discrepancy",
+        message: `${over.message} Release it if the extra is agreed, or dismiss it.`,
+        locked: false,
+      },
+    ]);
+    expect(releasable(result.reasons)).toBe(true);
+  });
+
+  test("unresolved, unmatched and missing reconciliations", () => {
+    expect(
+      withReconciliation({
+        status: "unresolved",
+        discrepancies: [],
+        unresolved: [
+          { code: "currency_mismatch", message: "Different currencies." },
+        ],
+      }).reasons.map((reason) => reason.code),
+    ).toEqual(["authorization_unresolved"]);
+    expect(
+      withReconciliation({
+        status: "unmatched",
+        discrepancies: [],
+        unresolved: [],
+      }).reasons.map((reason) => reason.code),
+    ).toEqual(["authorization_missing"]);
+    // Not reconciled at all is never read as reconciled.
+    expect(
+      withReconciliation(null).reasons.map((reason) => reason.code),
+    ).toEqual(["authorization_unresolved"]);
+    expect(
+      withReconciliation({
+        status: "reconciled",
+        discrepancies: [],
+        unresolved: [],
+      }).outcome,
+    ).toBe("deliver");
+  });
+
+  test("a policy saved before the rules existed keeps their defaults", () => {
+    const {
+      authorization_discrepancy,
+      authorization_unresolved,
+      authorization_missing,
+      ...older
+    } = DEFAULT_DELIVERY_POLICY.rules;
+    const result = normalizeDeliveryPolicy(
+      { ...DEFAULT_DELIVERY_POLICY, rules: older },
+      [],
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.policy.rules.authorization_discrepancy).toBe("deliver");
+    }
+    const wrong = normalizeDeliveryPolicy(
+      {
+        ...DEFAULT_DELIVERY_POLICY,
+        rules: { ...older, authorization_missing: "sometimes" },
+      },
+      [],
+    );
+    expect(wrong.ok).toBe(false);
   });
 });

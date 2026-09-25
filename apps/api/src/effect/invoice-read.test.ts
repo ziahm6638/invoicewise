@@ -95,6 +95,36 @@ const invoice = {
     reason: null,
     decidedAt: "2026-09-21T10:00:00.000Z",
   },
+  reconciliation: {
+    id: "4a2d8c61-5e7f-4b3a-9c1d-7e8f9a0b1c2d",
+    sequence: 1,
+    matchId: "3f1c9a52-4b1e-4c55-9f0b-6b1d2f8e7a10",
+    status: "discrepancy",
+    consumes: true,
+    message: "1 discrepancy with Purchase order PO-55120.",
+    sources: [
+      {
+        sourceId: "b8e2a6f1-0c3d-4e5f-8a9b-1c2d3e4f5a6b",
+        reference: "PO-55120",
+        balance: {
+          authorized: "100.00",
+          committedBefore: "90.00",
+          invoiced: "100.00",
+          committedAfter: "190.00",
+          remaining: "-90.00",
+        },
+      },
+    ],
+    discrepancies: [
+      {
+        code: "over_authorized_total",
+        message:
+          "Purchase order PO-55120 authorizes GBP 100.00; GBP 90.00 over.",
+      },
+    ],
+    unresolved: [],
+    reconciledAt: "2026-09-21T10:00:01.000Z",
+  },
   deliveryDecision: {
     id: "7f4c2b2e-2a51-4a0a-8f0e-4f7a4d2b9c10",
     revision: 1,
@@ -265,6 +295,7 @@ describe("Effect invoice read HTTP slice", () => {
           supplierId: invoice.supplierId,
           supplierChecks: invoice.supplierChecks,
           sourceMatch: invoice.sourceMatch,
+          reconciliation: invoice.reconciliation,
           deliveryDecision: invoice.deliveryDecision,
           processingError: null,
           inboundEmail: invoice.inboundEmail,
@@ -401,12 +432,18 @@ describe("Effect invoice read HTTP slice", () => {
         await read(path, ["inbox.read"])
       ).json()) as Record<string, unknown>;
       expect(inboxOnly.sourceMatch).toEqual(summary);
+      expect(inboxOnly.reconciliation).toEqual({
+        status: "discrepancy",
+        discrepancies: ["over_authorized_total"],
+        unresolved: [],
+      });
       expect(inboxOnly.supplierChecks).toEqual(invoice.supplierChecks);
 
       const withSources = (await (
         await read(path, ["inbox.read", "sources.read"])
       ).json()) as Record<string, unknown>;
       expect(withSources.sourceMatch).toEqual(invoice.sourceMatch);
+      expect(withSources.reconciliation).toEqual(invoice.reconciliation);
     }
 
     const inboxOnlyPage = (await (

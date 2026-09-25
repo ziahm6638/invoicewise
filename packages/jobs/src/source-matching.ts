@@ -54,7 +54,9 @@ import {
   summarizeAllocations,
   supplierKey,
 } from "@invoicewise/documents";
+import { workflowKey } from "./client";
 import { logicalEventId, scheduleWebhookEvent } from "./delivery";
+import { scheduleReconciliation } from "./reconciliation";
 
 /** Unlinked sources compared by their supplied identifiers per invoice. */
 const UNLINKED_SOURCES = 50;
@@ -269,11 +271,6 @@ const linksOf = (result: {
 
 // --- Automatic matching ------------------------------------------------------------
 
-export const matchWorkflowKey = {
-  processing: (teamId: string, invoiceId: string, revision: number) =>
-    `${teamId}:${invoiceId}:r${revision}`,
-};
-
 /**
  * Queues automatic matching for a processed revision. Runs inside the
  * processing transaction, so a completed revision always has its match
@@ -290,7 +287,7 @@ export async function scheduleInvoiceMatch(
       teamId: input.teamId,
       invoiceId: input.invoiceId,
     },
-    idempotencyKey: matchWorkflowKey.processing(
+    idempotencyKey: workflowKey.match(
       input.teamId,
       input.invoiceId,
       input.revision,
@@ -335,6 +332,13 @@ export async function matchInvoice(
       })
     : null;
   if (current?.origin === "manual") {
+    // The person's decision stands; the revision is reconciled with it.
+    await scheduleReconciliation(db, {
+      teamId: input.teamId,
+      invoiceId: input.invoiceId,
+      matchId: current.id,
+      revision: invoice.processingRevision,
+    });
     return { outcome: "kept_override", matchId: current.id };
   }
 
@@ -393,7 +397,15 @@ export async function matchInvoice(
           matchId: locked.sourceMatchId,
         })
       : null;
+    const reconcile = (matchId: string) =>
+      scheduleReconciliation(executor, {
+        teamId: input.teamId,
+        invoiceId: input.invoiceId,
+        matchId,
+        revision: locked.processingRevision,
+      });
     if (latest?.origin === "manual") {
+      await reconcile(latest.id);
       return { outcome: "kept_override", matchId: latest.id } as const;
     }
     if (
@@ -401,6 +413,7 @@ export async function matchInvoice(
       latest.fingerprint === fingerprint &&
       latest.processingRevision === locked.processingRevision
     ) {
+      await reconcile(latest.id);
       return {
         outcome: "unchanged",
         matchId: latest.id,
@@ -428,6 +441,7 @@ export async function matchInvoice(
       revision: locked.processingRevision,
       match,
     });
+    await reconcile(match.id);
     return {
       outcome: "recorded",
       matchId: match.id,
@@ -527,6 +541,13 @@ async function recordManual(
     invoiceId: input.invoice.id,
     revision: input.invoice.processingRevision,
     match,
+  });
+  // The sources' balances move with the decision once it is reconciled.
+  await scheduleReconciliation(db, {
+    teamId: input.teamId,
+    invoiceId: input.invoice.id,
+    matchId: match.id,
+    revision: input.invoice.processingRevision,
   });
   return presentSourceMatch(match);
 }

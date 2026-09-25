@@ -10,6 +10,7 @@ import {
   completeDataExport,
   documentBindingIssue,
   getAuthorizationSourcesForExport,
+  getReconciliationsForExport,
   getSourceMatchesForExport,
   getWorkspaceExportData,
   recordDataExportObject,
@@ -461,6 +462,31 @@ async function exportSourceMatches(
 }
 
 /**
+ * Every reconciliation of an exported invoice with its authorization
+ * sources, oldest first per invoice, with what it consumes of each source
+ * and whether it is the invoice's current one.
+ */
+async function exportReconciliations(
+  deps: DataExportDeps,
+  teamId: string,
+  invoiceIds: ReadonlySet<string>,
+) {
+  const data = await getReconciliationsForExport(deps.db, teamId);
+  return data.reconciliations
+    .filter((row) => invoiceIds.has(row.inboxId))
+    .map(({ teamId: _team, fingerprint: _fingerprint, inboxId, ...row }) => ({
+      ...row,
+      invoiceId: inboxId,
+      current: data.currentIds.has(row.id),
+      consumption: data.consumption
+        .filter((item) => item.reconciliationId === row.id)
+        .map(
+          ({ teamId: _t, reconciliationId: _r, inboxId: _i, ...item }) => item,
+        ),
+    }));
+}
+
+/**
  * Authorization sources with every version and their retained documents,
  * which are added to the archive under `authorization-sources/`. A document
  * whose stored path is not the source's own is listed as withheld, never read.
@@ -721,6 +747,11 @@ export async function buildDataExport(
       params.teamId,
       new Set(records.invoices.map((invoice) => String(invoice.id))),
     );
+    const reconciliations = await exportReconciliations(
+      deps,
+      params.teamId,
+      new Set(records.invoices.map((invoice) => String(invoice.id))),
+    );
     const dataFiles: { path: string; records: number; content: string }[] = [
       { path: "workspace.json", records: 1, content: json(records.workspace) },
       {
@@ -757,6 +788,11 @@ export async function buildDataExport(
         path: "source-matches.json",
         records: sourceMatches.length,
         content: json(sourceMatches),
+      },
+      {
+        path: "reconciliations.json",
+        records: reconciliations.length,
+        content: json(reconciliations),
       },
       {
         path: "questions.json",

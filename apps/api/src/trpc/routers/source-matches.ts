@@ -13,10 +13,15 @@ import {
 import {
   getAuthorizationSourceHead,
   getInvoiceForMatching,
+  listReconciliationHistory,
   listSourceInvoiceMatches,
   listSourceMatchHistory,
   roleAtLeast,
 } from "@invoicewise/db/queries";
+import {
+  getSourceBalance,
+  presentReconciliation,
+} from "@invoicewise/jobs/reconciliation";
 import {
   SourceMatchError,
   confirmInvoiceMatch,
@@ -70,11 +75,50 @@ export const sourceMatchesRouter = createTRPCRouter({
         ...presentSourceMatch(row),
         actorName,
       }));
+      const reconciliations = (
+        await listReconciliationHistory(db, {
+          teamId: teamId!,
+          inboxId: input.inboxId,
+        })
+      ).map(presentReconciliation);
+      const reconciled =
+        reconciliations.find((row) => row.id === invoice.reconciliationId) ??
+        null;
+      // The linked sources' balances as they stand now, beside the ones the
+      // reconciliation recorded when it was made.
+      const balances = reconciled
+        ? await Promise.all(
+            reconciled.sources.map(async (source) => {
+              const balance = await getSourceBalance(db, {
+                teamId: teamId!,
+                sourceId: source.sourceId,
+              });
+              if (!balance) return null;
+              const { perInvoice, ...totals } = balance;
+              return {
+                ...totals,
+                counted:
+                  perInvoice.find((item) => item.inboxId === invoice.id) ??
+                  null,
+              };
+            }),
+          )
+        : [];
       return {
         current:
           decisions.find((decision) => decision.id === invoice.sourceMatchId) ??
           null,
         history: decisions,
+        reconciliation: {
+          current: reconciled,
+          history: reconciliations,
+          // A newer decision or revision is still being reconciled.
+          reconciling:
+            invoice.sourceMatchId !== null &&
+            (reconciled?.matchId !== invoice.sourceMatchId ||
+              reconciled?.processingRevision !== invoice.processingRevision),
+          balances: balances.filter((balance) => balance !== null),
+        },
         processed:
           Boolean(invoice.extraction) && invoice.status !== "processing",
         canDecide: roleAtLeast(teamRole, "admin"),
@@ -99,6 +143,26 @@ export const sourceMatchesRouter = createTRPCRouter({
         teamId: teamId!,
         sourceId: input.id,
       });
+    }),
+
+  /**
+   * The source's balance now: the terms in effect today against every
+   * invoice currently counted against it.
+   */
+  balance: workspaceProcedure
+    .input(sourceInvoicesSchema)
+    .query(async ({ ctx: { db, teamId }, input }) => {
+      const balance = await getSourceBalance(db, {
+        teamId: teamId!,
+        sourceId: input.id,
+      });
+      if (!balance) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Authorization source not found",
+        });
+      }
+      return balance;
     }),
 
   confirm: adminProcedure

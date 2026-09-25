@@ -25,6 +25,7 @@ export const WEBHOOK_EVENTS = [
   "invoice.processed",
   "invoice.judgments.attached",
   "invoice.matched",
+  "invoice.reconciled",
   "delivery.failed",
 ] as const;
 

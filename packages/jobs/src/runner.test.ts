@@ -193,6 +193,7 @@ describe("Effect workflow runner", () => {
         "rerun-judgments",
         "rerun-question",
         "match-invoice",
+        "reconcile-invoice",
       ],
       [],
     ]);

@@ -132,6 +132,8 @@ export type CorrectionAccounting =
   | "admin_required"
   /** Not posted: the delivery rules hold the corrected invoice. */
   | "held"
+  /** Not posted yet: decided once the corrected invoice is reconciled. */
+  | "awaiting_reconciliation"
   /** Posted: the bill was left as it is. */
   | "bill_kept"
   /** Posted: an in-place update of the same bill is queued. */
@@ -413,6 +415,8 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
       accounting = "bill_kept";
     } else if (allowed === "held") {
       accounting = "held";
+    } else if (allowed === "pending") {
+      accounting = "awaiting_reconciliation";
     } else if (scheduled.accounting) {
       accounting = "post_queued";
     } else if (repost && allowed === "not_scheduled") {
@@ -601,6 +605,15 @@ export async function rerunInvoiceJudgments(
     });
     const unresolved = previous?.resolution === null;
     const accountingWasHeld = unresolved && previous?.accounting === "held";
+    // A revision still waiting for its reconciliation was never decided:
+    // the rerun's revision keeps what it asked for.
+    const waiting =
+      previous?.outcome === "pending"
+        ? ((previous.deferred ?? {}) as {
+            accounting?: boolean | null;
+            approval?: string | null;
+          })
+        : null;
     const awaitingApproval = unresolved
       ? (previous?.reasons as { code?: unknown; message?: unknown }[]).find(
           (held) => held.code === "awaiting_approval",
@@ -619,9 +632,15 @@ export async function rerunInvoiceJudgments(
     });
     if (!revised) return superseded(executor);
     const scheduled = await scheduleInvoiceDeliveries(executor, revised, {
-      accounting: accountingWasHeld,
+      accounting: waiting
+        ? (waiting.accounting ?? undefined)
+        : accountingWasHeld,
       data: { judgmentsRerun: true },
-      approval: awaitingApproval ? String(awaitingApproval.message) : null,
+      approval: waiting
+        ? (waiting.approval ?? null)
+        : awaitingApproval
+          ? String(awaitingApproval.message)
+          : null,
     });
     return {
       invoiceId: input.invoiceId,

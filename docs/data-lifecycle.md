@@ -104,6 +104,12 @@ What each row means precisely:
   anything was held. They hold no bank details beyond the masked ending the
   supplier checks already show, are kept for the invoice's life, and go with
   the invoice or the workspace; no retention job removes them.
+- **Reconciliations.** `invoice_reconciliations` and the
+  `invoice_source_consumption` rows each records ([reconciliation](reconciliation.md))
+  are the audit trail of how every invoice compared with its sources and what
+  it consumed of them. They hold amounts and source references only, are
+  immutable, are kept for the invoice's life and go with the invoice, its
+  source or the workspace; no retention job removes them.
 
 ### The retention job
 
@@ -197,6 +203,7 @@ named `invoicewise-export-<date>-<id>.zip`:
 | `authorization-sources.json` | every job, purchase order and contract with every immutable version (terms, supplier as given and as linked, effective date, change reason, origin, who recorded it) and its retained documents, each with its archive path, status and SHA-256 |
 | `authorization-sources/<source id>/<document id>-<file name>` | each retained authorization-source document exactly as attached |
 | `source-matches.json` | every decision about which authorization sources an exported invoice bills ([matching](authorization-matching.md)), oldest first per invoice: status, how and by whom it was made, the reason, the full result with its evidence, whether it is `current`, and its links (source and version ids) with their allocations |
+| `reconciliations.json` | every reconciliation of an exported invoice with its authorization sources ([reconciliation](reconciliation.md)), oldest first per invoice: the match and revision reconciled, status, the full result (variances, balances, findings with their evidence, tolerances), whether it is `current`, and what it consumes of each source (amount, quantity, currency and tax basis per authorized line) |
 | `questions.json` | the workspace's questions, every version, with a number question's unit and range |
 | `question-runs.json` | every question rerun: the revision, the invoices chosen, who asked, status and counts |
 | `question-answers.json` | every answer a rerun recorded on an exported invoice, with the answer it replaced |

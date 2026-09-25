@@ -48,6 +48,7 @@ import {
   taxBasisLabel,
   typeLabel,
 } from "./shared";
+import { SourceBalanceSection } from "./source-balance";
 import { SourceForm } from "./source-form";
 import { SourceInvoices } from "./source-invoices";
 
@@ -466,6 +467,8 @@ export function SourceDetail({ id }: { id: string }) {
           )}
         </div>
       </section>
+
+      <SourceBalanceSection id={id} />
 
       <SourceInvoices id={id} />
 

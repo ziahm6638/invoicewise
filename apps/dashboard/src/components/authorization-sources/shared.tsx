@@ -19,6 +19,22 @@ export const taxBasisLabel = (basis: string | null) =>
     ? (AUTHORIZATION_TAX_BASIS_LABELS[basis as AuthorizationTaxBasis] ?? basis)
     : "Not stated";
 
+/**
+ * Formats a decimal amount string in the viewer's locale; without a currency
+ * it is shown as a bare number.
+ */
+export function useMoneyFormat() {
+  const { data: user } = useUserQuery();
+  const locale = user?.locale ?? undefined;
+  return (amount: string, currency: string | null) =>
+    currency
+      ? (formatAmount({ amount: Number(amount), currency, locale }) ?? amount)
+      : Number(amount).toLocaleString(locale, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+}
+
 /** An authorized amount; without a currency it is shown as a bare number. */
 export function Money({
   amount,
@@ -27,24 +43,10 @@ export function Money({
   amount: string;
   currency: string | null;
 }) {
-  const { data: user } = useUserQuery();
-  if (!currency) {
-    return (
-      <span title="No currency was given">
-        {Number(amount).toLocaleString(user?.locale ?? undefined, {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}
-      </span>
-    );
-  }
+  const format = useMoneyFormat();
   return (
-    <span>
-      {formatAmount({
-        amount: Number(amount),
-        currency,
-        locale: user?.locale ?? undefined,
-      })}
+    <span title={currency ? undefined : "No currency was given"}>
+      {format(amount, currency)}
     </span>
   );
 }

@@ -2131,5 +2131,27 @@ suite("workspace permissions over real HTTP", () => {
       (await get(`/authorization-sources/${poId}/invoices`, outsiderReader))
         .status,
     ).toBe(404);
+
+    // The balance is source data; which invoices make it up is invoice
+    // data, listed only with `inbox.read`.
+    const balance = await get(
+      `/authorization-sources/${poId}/balance`,
+      readOnly,
+    );
+    expect(balance.status).toBe(200);
+    const totals = (await balance.json()) as Record<string, unknown>;
+    expect(totals).toMatchObject({ committed: "0.00", invoices: 0 });
+    expect(totals.byInvoice).toBeUndefined();
+    const withInvoices = (await (
+      await get(`/authorization-sources/${poId}/balance`, sourcesAndInbox)
+    ).json()) as Record<string, unknown>;
+    expect(withInvoices.byInvoice).toEqual([]);
+    expect(
+      (await get(`/authorization-sources/${poId}/balance`, inboxOnly)).status,
+    ).toBe(403);
+    expect(
+      (await get(`/authorization-sources/${poId}/balance`, outsiderReader))
+        .status,
+    ).toBe(404);
   });
 });

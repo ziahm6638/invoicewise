@@ -110,6 +110,14 @@ export const MatchInvoicePayload = Schema.Struct({
 });
 export type MatchInvoicePayload = typeof MatchInvoicePayload.Type;
 
+export const ReconcileInvoicePayload = Schema.Struct({
+  teamId: Schema.String,
+  invoiceId: Schema.String,
+  matchId: Schema.String,
+  revision: Schema.Number,
+});
+export type ReconcileInvoicePayload = typeof ReconcileInvoicePayload.Type;
+
 export const ApplyRetentionPayload = Schema.Struct({
   /** The hourly slot this run belongs to; the next slot is queued after it. */
   slot: Schema.String,
@@ -176,6 +184,10 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("match-invoice"),
     payload: MatchInvoicePayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("reconcile-invoice"),
+    payload: ReconcileInvoicePayload,
   }),
 );
 export type WorkflowRequest = typeof WorkflowRequest.Type;

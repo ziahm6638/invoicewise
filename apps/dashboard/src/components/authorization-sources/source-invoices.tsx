@@ -2,6 +2,7 @@
 
 import { useTRPC } from "@/trpc/client";
 import { Badge } from "@invoicewise/ui/badge";
+import { cn } from "@invoicewise/ui/cn";
 import {
   Table,
   TableBody,
@@ -12,7 +13,13 @@ import {
 } from "@invoicewise/ui/table";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import { reconciliationStatus } from "../inbox/reconciliation-view";
 import { DateText, Money } from "./shared";
+
+const STATUS_STYLE: Record<string, string> = {
+  good: "border-emerald-600/40 text-emerald-700 dark:text-emerald-400",
+  warn: "border-amber-500/50 text-amber-700 dark:text-amber-400",
+};
 
 const METHOD: Record<string, string> = {
   reference: "Reference",
@@ -22,13 +29,21 @@ const METHOD: Record<string, string> = {
 
 /**
  * The invoices currently matched to this source, with the version each was
- * compared with and what it allocates here. One source can be billed by
- * several invoices, and one invoice can split across several sources.
+ * compared with, what it allocates here, how its reconciliation came out
+ * and what it consumes of the balance. One source can be billed by several
+ * invoices, and one invoice can split across several sources.
  */
 export function SourceInvoices({ id }: { id: string }) {
   const trpc = useTRPC();
   const { data, isLoading } = useQuery(
     trpc.sourceMatches.forSource.queryOptions({ id }),
+  );
+  // Which invoices the balance counts: a consumption that is not counted
+  // (an unconfirmed match, a duplicate, a dismissed invoice, another
+  // currency) is shown but marked.
+  const balance = useQuery(trpc.sourceMatches.balance.queryOptions({ id }));
+  const ledger = new Map(
+    (balance.data?.perInvoice ?? []).map((entry) => [entry.inboxId, entry]),
   );
 
   return (
@@ -49,7 +64,9 @@ export function SourceInvoices({ id }: { id: string }) {
                 <TableHead>Date</TableHead>
                 <TableHead>Match</TableHead>
                 <TableHead>Version</TableHead>
+                <TableHead>Reconciliation</TableHead>
                 <TableHead className="text-right">Allocated here</TableHead>
+                <TableHead className="text-right">Consumed</TableHead>
                 <TableHead className="text-right">Invoice total</TableHead>
               </TableRow>
             </TableHeader>
@@ -84,6 +101,19 @@ export function SourceInvoices({ id }: { id: string }) {
                     </div>
                   </TableCell>
                   <TableCell>v{row.version}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "font-normal",
+                        STATUS_STYLE[
+                          reconciliationStatus(row.reconciliationStatus).tone
+                        ] ?? "text-muted-foreground",
+                      )}
+                    >
+                      {reconciliationStatus(row.reconciliationStatus).label}
+                    </Badge>
+                  </TableCell>
                   <TableCell className="text-right">
                     {row.allocatedAmount !== null ? (
                       <Money
@@ -93,6 +123,34 @@ export function SourceInvoices({ id }: { id: string }) {
                     ) : (
                       <span className="text-muted-foreground">
                         Not allocated
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {row.consumedAmount !== null ? (
+                      <>
+                        <Money
+                          amount={row.consumedAmount}
+                          currency={row.currency}
+                        />
+                        {balance.data &&
+                          !ledger.get(row.invoiceId)?.counted && (
+                            <span
+                              className="block text-xs text-muted-foreground"
+                              title={
+                                ledger.get(row.invoiceId)?.reason ?? undefined
+                              }
+                            >
+                              Not counted
+                            </span>
+                          )}
+                      </>
+                    ) : (
+                      <span
+                        className="text-muted-foreground"
+                        title="Not reconciled yet, or its amount could not be determined"
+                      >
+                        —
                       </span>
                     )}
                   </TableCell>

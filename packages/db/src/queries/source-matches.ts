@@ -3,6 +3,7 @@ import {
   authorizationSourceVersions,
   authorizationSources,
   inbox,
+  invoiceReconciliations,
   invoiceSourceAllocations,
   invoiceSourceLinks,
   invoiceSourceMatches,
@@ -44,8 +45,10 @@ const matchingInvoiceColumns = {
   id: inbox.id,
   status: inbox.status,
   extraction: inbox.extraction,
+  validation: inbox.validation,
   processingRevision: inbox.processingRevision,
   sourceMatchId: inbox.sourceMatchId,
+  reconciliationId: inbox.reconciliationId,
   createdAt: inbox.createdAt,
   // The canonical supplier (after merges); null when unresolved.
   supplierId: sql<
@@ -485,6 +488,15 @@ export async function listSourceInvoiceMatches(
       allocatedAmount: allocated.amount,
       allocatedLines: sql<number>`coalesce(${allocated.lines}, 0)`,
       decidedAt: invoiceSourceMatches.createdAt,
+      // The invoice's current reconciliation and what it consumes of this
+      // source (docs/reconciliation.md); null until reconciled.
+      reconciliationStatus: invoiceReconciliations.status,
+      consumedAmount: sql<string | null>`(
+        select case when count(*) > 0 and count(*) = count(c.amount) then sum(c.amount)::text end
+        from invoice_source_consumption c
+        where c.reconciliation_id = ${inbox.reconciliationId}
+          and c.source_id = ${invoiceSourceLinks.sourceId}
+      )`,
     })
     .from(invoiceSourceLinks)
     .innerJoin(
@@ -503,6 +515,10 @@ export async function listSourceInvoiceMatches(
       eq(authorizationSourceVersions.id, invoiceSourceLinks.versionId),
     )
     .leftJoin(allocated, eq(allocated.linkId, invoiceSourceLinks.id))
+    .leftJoin(
+      invoiceReconciliations,
+      eq(invoiceReconciliations.id, inbox.reconciliationId),
+    )
     .where(
       and(
         eq(invoiceSourceLinks.teamId, params.teamId),

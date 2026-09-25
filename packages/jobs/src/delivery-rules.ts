@@ -3,6 +3,8 @@ import {
   type DeliveryDecisionRecord,
   type TeamRole,
   canManageDeliveryRules,
+  enqueueWorkflowJob,
+  finalizeDeliveryDecision,
   getActiveAccountingConnection,
   getInvoiceSupplierChecks,
   getLatestDeliveryPolicy,
@@ -18,11 +20,14 @@ import {
   type DeliveryPolicy,
   type DeliveryReason,
   type PolicyQuestion,
+  type ReconciliationForPolicy,
   evaluateDeliveryPolicy,
   normalizeDeliveryPolicy,
+  policyUsesReconciliation,
   validateInvoice,
 } from "@invoicewise/documents";
 import { InvoiceActionError } from "./action-error";
+import { workflowKey } from "./client";
 
 /**
  * The workspace delivery policy and the decision each invoice revision gets
@@ -160,20 +165,28 @@ export type DecidedInvoice = {
   accountingProviderId: string | null;
 };
 
+/** What the scheduling of a revision asks of its decision. */
+export type DecisionOptions = {
+  /** An extra hold only an admin's release clears (a member corrected an invoice that was held). */
+  approval?: string | null;
+  /** False: the caller schedules no post for this revision. */
+  accounting?: boolean;
+  /** What the revision's webhook events carry beyond the record. */
+  data?: Record<string, unknown>;
+};
+
 /**
- * Decides one invoice revision under the workspace's current policy and
- * records it. `approval`, when given, is an extra hold only an admin's
- * release clears (a member corrected an invoice that was held).
- * `accounting: false` records a post the rules would let through as
- * `not_scheduled`: the caller schedules none for this revision. A revision
- * is decided once: replaying it returns the decision already recorded.
+ * The decision's verdict for one revision under the policy in force, with
+ * its reconciliation when the policy reads one.
  */
-export async function decideRevision(
+async function evaluateRevision(
   db: Database,
   invoice: DecidedInvoice & { teamId: string },
-  options: { approval?: string | null; accounting?: boolean } = {},
+  current: Awaited<ReturnType<typeof loadDeliveryPolicy>>,
+  options: Omit<DecisionOptions, "data"> & {
+    reconciliation: ReconciliationForPolicy | null;
+  },
 ) {
-  const current = await loadDeliveryPolicy(db, invoice.teamId);
   const supplierChecks = await getInvoiceSupplierChecks(db, {
     id: invoice.id,
     teamId: invoice.teamId,
@@ -188,6 +201,7 @@ export async function decideRevision(
       (invoice.extraction ? validateInvoice(invoice.extraction) : null),
     supplierChecks,
     judgments: invoice.judgments,
+    reconciliation: options.reconciliation,
   });
   const reasons: DeliveryReason[] = [...evaluation.reasons];
   if (options.approval) {
@@ -198,32 +212,29 @@ export async function decideRevision(
       locked: false,
     });
   }
-  const outcome = reasons.length > 0 ? "hold" : "deliver";
+  const outcome = reasons.length > 0 ? ("hold" as const) : ("deliver" as const);
   const posted =
     Boolean(invoice.accountingProviderId) ||
     invoice.accountingPostStatus === "posted" ||
     invoice.accountingPostStatus === "already_posted";
   const accounting = !current.policy.destinations.accounting
-    ? "off"
+    ? ("off" as const)
     : !evaluation.accountingApplicable
-      ? "not_applicable"
+      ? ("not_applicable" as const)
       : posted
-        ? "already_posted"
+        ? ("already_posted" as const)
         : !(await getActiveAccountingConnection(db, invoice.teamId))
-          ? "not_connected"
+          ? ("not_connected" as const)
           : outcome === "hold"
-            ? "held"
+            ? ("held" as const)
             : options.accounting === false
-              ? "not_scheduled"
-              : "deliver";
+              ? ("not_scheduled" as const)
+              : ("deliver" as const);
   const webhooks =
     outcome === "hold" && current.policy.destinations.webhooks === "eligible"
-      ? "held"
-      : "deliver";
-  return insertDeliveryDecision(db, {
-    teamId: invoice.teamId,
-    invoiceId: invoice.id,
-    revision: invoice.processingRevision,
+      ? ("held" as const)
+      : ("deliver" as const);
+  return {
     policyId: current.id,
     policyVersion: current.version,
     policy: current.policy as unknown as Record<string, unknown>,
@@ -232,6 +243,109 @@ export async function decideRevision(
     reasons: reasons as unknown as Record<string, unknown>[],
     accounting,
     webhooks,
+  };
+}
+
+/**
+ * Decides one invoice revision under the workspace's current policy and
+ * records it. A revision is decided once: replaying it returns the decision
+ * already recorded.
+ *
+ * When the policy holds on an authorization check, the revision cannot be
+ * decided before it is reconciled: it gets a `pending` decision that
+ * schedules nothing, keeps what `options` asked for, and queues the
+ * revision's matching (which then reconciles it and decides it with
+ * `decideDeferredRevision`). `options.reconciliation` decides it now instead.
+ */
+export async function decideRevision(
+  db: Database,
+  invoice: DecidedInvoice & { teamId: string },
+  options: DecisionOptions & {
+    reconciliation?: ReconciliationForPolicy | null;
+  } = {},
+) {
+  const current = await loadDeliveryPolicy(db, invoice.teamId);
+  if (
+    options.reconciliation === undefined &&
+    policyUsesReconciliation(current.policy)
+  ) {
+    const decision = await insertDeliveryDecision(db, {
+      teamId: invoice.teamId,
+      invoiceId: invoice.id,
+      revision: invoice.processingRevision,
+      policyId: current.id,
+      policyVersion: current.version,
+      policy: current.policy as unknown as Record<string, unknown>,
+      rulesVersion: DELIVERY_RULES_VERSION,
+      outcome: "pending",
+      reasons: [
+        {
+          code: "awaiting_reconciliation",
+          rule: "reconciliation",
+          message:
+            "Waiting for the invoice to be matched and reconciled with its authorization sources; it is decided then.",
+          locked: false,
+        },
+      ],
+      accounting: "pending",
+      webhooks: "pending",
+      deferred: {
+        approval: options.approval ?? null,
+        accounting: options.accounting ?? null,
+        data: options.data ?? null,
+      },
+    });
+    // Processing and corrections queue this already; a question rerun's
+    // revision is matched (and so reconciled) here.
+    await enqueueWorkflowJob(db, {
+      name: "match-invoice",
+      teamId: invoice.teamId,
+      payload: { teamId: invoice.teamId, invoiceId: invoice.id },
+      idempotencyKey: workflowKey.match(
+        invoice.teamId,
+        invoice.id,
+        invoice.processingRevision,
+      ),
+    });
+    return decision;
+  }
+  return insertDeliveryDecision(db, {
+    teamId: invoice.teamId,
+    invoiceId: invoice.id,
+    revision: invoice.processingRevision,
+    ...(await evaluateRevision(db, invoice, current, {
+      approval: options.approval,
+      accounting: options.accounting,
+      reconciliation: options.reconciliation ?? null,
+    })),
+  });
+}
+
+/**
+ * Decides a revision whose decision waited for its reconciliation, under
+ * the policy in force now and with what its scheduling asked for. Returns
+ * null when it is not pending (already decided by a replay).
+ */
+export async function finalizeDeferredDecision(
+  db: Database,
+  invoice: DecidedInvoice & { teamId: string },
+  pending: DeliveryDecisionRecord,
+  reconciliation: ReconciliationForPolicy | null,
+) {
+  const deferred = (pending.deferred ?? {}) as {
+    approval?: string | null;
+    accounting?: boolean | null;
+  };
+  const current = await loadDeliveryPolicy(db, invoice.teamId);
+  const values = await evaluateRevision(db, invoice, current, {
+    approval: deferred.approval ?? null,
+    accounting: deferred.accounting ?? undefined,
+    reconciliation,
+  });
+  return finalizeDeliveryDecision(db, {
+    id: pending.id,
+    teamId: invoice.teamId,
+    values,
   });
 }
 
@@ -239,6 +353,11 @@ export async function decideRevision(
 export const decisionHeld = (
   decision: Pick<DeliveryDecisionRecord, "accounting" | "webhooks">,
 ) => decision.accounting === "held" || decision.webhooks === "held";
+
+/** Whether a decision still waits for the revision's reconciliation. */
+export const decisionPending = (
+  decision: Pick<DeliveryDecisionRecord, "outcome"> | null | undefined,
+) => decision?.outcome === "pending";
 
 /**
  * What a delivery carries about the decision that let it through: consumers

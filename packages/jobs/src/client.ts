@@ -92,4 +92,14 @@ export const workflowKey = {
     `${deletionId}:after:${resumeAt}`,
   /** One retention sweep per hourly slot. */
   retention: (slot: string) => `retention:${slot}`,
+  /** Matching of one invoice revision to authorization sources. */
+  match: (teamId: string, invoiceId: string, revision: number) =>
+    `${teamId}:${invoiceId}:r${revision}`,
+  /** Reconciliation of one match decision at one invoice revision. */
+  reconcile: (
+    teamId: string,
+    invoiceId: string,
+    matchId: string,
+    revision: number,
+  ) => `${teamId}:${invoiceId}:${matchId}:r${revision}`,
 };

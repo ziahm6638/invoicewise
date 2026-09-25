@@ -159,7 +159,8 @@ curl -X POST "$INVOICEWISE_API_URL/authorization-sources" \
 | `GET /authorization-sources/imports` | `sources.read`, admin | recent imports and batches with their outcome |
 | `POST /authorization-sources/:id/documents` | `sources.write`, admin | multipart field `file`: attach a document |
 | `GET /authorization-sources/:id/documents/:documentId` | `sources.read` | the retained document |
-| `GET /authorization-sources/:id/invoices` | `sources.read` and `inbox.read` | the invoices currently [matched](authorization-matching.md) to the source, with the version compared and the amount allocated to it |
+| `GET /authorization-sources/:id/invoices` | `sources.read` and `inbox.read` | the invoices currently [matched](authorization-matching.md) to the source, with the version compared, the amount allocated to it and its [reconciliation](reconciliation.md) status and consumed amount |
+| `GET /authorization-sources/:id/balance` | `sources.read` | the source's [balance](reconciliation.md) now: authorized, committed and remaining, per authorized line too; with `inbox.read`, `byInvoice` lists what each invoice counts |
 
 A batch answers `200` with `status` `applied` (or `validated` for a dry run),
 a `summary` (`created`, `amended`, `unchanged`) and one result per source

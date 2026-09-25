@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ExternalLink } from "lucide-react";
 import { useState } from "react";
+import { deliveryDecisionView } from "./invoice-state";
 
 type DeliveryData = NonNullable<RouterOutputs["inbox"]["delivery"]>;
 type Decision = DeliveryData["decisions"][number];
@@ -102,15 +103,28 @@ function DeliveryDecision({
   if (!decision) {
     return null;
   }
-  const reasons = reasonsOf(decision);
-  const held =
-    decision.outcome === "hold" && heldDestinations(decision).length > 0;
+  const view = deliveryDecisionView(decision);
+  // A decision waiting for reconciliation has only its "waiting" reason.
+  const reasons = view === "pending" ? [] : reasonsOf(decision);
+  const held = view === "held";
   const locked = reasons.filter((item) => item.locked);
   const pending = release.isPending || dismiss.isPending;
 
   return (
     <div className="mt-2 rounded-md border px-3 py-2.5 text-sm">
-      {held && !decision.resolution ? (
+      {view === "pending" ? (
+        <>
+          <p className="font-medium text-sky-700 dark:text-sky-300">
+            Waiting for reconciliation
+          </p>
+          <p className="text-xs text-muted-foreground">
+            The delivery rules (version {decision.policyVersion}) hold on
+            authorization checks, so this invoice is decided once it is matched
+            and reconciled with its authorization sources. Nothing is sent until
+            then.
+          </p>
+        </>
+      ) : held && !decision.resolution ? (
         <>
           <p className="font-medium text-destructive">
             Held by the delivery rules (version {decision.policyVersion})
@@ -377,9 +391,11 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
     : "Accounting connection";
   const hasDestinations = data.webhooks.length > 0 || accounting !== null;
   const decision = data.decision;
-  // A held post is sent by a release, never by a retry.
+  // A held post is sent by a release, never by a retry; a decision waiting
+  // for reconciliation schedules it itself.
   const accountingHeld =
-    decision?.outcome === "hold" && decision.resolution !== "released";
+    (decision?.outcome === "hold" && decision.resolution !== "released") ||
+    decision?.outcome === "pending";
   const canRetry =
     billUpdate?.status === "failed" ||
     billUpdate?.status === "cancelled" ||
@@ -457,7 +473,8 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
             />
           )}
         </ul>
-      ) : decision?.outcome === "hold" ? null : (
+      ) : decision?.outcome === "hold" ||
+        decision?.outcome === "pending" ? null : (
         <p className="mt-2 text-sm text-muted-foreground">
           No delivery destinations were configured when this invoice was
           processed.

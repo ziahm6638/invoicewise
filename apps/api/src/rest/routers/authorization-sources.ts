@@ -35,6 +35,7 @@ import {
   readAuthorizationSourceDocument,
   submitAuthorizationSources,
 } from "@invoicewise/jobs/authorization-sources";
+import { getSourceBalance } from "@invoicewise/jobs/reconciliation";
 import { withRequiredScope, withRequiredTeamRole } from "../middleware";
 
 const app = new OpenAPIHono<Context>();
@@ -221,6 +222,29 @@ app.get(
     });
   },
 );
+
+/**
+ * The source's balance now: the terms in effect today, what its invoices
+ * have committed and what remains, per authorized line too
+ * (docs/reconciliation.md). Which invoices make it up is invoice data, so it
+ * is listed only for a credential that also holds `inbox.read`.
+ */
+app.get("/:id/balance", withRequiredScope("sources.read"), async (c) => {
+  const parsed = authorizationSourceIdSchema.safeParse(c.req.param());
+  if (!parsed.success) return c.json(NOT_FOUND, 404);
+  const balance = await getSourceBalance(c.get("db"), {
+    teamId: c.get("teamId"),
+    sourceId: parsed.data.id,
+  });
+  if (!balance) return c.json(NOT_FOUND, 404);
+  const scopes = (c.get("scopes") ?? []) as string[];
+  const { perInvoice, ...totals } = balance;
+  return c.json(
+    scopes.includes("inbox.read")
+      ? { ...totals, byInvoice: perInvoice }
+      : totals,
+  );
+});
 
 app.get(
   "/:id/versions/:version",

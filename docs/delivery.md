@@ -43,7 +43,11 @@ invoice bills, with confidence, allocations and the evidence for every
 candidate, or null before matching (a credential without `sources.read` gets
 only the status and the linked source IDs). It is decided after processing, so the
 `invoice.processed` payload does not include it; subscribe to
-`invoice.matched`. See [matching](authorization-matching.md).
+`invoice.matched`. See [matching](authorization-matching.md). They also
+carry `reconciliation`: how the match compares with the sources' authorized
+terms and balances, or null before it is reconciled (a credential without
+`sources.read` gets only the status and finding codes); subscribe to
+`invoice.reconciled`. See [reconciliation](reconciliation.md).
 
 Every invoice read also carries `deliveryDecision`: the
 [delivery rules](#delivery-rules)' decision for its current revision, with
@@ -132,11 +136,13 @@ curl --fail --silent \
 ### Events and payloads
 
 Events are `invoice.processed`, `invoice.judgments.attached`,
-`invoice.matched` and `delivery.failed`, plus `webhook.test`, which is sent
+`invoice.matched`, `invoice.reconciled` and `delivery.failed`, plus `webhook.test`, which is sent
 only when requested and regardless of the endpoint's subscriptions.
 `invoice.matched` is sent for every new [match
 decision](authorization-matching.md), automatic or a person's; its `data` is
-`{ "invoiceId", "match" }`. Every body is a versioned envelope:
+`{ "invoiceId", "match" }`. `invoice.reconciled` is sent for every recorded
+[reconciliation](reconciliation.md); its `data` is
+`{ "invoiceId", "reconciliation" }`. Every body is a versioned envelope:
 
 ```json
 {
@@ -200,7 +206,8 @@ before InvoiceWise recorded the answer sends the same request again, and an
 explicit redelivery re-sends an event you may already have processed, so
 deduplicate on `invoicewise-event-id` (the body's `id`). The ID is derived
 from the invoice, its processing `revision` and the event type (for
-`invoice.matched`, from the invoice and the decision): it is the same on every
+`invoice.matched` and `invoice.reconciled`, from the invoice and the decision
+or reconciliation): it is the same on every
 endpoint, every retry and every redelivery.
 
 Only a `2xx` answer is a success. A non-`2xx` response (including a redirect,
@@ -257,8 +264,8 @@ Automatic delivery is the normal path: an eligible invoice goes to every
 enabled destination without a manual step. Each workspace has a small
 delivery policy that decides which invoices are eligible and explains every
 one it holds. It is exception handling, not an approval step, and not a rules
-engine: a fixed set of checks over the validation, supplier-history checks
-and question answers each invoice already has, plus at most ten conditions
+engine: a fixed set of checks over the validation, supplier-history checks,
+question answers and [reconciliation](reconciliation.md) each invoice already has, plus at most ten conditions
 of two shapes (`packages/documents/src/delivery-policy.ts`). Everyone in the
 workspace can read it in **Settings → Delivery rules**, tRPC
 `deliveryRules.get` or `GET /delivery-policy`; owners and admins change it.
@@ -273,13 +280,21 @@ workspace can read it in **Settings → Delivery rules**, tRPC
 | Uncertain reading | held | the supplier, invoice number, a date, the currency or an amount was read with low confidence |
 | New or unidentified supplier | delivered | the supplier's first invoice, or the supplier could not be identified |
 | Other validation warnings | delivered | no VAT shown, VAT without a VAT number, failed VAT-number or IBAN check digits and the like |
+| Over or outside its authorization | delivered | the [reconciliation](reconciliation.md) found a discrepancy: over the remaining authorized amount or quantity, a rate above the authorized price, tax a source does not authorize, work outside its scope or period, or a closed or cancelled source |
+| Authorization not confirmed | delivered | the reconciliation is unresolved (a proposed, ambiguous or unconfirmed match, different currencies, an unknown tax basis, a missing amount, an unclear scope), or the revision could not be reconciled |
+| No authorization | delivered | the invoice is not matched to any job, purchase order or contract |
 | Required questions | none | a required question's answer is `unknown`, `not_applicable`, `failed`, `low_confidence`, `incomplete_input` or missing |
 | Conditions (up to 10) | none | a question's answer *is*/*is not* a yes/no or choice value, or is *above*/*below* a number or score level; or the gross total is above an amount in a named currency |
 
 An answer that is not a confident answer never counts as no or zero: a
 condition over it holds the invoice as *could not be checked*, and so does an
 amount limit on an invoice in another currency (amounts are never
-converted). The three *always held* checks cannot be switched off, because a
+converted). When any of the three authorization checks holds, a revision's
+decision waits for its reconciliation: it is recorded as `pending` (read as
+*Delivering*; nothing is scheduled, retried, released or dismissed) and is
+decided, and its destinations scheduled, when the invoice is reconciled; see
+[reconciliation](reconciliation.md#delivery-rules). A policy saved without
+these three rules keeps their default. The three *always held* checks cannot be switched off, because a
 bill could not safely carry them. A credit note is not held; it is not
 posted either, because a draft bill cannot represent it.
 

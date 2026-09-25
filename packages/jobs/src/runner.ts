@@ -27,6 +27,7 @@ import { reconcileInvoiceOperations } from "./exceptions";
 import { reconcileInboundEmails } from "./inbound-email";
 import { observeNangoCalls } from "./nango";
 import { reconcileQuestionRuns } from "./questions";
+import { settleStalledDecisions } from "./reconciliation";
 import { publishDeliveryFailureById } from "./webhooks";
 import {
   WorkflowDatabase,
@@ -246,12 +247,16 @@ export const DeliveryReconcilerLive = Layer.effect(
         const exports = await failStalledDataExports(db);
         const operations = await reconcileInvoiceOperations(db);
         const questionRuns = await reconcileQuestionRuns(db);
+        // Revisions whose decision waited for a reconciliation that will
+        // not come (its job was lost or failed for good) are decided now.
+        const waiting = await settleStalledDecisions(db);
         return {
           ...deliveries,
           rescheduled:
             deliveries.rescheduled +
             operations.rescheduled +
-            questionRuns.rescheduled,
+            questionRuns.rescheduled +
+            waiting.decided,
           failed:
             deliveries.failed +
             inbound.failed +
@@ -419,6 +424,7 @@ export const PROVIDER_BUDGETED_WORKFLOWS = [
   "rerun-judgments",
   "rerun-question",
   "match-invoice",
+  "reconcile-invoice",
 ] as const;
 
 let providerBudgetExhausted = false;

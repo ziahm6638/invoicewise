@@ -78,6 +78,7 @@ import {
 import { isTransientIntakeFailure } from "./intake-failure";
 import { processDocumentAttachment } from "./process-document";
 import { STALLED_QUESTION_RUN_ERROR, runQuestionRerun } from "./questions";
+import { reconcileInvoiceMatch } from "./reconciliation";
 import {
   RetentionSweepError,
   nextRetentionSlot,
@@ -99,6 +100,7 @@ import {
   type ProcessAttachmentPayload,
   type ProcessInboundEmailPayload,
   type PurgeDeletedDataPayload,
+  type ReconcileInvoicePayload,
   type RerunJudgmentsPayload,
   type RerunQuestionPayload,
   type SyncInboxAccountPayload,
@@ -1219,6 +1221,21 @@ export const WorkflowHandlerLive = Layer.effect(
           "Unable to match invoice to authorization sources",
         );
       });
+    const reconcileInvoiceJob = (
+      job: WorkflowJob,
+      payload: ReconcileInvoicePayload,
+    ) =>
+      Effect.gen(function* () {
+        yield* ensureTeam(job, payload.teamId);
+        return yield* attempt(
+          () =>
+            reconcileInvoiceMatch(db, {
+              ...payload,
+              finalAttempt: job.attempts >= job.maxAttempts,
+            }),
+          "Unable to reconcile invoice with authorization sources",
+        );
+      });
     const postAccountingDraftJob = (
       job: WorkflowJob,
       payload: PostAccountingDraftPayload,
@@ -1338,6 +1355,8 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* applyRetention(job, request.payload);
             case "match-invoice":
               return yield* matchInvoiceJob(job, request.payload);
+            case "reconcile-invoice":
+              return yield* reconcileInvoiceJob(job, request.payload);
           }
         }) as Effect.Effect<Record<string, unknown>, WorkflowExecutionError>,
     };

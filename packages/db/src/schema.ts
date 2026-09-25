@@ -2508,6 +2508,13 @@ export const inbox = pgTable(
       (): AnyPgColumn => invoiceSourceMatches.id,
       { onDelete: "set null" },
     ),
+    // The invoice's current reconciliation with the sources it bills; it is
+    // what the sources' balances count. Earlier ones stay in
+    // `invoice_reconciliations`.
+    reconciliationId: uuid("reconciliation_id").references(
+      (): AnyPgColumn => invoiceReconciliations.id,
+      { onDelete: "set null" },
+    ),
   },
   (table) => [
     index("inbox_attachment_id_idx").using(
@@ -3364,7 +3371,11 @@ export const deliveryDecisions = pgTable(
     // The policy as it was applied, and the evaluator's rules version.
     policy: jsonb("policy").$type<Record<string, unknown>>().notNull(),
     rulesVersion: integer("rules_version").notNull(),
-    outcome: text("outcome", { enum: ["deliver", "hold"] }).notNull(),
+    // `pending` until the revision is reconciled, when the policy holds on
+    // an authorization check (docs/reconciliation.md#delivery-rules).
+    outcome: text("outcome", {
+      enum: ["deliver", "hold", "pending"],
+    }).notNull(),
     reasons: jsonb("reasons").$type<Record<string, unknown>[]>().notNull(),
     // What the decision meant for each destination.
     accounting: text("accounting", {
@@ -3376,9 +3387,15 @@ export const deliveryDecisions = pgTable(
         "not_applicable",
         "already_posted",
         "not_scheduled",
+        "pending",
       ],
     }).notNull(),
-    webhooks: text("webhooks", { enum: ["deliver", "held"] }).notNull(),
+    webhooks: text("webhooks", {
+      enum: ["deliver", "held", "pending"],
+    }).notNull(),
+    // For a pending decision: what the revision's scheduling asked for
+    // (accounting, approval, event data), applied once it is decided.
+    deferred: jsonb("deferred").$type<Record<string, unknown>>(),
     resolution: text("resolution", { enum: ["released", "dismissed"] }),
     resolutionReason: text("resolution_reason"),
     resolvedBy: uuid("resolved_by"),
@@ -4975,5 +4992,116 @@ export const notificationSettings = pgTable(
       to: ["public"],
       using: sql`(user_id = auth.uid())`,
     }),
+  ],
+);
+
+/**
+ * One reconciliation of an invoice with the authorization sources its match
+ * links: the variances, the balances as they stood and the findings
+ * (docs/reconciliation.md). Immutable; the invoice points at its current one.
+ */
+export const invoiceReconciliations = pgTable(
+  "invoice_reconciliations",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    inboxId: uuid("inbox_id").notNull(),
+    // 1, 2, ... per invoice.
+    sequence: integer("sequence").notNull(),
+    // The match decision reconciled, and the invoice revision it read.
+    matchId: uuid("match_id").notNull(),
+    processingRevision: integer("processing_revision").notNull(),
+    status: text("status", {
+      enum: ["reconciled", "discrepancy", "unresolved", "unmatched"],
+    }).notNull(),
+    // Whether the allocations count against the sources' balances (a
+    // confirmed match); duplicates and dismissed invoices are excluded when
+    // the balance is read.
+    consumes: boolean("consumes").notNull(),
+    result: jsonb("result").$type<Record<string, unknown>>().notNull(),
+    rulesVersion: integer("rules_version").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("invoice_reconciliations_inbox_sequence_key").on(
+      table.inboxId,
+      table.sequence,
+    ),
+    uniqueIndex("invoice_reconciliations_match_revision_key").on(
+      table.inboxId,
+      table.matchId,
+      table.processingRevision,
+    ),
+    index("invoice_reconciliations_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "invoice_reconciliations_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.inboxId],
+      foreignColumns: [inbox.id],
+      name: "invoice_reconciliations_inbox_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.matchId],
+      foreignColumns: [invoiceSourceMatches.id],
+      name: "invoice_reconciliations_match_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+/**
+ * What one reconciliation consumes of one source (and authorized line), in
+ * the source's currency and tax basis. A source's balance sums the rows of
+ * its invoices' current reconciliations.
+ */
+export const invoiceSourceConsumption = pgTable(
+  "invoice_source_consumption",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    reconciliationId: uuid("reconciliation_id").notNull(),
+    inboxId: uuid("inbox_id").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    sourceLineReference: text("source_line_reference"),
+    // Signed; null when it could not be determined (the invoice is then
+    // listed as not counted).
+    amount: numeric("amount", { precision: 16, scale: 2 }),
+    quantity: numeric("quantity", { precision: 20, scale: 4 }),
+    currency: text("currency"),
+    basis: text("basis", { enum: ["net", "gross"] }).notNull(),
+  },
+  (table) => [
+    index("invoice_source_consumption_team_source_idx").on(
+      table.teamId,
+      table.sourceId,
+    ),
+    index("invoice_source_consumption_reconciliation_idx").on(
+      table.reconciliationId,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "invoice_source_consumption_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.reconciliationId],
+      foreignColumns: [invoiceReconciliations.id],
+      name: "invoice_source_consumption_reconciliation_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.inboxId],
+      foreignColumns: [inbox.id],
+      name: "invoice_source_consumption_inbox_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.sourceId],
+      foreignColumns: [authorizationSources.id],
+      name: "invoice_source_consumption_source_id_fkey",
+    }).onDelete("cascade"),
   ],
 );
