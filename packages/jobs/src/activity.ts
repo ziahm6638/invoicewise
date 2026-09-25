@@ -80,6 +80,18 @@ export const AUDIT_ACTIONS = {
     category: "authorization_source",
     label: "Attached a document to an authorization source",
   },
+  "source_match.confirm": {
+    category: "authorization_source",
+    label: "Confirmed an invoice's authorization match",
+  },
+  "source_match.link": {
+    category: "authorization_source",
+    label: "Linked an invoice to authorization sources",
+  },
+  "source_match.unlink": {
+    category: "authorization_source",
+    label: "Unlinked an invoice from its authorization sources",
+  },
   // Integrations
   "webhook.create": { category: "integration", label: "Added a webhook" },
   "webhook.disable": { category: "integration", label: "Disabled a webhook" },

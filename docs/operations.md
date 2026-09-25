@@ -202,6 +202,7 @@ nothing audited runs unrecorded; one whose process died mid-way stays
   route (`apps/api/src/rest/middleware/audit.ts`; an unlisted route is
   recorded as `api.request`): field corrections, re-extraction, question
   reruns and question changes, supplier and authorization-source changes,
+  invoice-to-source match decisions (confirm, link, unlink),
   webhooks, accounting, mailboxes, the receiving address, OAuth applications
   and grants, API keys, invitations, membership and roles, workspace
   settings, data exports and delivery retries and redeliveries. Operator

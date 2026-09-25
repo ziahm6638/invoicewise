@@ -270,6 +270,36 @@ export const TRPC_AUDIT: Record<string, AuditSpec | null> = {
     detail: (input) => ({ dryRun: field(input, "dryRun") === true }),
   },
 
+  // Invoice-to-source matches; the decision itself is kept in the
+  // invoice's match history.
+  "sourceMatches.confirm": {
+    action: "source_match.confirm",
+    target: byId("invoice", "inboxId"),
+    detail: (input) => ({
+      expectedMatchId: str(field(input, "expectedMatchId")),
+    }),
+  },
+  "sourceMatches.link": {
+    action: "source_match.link",
+    target: byId("invoice", "inboxId"),
+    detail: (input) => {
+      const sources = field(input, "sources");
+      return {
+        expectedMatchId: str(field(input, "expectedMatchId")),
+        sourceIds: Array.isArray(sources)
+          ? sources.map((source) => str(field(asObject(source), "sourceId")))
+          : [],
+      };
+    },
+  },
+  "sourceMatches.unlink": {
+    action: "source_match.unlink",
+    target: byId("invoice", "inboxId"),
+    detail: (input) => ({
+      expectedMatchId: str(field(input, "expectedMatchId")),
+    }),
+  },
+
   // Integrations
   "webhooks.create": {
     action: "webhook.create",
