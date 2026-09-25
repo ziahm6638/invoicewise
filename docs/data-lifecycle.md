@@ -19,7 +19,7 @@ members see the same schedule under Settings → Data, rendered from
 | Failed uploads and deleted invoices, and the MIME source of a received message that failed | 30 days after upload or receipt | hourly retention job | `RETENTION_FAILED_UPLOAD_DAYS` |
 | Source email reference (on the invoice and on each re-delivery) and the headers kept for each received message | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
 | Job and webhook payloads | 30 days after the job or delivery finished | hourly retention job | `RETENTION_JOB_PAYLOAD_DAYS` |
-| Application logs | rotated by size: 5 files of 50 MB per container; time-based 30-day expiry not yet enforced | Docker log rotation on the host | `logging` in `config/deploy.yml` |
+| Application logs | rotated log files 30 days; a running container's current file is capped at 50 MB by size | size rotation by Docker (`logging` in `config/deploy.yml`), then a daily host prune of the project's container logs on hp-slice and hostinger | `INVOICEWISE_LOG_RETENTION_DAYS` on the host |
 | Database backups | 30 days | `ops/backup` on hp-slice | `INVOICEWISE_BACKUP_RETAIN_DAYS` on the host, `RETENTION_BACKUP_DAYS` in the app |
 | Data export downloads | 24 hours | download route refuses at once; hourly retention job removes the archive | `EXPORT_LINK_TTL_HOURS` |
 
@@ -73,12 +73,21 @@ What each row means precisely:
   emptied. Finished webhook deliveries keep their status and attempts; the
   invoice payload that was sent is emptied. Queued and running work is never
   touched.
-- **Application logs.** Container logs rotate by size (`logging` in
-  `config/deploy.yml`: 5 files of 50 MB per container). Size rotation bounds
-  what is kept but does not remove logs after any fixed time, so the 30-day
-  period recorded for logs is not yet enforced; time-based expiry is a
-  follow-up. Old containers, and their logs, go when Kamal prunes earlier
-  releases.
+- **Application logs.** Docker's json-file driver rotates by size (`logging` in
+  `config/deploy.yml`: 5 files of 50 MB per container), which bounds what a
+  container can hold but not by time. `invoicewise-logs-prune.timer`, installed
+  through `ops/log-retention/install.sh` on both hp-slice and hostinger, runs
+  daily and removes every entry older than `INVOICEWISE_LOG_RETENTION_DAYS`
+  (default 30) from the project's rotated log files, deleting a file that has
+  nothing left in the window; a stopped container's current file is trimmed the
+  same way. A running container's current file is not rewritten from outside,
+  because Docker caches the open file's size and editing it would leave
+  `docker logs --tail` and `kamal app logs -f` reading past the end; it stays
+  bounded by `max-size` (50 MB) and is trimmed once the container stops or the
+  file rotates. Only the project's own containers (name matches `invoicewise`)
+  are touched, so other services on a shared host are never affected. Old
+  release containers, and their logs, also go when Kamal prunes earlier
+  releases; this window is the one published here.
 - **Backups.** Nightly dumps of the InvoiceWise and Nango databases older than
   the period are deleted by `ops/backup/invoicewise-backup`. A change to the
   period takes effect on the host only after `ops/backup/install.sh` is run;

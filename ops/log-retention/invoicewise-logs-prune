@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Enforce the 30-day application-log retention on a Kamal host, run daily by
+# invoicewise-logs-prune.timer. Docker's json-file driver rotates by size only
+# (config/deploy.yml: 5 x 50 MB per container), so without this a quiet
+# container kept its rotated logs indefinitely however little it wrote. This
+# script trims every entry older than the window out of the project's rotated
+# log files (deleting a file that has nothing left) and out of the active file
+# of a stopped container.
+#
+# A running container's active file is deliberately left alone: Docker caches
+# that open file's size, so rewriting it behind Docker's back makes
+# `docker logs --tail` (and `kamal app logs -f`) read past the end and return
+# nothing. The active file is instead bounded by size (max-size in
+# config/deploy.yml) and trimmed once its container stops.
+#
+# Scope is the project's own containers, matched by name, so other tenants on
+# a shared host (hp-slice and hostinger run other services) are never touched.
+# Retention is the operating schedule in docs/data-lifecycle.md; installed by
+# ops/log-retention/install.sh; do not edit the copy on the host.
+set -euo pipefail
+
+readonly RETAIN_DAYS=${INVOICEWISE_LOG_RETENTION_DAYS:-30}
+readonly FILTER=${INVOICEWISE_LOG_CONTAINER_FILTER:-invoicewise}
+readonly CONTAINERS_DIR=${INVOICEWISE_DOCKER_CONTAINERS_DIR:-/var/lib/docker/containers}
+
+case "$RETAIN_DAYS" in
+  '' | *[!0-9]*) echo "invoicewise-logs-prune: INVOICEWISE_LOG_RETENTION_DAYS must be a whole number of days" >&2; exit 2 ;;
+esac
+[ "$RETAIN_DAYS" -gt 0 ] || { echo "invoicewise-logs-prune: INVOICEWISE_LOG_RETENTION_DAYS must be greater than zero" >&2; exit 2; }
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "invoicewise-logs-prune: docker is not available" >&2
+  exit 2
+fi
+
+# Docker writes RFC 3339 UTC (`2026-09-25T05:55:00.123456789Z`), so the first
+# 19 characters compare lexicographically with the same-length cutoff.
+cutoff=$(date -u -d "@$(( $(date -u +%s) - RETAIN_DAYS * 86400 ))" +%Y-%m-%dT%H:%M:%S)
+
+# Keep only entries at or after the cutoff. json-file only writes stamped JSON,
+# so a line without one is corrupt (a torn write) and is dropped.
+within_window() {
+  awk -v cutoff="$cutoff" '
+    match($0, /"time":"[^"]*"/) {
+      t = substr($0, RSTART + 8, RLENGTH - 9)
+      if (substr(t, 1, 19) >= cutoff) print
+    }
+  ' "$1"
+}
+
+# First-entry timestamp, or empty when the file is empty / unreadable.
+oldest() {
+  head -n 1 "$1" 2>/dev/null | sed -n 's/.*"time":"\([^"]*\)".*/\1/p'
+}
+
+# Rewrite a file in place with only its in-window entries.
+trim() {
+  local file=$1 tmp
+  tmp=$(mktemp)
+  within_window "$file" >"$tmp"
+  truncate -s 0 "$file"
+  cat "$tmp" >>"$file"
+  rm -f "$tmp"
+}
+
+# Full ids of the project's containers, running or retained for rollback.
+mapfile -t ids < <(docker ps -aq --no-trunc --filter "name=${FILTER}")
+trimmed=0
+removed=0
+for id in "${ids[@]}"; do
+  dir="$CONTAINERS_DIR/$id"
+  [ -d "$dir" ] || continue
+  running=$(docker inspect -f '{{.State.Running}}' "$id" 2>/dev/null || echo false)
+  while IFS= read -r file; do
+    [ -s "$file" ] || continue
+    first=$(oldest "$file")
+    # Fast path: already inside the window. An unreadable first line (a torn
+    # write) is not trusted: fall through and let within_window() drop it.
+    if [ -n "$first" ] && { [ "${first:0:19}" \> "$cutoff" ] || [ "${first:0:19}" = "$cutoff" ]; }; then
+      continue
+    fi
+    if [[ "$file" == *-json.log ]]; then
+      # The active file: only safe to rewrite while its container is stopped.
+      [ "$running" = "true" ] && continue
+      trim "$file"
+      trimmed=$((trimmed + 1))
+      echo "invoicewise-logs-prune: trimmed $file"
+    else
+      # A rotated file Docker does not write; remove it if nothing is left.
+      tmp=$(mktemp)
+      within_window "$file" >"$tmp"
+      if [ -s "$tmp" ]; then
+        truncate -s 0 "$file"
+        cat "$tmp" >>"$file"
+        echo "invoicewise-logs-prune: trimmed $file"
+      else
+        rm -f -- "$file"
+        removed=$((removed + 1))
+        echo "invoicewise-logs-prune: removed $file"
+      fi
+      rm -f "$tmp"
+      trimmed=$((trimmed + 1))
+    fi
+  done < <(find "$dir" -maxdepth 1 -type f -name '*-json.log*')
+done
+
+echo "invoicewise-logs-prune: trimmed $trimmed file(s), removed $removed empty rotated file(s); window ${RETAIN_DAYS} days"

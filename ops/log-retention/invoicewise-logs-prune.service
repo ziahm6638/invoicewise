@@ -1,0 +1,10 @@
+[Unit]
+Description=Prune InvoiceWise container logs older than the retention window
+After=docker.service
+
+[Service]
+Type=oneshot
+Environment=INVOICEWISE_LOG_RETENTION_DAYS=30
+ExecStart=/usr/local/sbin/invoicewise-logs-prune
+Nice=10
+IOSchedulingClass=idle

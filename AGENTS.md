@@ -133,7 +133,8 @@ on hostinger (`config/deploy.staging.yml`, Infisical `staging`), deployed by CI 
 ceilings, `/ops/metrics` (behind `OPS_TOKEN`) and the alert runbook are in `docs/operations.md`;
 public `/health*` responses must stay `{"status":…}` only.
 Nango runs as the `nango`/`nango-db` Kamal accessories (never restarted by `kamal deploy`); the
-InvoiceWise and Nango databases are dumped nightly by `ops/backup` (see `docs/deployment.md`).
+InvoiceWise and Nango databases are dumped nightly by `ops/backup` and application container
+logs are pruned to 30 days daily by `ops/log-retention` (see `docs/deployment.md`).
 
 ## Links
 
