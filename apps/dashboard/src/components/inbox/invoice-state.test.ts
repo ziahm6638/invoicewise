@@ -118,7 +118,9 @@ describe("invoice workflow", () => {
       next: "Re-extract the document, or upload a clearer copy.",
     });
     expect(stage(rereadFailed, "validation").status).toBe("done");
-    expect(stage(rereadFailed, "questions").summary).toBe("1 question answered.");
+    expect(stage(rereadFailed, "questions").summary).toBe(
+      "1 question answered.",
+    );
     expect(stage(rereadFailed, "delivery")).toMatchObject({
       status: "done",
       summary: "Delivered to 1 destination, including the accounting bill.",
@@ -149,9 +151,7 @@ describe("invoice workflow", () => {
     expect(stage(invalid, "delivery").next).toBe(
       "Correct the invoice; once it validates it is sent again.",
     );
-    expect(
-      stage(invalid, "delivery", { postToAccounting: false }).next,
-    ).toBe(
+    expect(stage(invalid, "delivery", { postToAccounting: false }).next).toBe(
       "Correct the invoice; once it validates an admin must send it again.",
     );
   });
