@@ -93,8 +93,7 @@ async function main(provider: keyof typeof PROVIDERS) {
     // Changing the provider means a new integration, and deleting the old
     // one deletes every connection made under it: an operator decision.
     throw new Error(
-      `Integration ${config.integrationId} uses provider ${String(existing.provider)}, not ${nangoProvider}; ` +
-        "delete it in the Nango dashboard first (its connections go with it)",
+      `Integration ${config.integrationId} uses provider ${String(existing.provider)}, not ${nangoProvider}; delete it in the Nango dashboard first (its connections go with it)`,
     );
   } else {
     await nangoRequest(config, path, {

@@ -38,8 +38,9 @@ overrides the production QuickBooks host only.
 
 Each provider needs a developer app whose redirect URI is
 `https://nango.invoicewise.uk/oauth/callback`. Its client ID and secret go into
-a Nango integration, created in the Nango admin dashboard (reached over SSH,
-see deployment.md) under the `prod` environment:
+a Nango integration under the `prod` environment, created by the
+[deployment contract](#deployment-contract) command rather than in the Nango
+admin dashboard:
 
 | Integration unique key | Nango provider | Scopes |
 | --- | --- | --- |

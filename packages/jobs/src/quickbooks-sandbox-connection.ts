@@ -72,8 +72,7 @@ async function sandboxConfig() {
   );
   if (integration.provider !== SANDBOX_PROVIDER) {
     throw new Error(
-      `Integration ${config.integrationId} is ${String(integration.provider)}, not ${SANDBOX_PROVIDER}; ` +
-        "the sandbox connection is only imported into a sandbox integration",
+      `Integration ${config.integrationId} is ${String(integration.provider)}, not ${SANDBOX_PROVIDER}; the sandbox connection is only imported into a sandbox integration`,
     );
   }
   return config;
