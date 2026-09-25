@@ -562,7 +562,12 @@ async function main() {
     const jobs = await db
       .select({ id: workflowJobs.id })
       .from(workflowJobs)
-      .where(eq(workflowJobs.teamId, teamA));
+      .where(
+        and(
+          eq(workflowJobs.teamId, teamA),
+          eq(workflowJobs.name, "process-attachment"),
+        ),
+      );
     assert(
       redeliveries.length === 1 &&
         redeliveries[0]?.referenceId === "mail-redelivery-1" &&

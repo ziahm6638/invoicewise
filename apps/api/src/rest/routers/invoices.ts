@@ -1,4 +1,4 @@
-import { invoiceHttp } from "@api/effect/invoice-http";
+import { invoiceHttp, invoiceReadRequest } from "@api/effect/invoice-http";
 import type { Context } from "@api/rest/types";
 import { retryInboxSchema } from "@api/schemas/inbox";
 import { readInvoiceActivity } from "@api/services/activity";
@@ -8,17 +8,18 @@ import { withRequiredScope } from "../middleware";
 
 const app = new OpenAPIHono<Context>();
 
-const forward = (request: Request, teamId: string) => {
-  const headers = new Headers(request.headers);
-  headers.set("x-invoicewise-team-id", teamId);
-  return invoiceHttp.handler(new Request(request, { headers }));
-};
+const forward = (request: Request, teamId: string, scopes: string[]) =>
+  invoiceHttp.handler(invoiceReadRequest(request, { teamId, scopes }));
 
 app.use("*", withRequiredScope("inbox.read"));
-app.get("/", (c) => forward(c.req.raw, c.get("teamId")));
-app.get("/export.csv", (c) => forward(c.req.raw, c.get("teamId")));
-app.get("/:id", (c) => forward(c.req.raw, c.get("teamId")));
-app.get("/:id/delivery-status", (c) => forward(c.req.raw, c.get("teamId")));
+app.get("/", (c) => forward(c.req.raw, c.get("teamId"), c.get("scopes")));
+app.get("/export.csv", (c) =>
+  forward(c.req.raw, c.get("teamId"), c.get("scopes")),
+);
+app.get("/:id", (c) => forward(c.req.raw, c.get("teamId"), c.get("scopes")));
+app.get("/:id/delivery-status", (c) =>
+  forward(c.req.raw, c.get("teamId"), c.get("scopes")),
+);
 
 // The invoice's activity trace (docs/delivery.md#activity-trace).
 app.get("/:id/activity", async (c) => {

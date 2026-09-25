@@ -745,6 +745,16 @@ async function main() {
       { memberCorrection, memberRetry, adminRetry },
     );
 
+    // A correction is a new revision: it is matched to authorization sources
+    // again, beside the processed revision's own match.
+    const matchJobs = await jobsFor("match-invoice", memberCase);
+    check(
+      "a correction queues matching to authorization sources for its revision",
+      matchJobs.length === 2 &&
+        matchJobs.every((status) => status === "succeeded"),
+      matchJobs,
+    );
+
     // --- 4. Ambiguous provider timeout --------------------------------------------
     timeOutAfterCreate.add("EXC-TIMEOUT");
     const ambiguous = await processed("EXC-TIMEOUT");

@@ -143,7 +143,7 @@ describe("Effect workflow runner", () => {
     expect(completed).toEqual([]);
   });
 
-  test("leaves document processing and question reruns queued once the TypeSafe budget is spent", async () => {
+  test("leaves document processing, question reruns and invoice matching queued once the TypeSafe budget is spent", async () => {
     const claims: (readonly string[] | undefined)[] = [];
     const repositoryWith = (calls: number) =>
       Layer.succeed(WorkflowRepository, {
@@ -188,7 +188,12 @@ describe("Effect workflow runner", () => {
 
     expect(claims).toEqual([
       [],
-      ["process-attachment", "rerun-judgments", "rerun-question"],
+      [
+        "process-attachment",
+        "rerun-judgments",
+        "rerun-question",
+        "match-invoice",
+      ],
       [],
     ]);
   });

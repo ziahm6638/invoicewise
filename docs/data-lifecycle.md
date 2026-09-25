@@ -15,7 +15,7 @@ members see the same schedule under Settings → Data, rendered from
 
 | Data | Kept | Applied by | Setting |
 | --- | --- | --- | --- |
-| Invoices, original documents, extraction, judgments, suppliers and their correction history, authorization sources with every version, their documents and import records, questions, question reruns and the answers they replaced, integration settings | while the workspace exists | a member deleting an invoice (file at once, record as below), the owner deleting the workspace ([offboarding](offboarding.md)) | none |
+| Invoices, original documents, extraction, judgments, suppliers and their correction history, authorization sources with every version, their documents and import records, invoice-to-source match decisions, questions, question reruns and the answers they replaced, integration settings | while the workspace exists | a member deleting an invoice (file at once, record as below), the owner deleting the workspace ([offboarding](offboarding.md)) | none |
 | An invoice's laid-out document text (`document_texts`), kept as source evidence for question previews and reruns | while the invoice exists | deleting the invoice removes it at once, with the file; deleting the workspace | none |
 | Failed uploads and deleted invoices, and the MIME source of a received message that failed | 30 days after upload or receipt | hourly retention job | `RETENTION_FAILED_UPLOAD_DAYS` |
 | Source email reference (on the invoice and on each re-delivery) and the headers kept for each received message | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
@@ -191,6 +191,7 @@ named `invoicewise-export-<date>-<id>.zip`:
 | `invoice-corrections.json` | every correction of an invoice's extracted fields: version, actor, reason, each field before and after, the revisions it corrected and created, and what happened to the bill (kept, or updated in place, with its provider ID and outcome) |
 | `authorization-sources.json` | every job, purchase order and contract with every immutable version (terms, supplier as given and as linked, effective date, change reason, origin, who recorded it) and its retained documents, each with its archive path, status and SHA-256 |
 | `authorization-sources/<source id>/<document id>-<file name>` | each retained authorization-source document exactly as attached |
+| `source-matches.json` | every decision about which authorization sources an exported invoice bills ([matching](authorization-matching.md)), oldest first per invoice: status, how and by whom it was made, the reason, the full result with its evidence, whether it is `current`, and its links (source and version ids) with their allocations |
 | `questions.json` | the workspace's questions, every version, with a number question's unit and range |
 | `question-runs.json` | every question rerun: the revision, the invoices chosen, who asked, status and counts |
 | `question-answers.json` | every answer a rerun recorded on an exported invoice, with the answer it replaced |
@@ -203,7 +204,8 @@ identified by its invoice id and SHA-256; suppliers, supplier events and invoice
 their InvoiceWise UUID, so an invoice's `supplierId` names the same supplier
 in every export (follow `mergedIntoId` to the supplier it was merged into);
 authorization sources and their versions keep their UUIDs (and version
-numbers), and a source's `supplierId` is the supplier record it was linked to; a
+numbers), and a source's `supplierId` is the supplier record it was linked to;
+a match decision keeps its UUID and per-invoice `sequence`; a
 judgment is `<invoice id>:<question id>`; a received message keeps its
 InvoiceWise UUID; an audit event is
 `<event type>:<source record id>`.

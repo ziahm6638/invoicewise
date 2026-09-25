@@ -104,6 +104,12 @@ export const BuildDataExportPayload = Schema.Struct({
 });
 export type BuildDataExportPayload = typeof BuildDataExportPayload.Type;
 
+export const MatchInvoicePayload = Schema.Struct({
+  teamId: Schema.String,
+  invoiceId: Schema.String,
+});
+export type MatchInvoicePayload = typeof MatchInvoicePayload.Type;
+
 export const ApplyRetentionPayload = Schema.Struct({
   /** The hourly slot this run belongs to; the next slot is queued after it. */
   slot: Schema.String,
@@ -166,6 +172,10 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("apply-retention"),
     payload: ApplyRetentionPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("match-invoice"),
+    payload: MatchInvoicePayload,
   }),
 );
 export type WorkflowRequest = typeof WorkflowRequest.Type;

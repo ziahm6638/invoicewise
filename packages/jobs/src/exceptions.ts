@@ -44,6 +44,7 @@ import {
   loadJudgmentQuestions,
   reevaluateLaterDocuments,
 } from "./process-document";
+import { scheduleInvoiceMatch } from "./source-matching";
 import {
   loadJudgmentHistory,
   recordSupplierChecks,
@@ -369,6 +370,13 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
       data: {
         correction: { version, reason, changes: applied.changes },
       },
+    });
+    // The corrected values (a fixed PO number, say) are matched to
+    // authorization sources again; a person's match decision is kept.
+    await scheduleInvoiceMatch(executor, {
+      teamId: input.teamId,
+      invoiceId: invoice.id,
+      revision: revised.processingRevision,
     });
 
     let accounting: CorrectionAccounting;

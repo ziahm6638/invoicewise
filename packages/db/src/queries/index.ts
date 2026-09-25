@@ -28,6 +28,7 @@ export * from "./reports";
 export * from "./retention";
 export * from "./search";
 export * from "./short-links";
+export * from "./source-matches";
 export * from "./tags";
 export * from "./suppliers";
 export * from "./teams";
