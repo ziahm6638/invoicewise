@@ -9,7 +9,9 @@
  * they replaced, emit exactly one `invoice.judgments.attached` event per
  * invoice and endpoint, and leave the processing revision, `invoice.processed`
  * deliveries and the accounting post untouched, even when the rerun job is
- * replayed. Another workspace's invoice is never asked about.
+ * replayed. A rerun whose question is deleted before it runs is cancelled
+ * without asking or sending anything. Another workspace's invoice is never
+ * asked about.
  *
  *   DATABASE_PRIMARY_URL=... bun run verify:questions
  */
@@ -18,6 +20,7 @@ import {
   createUserQuestion,
   createWebhookEndpoint,
   deleteInbox,
+  deleteUserQuestion,
   getDocumentText,
   listQuestionAnswers,
   recordQuestionAnswer,
@@ -49,6 +52,7 @@ import {
 } from "./process-document";
 import {
   QuestionRequestError,
+  QUESTION_RUN_DELETED,
   QuestionRunInProgressError,
   RERUN_QUESTION_WORKFLOW,
   STALLED_QUESTION_RUN_ERROR,
@@ -566,6 +570,51 @@ async function main() {
     );
     assert(stale.outcome === "skipped", "A stale answer is skipped", stale);
 
+    // --- A question deleted after its rerun was requested cancels the run.
+    const beforeDelete = await stateOf(first);
+    const answersBeforeDelete = (
+      await listQuestionAnswers(db, { teamId, invoiceId: first })
+    ).length;
+    const orphaned = await requestQuestionRerun(db, {
+      teamId,
+      userId,
+      questionKey: v1!.questionKey,
+      invoiceIds: [first],
+    });
+    await deleteUserQuestion(db, {
+      teamId,
+      userId,
+      questionKey: v1!.questionKey,
+    });
+    const deletedCalls = { count: 0 };
+    const cancelled = await runQuestionRerun(
+      db,
+      { runId: orphaned.id, teamId },
+      evaluatorPicking("option_0", deletedCalls),
+    );
+    const [cancelledRow] = await db
+      .select()
+      .from(questionRuns)
+      .where(eq(questionRuns.id, orphaned.id));
+    const afterDelete = await stateOf(first);
+    assert(
+      "cancelled" in cancelled &&
+        cancelledRow?.status === "cancelled" &&
+        cancelledRow.error === QUESTION_RUN_DELETED &&
+        deletedCalls.count === 0,
+      "A rerun of a question deleted since the request is cancelled unasked",
+      { cancelled, cancelledRow, deletedCalls },
+    );
+    assert(
+      JSON.stringify(afterDelete.answer) ===
+        JSON.stringify(beforeDelete.answer) &&
+        afterDelete.deliveries.length === beforeDelete.deliveries.length &&
+        (await listQuestionAnswers(db, { teamId, invoiceId: first })).length ===
+          answersBeforeDelete,
+      "A cancelled rerun records no answer and sends no event",
+      afterDelete,
+    );
+
     // --- Deleting the invoice removes its retained text at once.
     await deleteInbox(db, { id: second, teamId });
     assert(
@@ -578,6 +627,7 @@ async function main() {
         ok: true,
         lostRunRequeued: true,
         failedRunSettled: true,
+        deletedQuestionRunCancelled: true,
         answersPreserved: true,
         previewStoredNothing: true,
         duplicateDeliveries: 0,

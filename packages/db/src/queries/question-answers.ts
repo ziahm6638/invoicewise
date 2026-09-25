@@ -263,7 +263,7 @@ export async function finishQuestionRun(
   input: {
     teamId: string;
     runId: string;
-    status: "completed" | "failed";
+    status: "completed" | "failed" | "cancelled";
     counts?: {
       answered: number;
       unknown: number;

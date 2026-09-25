@@ -672,7 +672,10 @@ Owners and admins can try a question on invoices already processed (Settings
   skipped. A failed evaluation leaves the current answer as it was and is
   counted on the run (`question_runs`: answered, unknown, failed, skipped).
   A retried or resumed run does not ask again for an invoice it already
-  answered. What a rerun sends is in
+  answered. If the question is deleted or disabled after the request, the
+  run stops before its next answer and is shown as cancelled with the
+  reason; answers recorded before then stay, and nothing further is
+  answered or sent. What a rerun sends is in
   [delivery](delivery.md#question-reruns).
 
 Both read the invoice's stored extraction, validation, supplier-scoped

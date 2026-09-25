@@ -396,8 +396,9 @@ export async function requestQuestionRerun(
  * invoice already answered by this run is not asked again. A temporary
  * TypeSafe failure fails the attempt (retried with backoff); a permanent one
  * is counted as a failed answer and leaves the invoice's current answer as
- * it was. Nothing here changes the processing revision or the accounting
- * post.
+ * it was. A question deleted or disabled since the request cancels the
+ * run before its next answer. Nothing here changes the processing revision
+ * or the accounting post.
  */
 export async function runQuestionRerun(
   db: Database,
@@ -421,6 +422,24 @@ export async function runQuestionRerun(
   }
   const question = toJudgmentQuestion(stored);
   const counts = { answered: 0, unknown: 0, failed: 0, skipped: 0 };
+  const withdrawn = async (executor: Database) => {
+    const latest = await getUserQuestionRevision(executor, {
+      teamId: input.teamId,
+      questionKey: run.questionKey,
+    });
+    if (!latest || latest.deletedAt) return QUESTION_RUN_DELETED;
+    if (!latest.enabled) return QUESTION_RUN_DISABLED;
+    return null;
+  };
+  const cancel = async (reason: string) => {
+    await finishQuestionRun(db, {
+      ...input,
+      status: "cancelled",
+      counts,
+      error: reason,
+    });
+    return { runId: run.id, cancelled: reason, ...counts };
+  };
   const count = (judgment: Record<string, unknown>) => {
     if (judgment.status === "answered") counts.answered += 1;
     else if (judgment.status === "failed") counts.failed += 1;
@@ -428,6 +447,8 @@ export async function runQuestionRerun(
   };
 
   for (const invoiceId of run.invoiceIds) {
+    const reason = await withdrawn(db);
+    if (reason) return cancel(reason);
     const [invoice] = await getInvoicesForQuestions(db, {
       teamId: input.teamId,
       invoiceIds: [invoiceId],
@@ -472,6 +493,8 @@ export async function runQuestionRerun(
     >;
     const outcome = await db.transaction(async (tx) => {
       const executor = tx as unknown as Database;
+      const reason = await withdrawn(executor);
+      if (reason) return { cancelled: reason };
       const result = await recordQuestionAnswer(executor, {
         teamId: input.teamId,
         runId: run.id,
@@ -512,6 +535,7 @@ export async function runQuestionRerun(
       }
       return result.outcome;
     });
+    if (typeof outcome === "object") return cancel(outcome.cancelled);
     if (outcome === "skipped") counts.skipped += 1;
     else count(answer);
   }
@@ -519,6 +543,12 @@ export async function runQuestionRerun(
   await finishQuestionRun(db, { ...input, status: "completed", counts });
   return { runId: run.id, ...counts };
 }
+
+/** Recorded on a run stopped because its question was deleted or disabled. */
+export const QUESTION_RUN_DELETED =
+  "The question was deleted after this rerun was requested. Answers recorded before then are kept; nothing further was answered or sent.";
+export const QUESTION_RUN_DISABLED =
+  "The question was disabled after this rerun was requested. Answers recorded before then are kept; nothing further was answered or sent.";
 
 /** Recorded on a run whose job failed without recording why. */
 export const STALLED_QUESTION_RUN_ERROR =

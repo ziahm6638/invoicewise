@@ -85,8 +85,8 @@ const runStatus = (run: RouterOutputs["questions"]["runs"][number]) => {
   ]
     .filter(Boolean)
     .join(", ");
-  return run.status === "failed"
-    ? `v${run.questionVersion} rerun stopped: ${run.error ?? "unknown reason"} (${counts})`
+  return run.status === "failed" || run.status === "cancelled"
+    ? `v${run.questionVersion} rerun ${run.status === "cancelled" ? "cancelled" : "stopped"}: ${run.error ?? "unknown reason"} (${counts})`
     : `v${run.questionVersion} rerun finished: ${counts}`;
 };
 

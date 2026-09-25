@@ -2714,7 +2714,7 @@ export const questionRuns = pgTable(
     questionVersionId: uuid("question_version_id").notNull(),
     questionVersion: integer("question_version").notNull(),
     invoiceIds: uuid("invoice_ids").array().notNull(),
-    // queued | running | completed | failed
+    // queued | running | completed | failed | cancelled
     status: text("status").notNull(),
     answered: integer("answered").default(0).notNull(),
     unknown: integer("unknown").default(0).notNull(),
