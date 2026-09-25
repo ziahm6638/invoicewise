@@ -2,6 +2,7 @@ import type {
   InvoiceExtraction,
   InvoiceJudgment,
   InvoiceJudgmentQuestion,
+  JudgmentHistoryScope,
   PreviousInvoice,
 } from "./typesafe/invoice";
 import type { InvoiceValidation } from "./validation";
@@ -12,6 +13,15 @@ export type GetDocumentRequest = {
   mimetype: string;
   companyName?: string | null;
   previousInvoices?: readonly PreviousInvoice[];
+  /**
+   * Chooses the earlier invoices judgments compare with once the invoice has
+   * been read, so they can be limited to its supplier. Takes precedence over
+   * `previousInvoices`.
+   */
+  loadHistory?: (extraction: InvoiceExtraction) => Promise<{
+    previousInvoices: readonly PreviousInvoice[];
+    scope: JudgmentHistoryScope;
+  }>;
   defaultJudgmentQuestions?: readonly InvoiceJudgmentQuestion[];
   judgmentQuestions?: readonly InvoiceJudgmentQuestion[];
 };

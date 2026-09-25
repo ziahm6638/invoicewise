@@ -300,6 +300,77 @@ suite("workspace permissions (integration)", () => {
       });
     });
 
+    test("only an admin corrects supplier identity, and only in their workspace", async () => {
+      const [invoice] = await primaryDb
+        .insert(schema.inbox)
+        .values({
+          teamId: ids.teamA,
+          displayName: "Supplier check",
+          fileName: "supplier-check.pdf",
+          contentType: "application/pdf",
+          status: "pending",
+          extraction: {
+            documentType: "invoice",
+            supplierName: "Harbour Lane Plumbing Ltd",
+            invoiceNumber: "HLP-1",
+            invoiceDate: "2026-09-01",
+            currency: "GBP",
+            grossAmount: 120,
+          },
+        })
+        .returning({ id: schema.inbox.id });
+      const inboxId = invoice!.id;
+      const member = caller(ctx(ids.memberA, ids.teamA));
+
+      await expect(
+        member.suppliers.assignInvoice({ inboxId, newSupplierName: "Other" }),
+      ).rejects.toThrow();
+      await expect(
+        member.suppliers.merge({
+          sourceId: crypto.randomUUID(),
+          targetId: crypto.randomUUID(),
+        }),
+      ).rejects.toThrow();
+      await expect(
+        member.suppliers.revert({ eventId: crypto.randomUUID() }),
+      ).rejects.toThrow();
+
+      // A member reads the evidence and may re-run the checks.
+      await member.suppliers.recheck({ inboxId });
+      const read = await member.suppliers.forInvoice({ inboxId });
+      expect(read?.canCorrect).toBe(false);
+      expect(read?.checks).toMatchObject({
+        known: { outcome: "first_invoice" },
+      });
+
+      // Another workspace neither reads nor corrects it.
+      const otherOwner = caller(ctx(ids.ownerB, ids.teamB));
+      expect(await otherOwner.suppliers.forInvoice({ inboxId })).toBeNull();
+      await expect(
+        otherOwner.suppliers.assignInvoice({
+          inboxId,
+          newSupplierName: "Hijacked",
+        }),
+      ).rejects.toThrow();
+
+      // An admin's correction is recorded with who made it, and undone.
+      const admin = caller(ctx(ids.adminA, ids.teamA));
+      const assigned = await admin.suppliers.assignInvoice({
+        inboxId,
+        newSupplierName: "Harbour Lane Plumbing",
+      });
+      const corrected = await admin.suppliers.forInvoice({ inboxId });
+      expect(corrected?.canCorrect).toBe(true);
+      expect(corrected?.events[0]).toMatchObject({
+        action: "assign_invoice",
+        actor: { id: ids.adminA },
+      });
+      await admin.suppliers.revert({ eventId: assigned.eventId, inboxId });
+      await expect(
+        admin.suppliers.revert({ eventId: assigned.eventId, inboxId }),
+      ).rejects.toThrow();
+    });
+
     test("an admin manages members but can never grant owner", async () => {
       const admin = caller(ctx(ids.adminA, ids.teamA));
 

@@ -8,7 +8,6 @@ import {
   getInboxByFilePath,
   getInboxIntakeBinding,
   getInvoicesByDocumentNumber,
-  getProcessedInvoiceHistory,
   getUserQuestions,
   getWorkflowJob,
   recordInboxProcessingFailure,
@@ -26,6 +25,7 @@ import { Effect, Logger } from "effect";
 import { enqueueWorkflow, workflowKey } from "./client";
 import { acceptIntakeUpload } from "./intake";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
+import { loadJudgmentHistory } from "./suppliers";
 import { required, startTypeSafeStub } from "./verify-support";
 import { TEMPORARY_PROCESSING_FAILURE } from "./workflows";
 
@@ -490,10 +490,14 @@ async function verifyDuplicateCandidates(
         documentId,
         numbers: ["CAND-100"],
       }),
-      getProcessedInvoiceHistory(database.db, { teamId, documentId }),
+      loadJudgmentHistory(database.db, {
+        teamId,
+        documentId,
+        extraction,
+      }).then((loaded) => loaded.previousInvoices),
     ]);
     const copies = new Set([deleted, earlier, reserved, current, later]);
-    const ids = (rows: { id: string }[]) =>
+    const ids = (rows: readonly { id: string }[]) =>
       rows.map((row) => row.id).filter((id) => copies.has(id));
     return {
       sameNumber: ids(sameNumber),

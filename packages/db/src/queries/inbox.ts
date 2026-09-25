@@ -3,6 +3,8 @@ import {
   inbox,
   inboxAccounts,
   inboxEmbeddings,
+  inboxRedeliveries,
+  suppliers,
   transactionAttachments,
   transactionEmbeddings,
   transactionMatchSuggestions,
@@ -237,6 +239,8 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       extraction: inbox.extraction,
       judgments: inbox.judgments,
       validation: inbox.validation,
+      supplierId: inbox.supplierId,
+      supplierChecks: inbox.supplierChecks,
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
@@ -321,6 +325,8 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       extraction: inbox.extraction,
       judgments: inbox.judgments,
       validation: inbox.validation,
+      supplierId: inbox.supplierId,
+      supplierChecks: inbox.supplierChecks,
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
@@ -1979,7 +1985,7 @@ export async function getInboxByFilePath(
  * invoice is its original whatever order the copies were processed in, and a
  * deleted or reserved document is never a duplicate or credit candidate.
  */
-const liveDocumentsReceived = (
+export const liveDocumentsReceived = (
   direction: "before" | "after",
   teamId: string,
   documentId: string,
@@ -1994,7 +2000,12 @@ const liveDocumentsReceived = (
       : sql`(${inbox.createdAt}, ${inbox.id}) > (select current.created_at, current.id from ${inbox} as current where current.id = ${documentId})`,
   );
 
-const documentNumberKeys = (numbers: string[]) => [
+/** A document's supplier after merges; null when none was resolved. Needs `suppliers` left-joined. */
+const canonicalSupplierOf = sql<
+  string | null
+>`coalesce(${suppliers.mergedIntoId}, ${suppliers.id})`;
+
+export const documentNumberKeys = (numbers: string[]) => [
   ...new Set(
     numbers
       .map((number) => number.toUpperCase().replace(/[^A-Z0-9]/g, ""))
@@ -2002,7 +2013,9 @@ const documentNumberKeys = (numbers: string[]) => [
   ),
 ];
 
-const documentNumberOf = (field: "invoiceNumber" | "originalInvoiceNumber") =>
+export const documentNumberOf = (
+  field: "invoiceNumber" | "originalInvoiceNumber",
+) =>
   sql<string>`upper(regexp_replace(${inbox.extraction} ->> ${field}::text, '[^A-Za-z0-9]', '', 'g'))`;
 
 /**
@@ -2017,8 +2030,13 @@ export async function getInvoicesByDocumentNumber(
   const keys = documentNumberKeys(params.numbers);
   if (keys.length === 0) return [];
   return db
-    .select({ id: inbox.id, extraction: inbox.extraction })
+    .select({
+      id: inbox.id,
+      extraction: inbox.extraction,
+      supplierId: canonicalSupplierOf,
+    })
     .from(inbox)
+    .leftJoin(suppliers, eq(suppliers.id, inbox.supplierId))
     .where(
       and(
         liveDocumentsReceived("before", params.teamId, params.documentId),
@@ -2041,8 +2059,13 @@ export async function getLaterDocumentsByNumber(
   const keys = documentNumberKeys([params.number]);
   if (keys.length === 0) return [];
   return db
-    .select({ id: inbox.id, extraction: inbox.extraction })
+    .select({
+      id: inbox.id,
+      extraction: inbox.extraction,
+      supplierId: canonicalSupplierOf,
+    })
     .from(inbox)
+    .leftJoin(suppliers, eq(suppliers.id, inbox.supplierId))
     .where(
       and(
         liveDocumentsReceived("after", params.teamId, params.documentId),
@@ -2077,23 +2100,6 @@ export async function updateInboxValidation(
     .where(and(eq(inbox.id, params.id), eq(inbox.teamId, params.teamId)));
 }
 
-export async function getProcessedInvoiceHistory(
-  db: Database,
-  params: { teamId: string; documentId: string; limit?: number },
-) {
-  return db
-    .select({ id: inbox.id, extraction: inbox.extraction })
-    .from(inbox)
-    .where(
-      and(
-        liveDocumentsReceived("before", params.teamId, params.documentId),
-        eq(inbox.type, "invoice"),
-      ),
-    )
-    .orderBy(desc(inbox.createdAt))
-    .limit(params.limit ?? 50);
-}
-
 export async function getExistingInboxAttachments(
   db: InboxQueryDatabase,
   teamId: string,
@@ -2101,20 +2107,34 @@ export async function getExistingInboxAttachments(
 ) {
   if (referenceIds.length === 0) return [];
 
-  return db
-    .select({ referenceId: inbox.referenceId })
-    .from(inbox)
-    .where(
-      and(
-        eq(inbox.teamId, teamId),
-        inArray(inbox.referenceId, referenceIds),
-        ne(inbox.status, "deleted"),
-        // A reservation is not a delivered attachment: the next sync must try
-        // to recover it instead of skipping it as already handled. Legacy rows
-        // predate the intake state and count as accepted.
-        or(isNull(inbox.intakeState), eq(inbox.intakeState, "accepted")),
+  const live = and(
+    eq(inbox.teamId, teamId),
+    ne(inbox.status, "deleted"),
+    // A reservation is not a delivered attachment: the next sync must try
+    // to recover it instead of skipping it as already handled. Legacy rows
+    // predate the intake state and count as accepted.
+    or(isNull(inbox.intakeState), eq(inbox.intakeState, "accepted")),
+  );
+  const [documents, redeliveries] = await Promise.all([
+    db
+      .select({ referenceId: inbox.referenceId })
+      .from(inbox)
+      .where(and(live, inArray(inbox.referenceId, referenceIds))),
+    // An attachment whose bytes matched an earlier document was recorded as
+    // a re-delivery of it; it is handled too.
+    db
+      .select({ referenceId: inboxRedeliveries.referenceId })
+      .from(inboxRedeliveries)
+      .innerJoin(inbox, eq(inbox.id, inboxRedeliveries.inboxId))
+      .where(
+        and(
+          eq(inboxRedeliveries.teamId, teamId),
+          inArray(inboxRedeliveries.referenceId, referenceIds),
+          live,
+        ),
       ),
-    );
+  ]);
+  return [...documents, ...redeliveries];
 }
 
 export type CreateInboxParams = {

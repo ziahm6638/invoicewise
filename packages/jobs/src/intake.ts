@@ -26,6 +26,7 @@ import {
   listStaleReservedIntake,
   recordInboxIntakeError,
   recordInboxIntakeRemovalIntent,
+  recordInboxRedelivery,
   recordIntakeRemovalFailure,
   reserveInboxIntake,
   updateInbox,
@@ -540,7 +541,29 @@ const acceptIntake = async (
   return acceptedResult(outcome.binding, outcome.type === "deduplicated");
 };
 
-export const acceptIntakeUpload = acceptIntake;
+/**
+ * Accepts an uploaded or mailed document. Identical bytes already accepted
+ * for the workspace return that document; the repeat is recorded as a
+ * re-delivery of it (see docs/document-intake.md#identity) and is neither
+ * processed nor delivered again.
+ */
+export const acceptIntakeUpload = async (
+  db: InboxQueryDatabase,
+  storage: IntakeStorage,
+  input: IntakeUploadInput,
+): Promise<IntakeUploadResult> => {
+  const result = await acceptIntake(db, storage, input);
+  if (result.status === "accepted" && result.deduplicated) {
+    await recordInboxRedelivery(db as Database, {
+      teamId: input.teamId,
+      inboxId: result.inboxId,
+      referenceId: input.referenceId ?? null,
+      inboxAccountId: input.inboxAccountId ?? null,
+      fileName: intakeFileName(input.fileName),
+    });
+  }
+  return result;
+};
 
 /**
  * Re-queues processing for an already accepted workspace document. The caller

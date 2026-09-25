@@ -61,6 +61,16 @@ const invoice = {
       ],
     },
   },
+  supplierId: "5a0c3e59-2d3f-4d7c-9b44-9e1f7f0d6a11",
+  supplierChecks: {
+    version: 1,
+    duplicate: { outcome: "none", evidence: [] },
+    bankDetails: {
+      outcome: "changed",
+      current: { kind: "iban", ending: "6819" },
+      evidence: [],
+    },
+  },
   processingError: null,
   processingRevision: 1,
   delivery: {
@@ -188,6 +198,8 @@ describe("Effect invoice read HTTP slice", () => {
           extraction: invoice.extraction,
           judgments: invoice.judgments,
           validation: invoice.validation,
+          supplierId: invoice.supplierId,
+          supplierChecks: invoice.supplierChecks,
           processingError: null,
           transaction: null,
         },
@@ -282,6 +294,7 @@ describe("Effect invoice read HTTP slice", () => {
       await request(`/invoices/${invoice.id}`)
     ).json()) as Record<string, unknown>;
     expect(detail.validation).toEqual(invoice.validation);
+    expect(detail.supplierChecks).toEqual(invoice.supplierChecks);
 
     const [header, row] = (
       await (await request("/invoices/export.csv")).text()

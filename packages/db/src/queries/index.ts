@@ -25,6 +25,7 @@ export * from "./reports";
 export * from "./search";
 export * from "./short-links";
 export * from "./tags";
+export * from "./suppliers";
 export * from "./teams";
 export * from "./team-permissions";
 export * from "./tracker-entries";

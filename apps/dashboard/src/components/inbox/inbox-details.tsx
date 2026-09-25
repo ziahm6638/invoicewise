@@ -23,6 +23,7 @@ import type { ReactNode } from "react";
 import { DeliveryResults } from "./delivery-results";
 import { InboxStatus } from "./inbox-status";
 import { JudgmentResults } from "./judgment-results";
+import { SupplierHistory } from "./supplier-history";
 import { ValidationResults, uncertainFields } from "./validation-results";
 
 function Field({
@@ -419,6 +420,11 @@ export function InboxDetails() {
                       No line items were found on this invoice.
                     </p>
                   )}
+                </section>
+
+                <section className="mt-7">
+                  <h3 className="text-sm font-semibold">Supplier history</h3>
+                  <SupplierHistory inboxId={data.id} />
                 </section>
 
                 <section className="mt-7">

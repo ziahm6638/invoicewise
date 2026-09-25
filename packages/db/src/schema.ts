@@ -2117,6 +2117,50 @@ export const trackerProjects = pgTable(
   ],
 );
 
+// A workspace-local supplier. Invoices resolve to one by explicit identifiers
+// (VAT number, company number), else by a name no other supplier shares; see
+// docs/document-intake.md#supplier-identity-and-history. A merged supplier
+// points at the supplier it was merged into (always a canonical one), keeps
+// its own identifiers and can be unmerged.
+export const suppliers = pgTable(
+  "suppliers",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    name: text("name").notNull(),
+    nameKey: text("name_key").notNull(),
+    vatKey: text("vat_key"),
+    companyKey: text("company_key"),
+    mergedIntoId: uuid("merged_into_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("suppliers_team_name_key_idx").on(table.teamId, table.nameKey),
+    index("suppliers_merged_into_id_idx").on(table.mergedIntoId),
+    uniqueIndex("suppliers_team_vat_key_key")
+      .on(table.teamId, table.vatKey)
+      .where(sql`${table.vatKey} IS NOT NULL`),
+    uniqueIndex("suppliers_team_company_key_key")
+      .on(table.teamId, table.companyKey)
+      .where(sql`${table.companyKey} IS NOT NULL`),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "suppliers_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.mergedIntoId],
+      foreignColumns: [table.id],
+      name: "suppliers_merged_into_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
 export const inbox = pgTable(
   "inbox",
   {
@@ -2144,6 +2188,14 @@ export const inbox = pgTable(
     // required fields) and whether it may be posted to accounting; see
     // docs/document-intake.md#validation. Null until processed.
     validation: jsonb("validation").$type<Record<string, unknown>>(),
+    // The workspace supplier the document resolved to (possibly merged since;
+    // follow suppliers.merged_into_id), how it was resolved or who assigned
+    // it, and the supplier-history checks with their evidence and version.
+    supplierId: uuid("supplier_id"),
+    supplierResolution: jsonb("supplier_resolution").$type<
+      Record<string, unknown>
+    >(),
+    supplierChecks: jsonb("supplier_checks").$type<Record<string, unknown>>(),
     accountingProvider: accountingProviderEnum("accounting_provider"),
     accountingPostStatus: accountingPostStatusEnum("accounting_post_status"),
     accountingProviderId: text("accounting_provider_id"),
@@ -2241,6 +2293,14 @@ export const inbox = pgTable(
       "btree",
       table.inboxAccountId.asc().nullsLast().op("uuid_ops"),
     ),
+    index("inbox_team_supplier_created_at_idx")
+      .on(table.teamId, table.supplierId, table.createdAt)
+      .where(sql`${table.supplierId} IS NOT NULL`),
+    foreignKey({
+      columns: [table.supplierId],
+      foreignColumns: [suppliers.id],
+      name: "inbox_supplier_id_fkey",
+    }).onDelete("set null"),
     foreignKey({
       columns: [table.attachmentId],
       foreignColumns: [transactionAttachments.id],
@@ -2335,6 +2395,82 @@ export const accountingConnections = pgTable(
       columns: [table.teamId],
       foreignColumns: [teams.id],
       name: "accounting_connections_team_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// Every supplier-identity correction: an invoice assigned to another
+// supplier, or one supplier merged into another. `data` holds what the change
+// replaced, so a mistaken change can be reverted exactly; a revert is itself
+// an event and marks the one it undid.
+export const supplierEvents = pgTable(
+  "supplier_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    action: text("action").notNull(),
+    supplierId: uuid("supplier_id"),
+    targetSupplierId: uuid("target_supplier_id"),
+    inboxId: uuid("inbox_id"),
+    actorId: uuid("actor_id"),
+    data: jsonb("data").$type<Record<string, unknown>>().notNull(),
+    revertsEventId: uuid("reverts_event_id"),
+    revertedAt: timestamp("reverted_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("supplier_events_team_created_at_idx").on(
+      table.teamId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "supplier_events_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.actorId],
+      foreignColumns: [users.id],
+      name: "supplier_events_actor_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+// A document received again with identical bytes. Intake keeps one document
+// per content (see docs/document-intake.md#identity), so a re-delivery is
+// recorded here instead of being processed or delivered a second time.
+export const inboxRedeliveries = pgTable(
+  "inbox_redeliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    inboxId: uuid("inbox_id").notNull(),
+    referenceId: text("reference_id"),
+    inboxAccountId: uuid("inbox_account_id"),
+    fileName: text("file_name"),
+    receivedAt: timestamp("received_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("inbox_redeliveries_inbox_id_idx").on(table.inboxId),
+    uniqueIndex("inbox_redeliveries_team_reference_id_key")
+      .on(table.teamId, table.referenceId)
+      .where(sql`${table.referenceId} IS NOT NULL`),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "inbox_redeliveries_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.inboxId],
+      foreignColumns: [inbox.id],
+      name: "inbox_redeliveries_inbox_id_fkey",
     }).onDelete("cascade"),
   ],
 );

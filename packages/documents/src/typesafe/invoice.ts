@@ -210,6 +210,8 @@ type InvoiceJudgmentDetails = {
   question: string;
   context?: string | null;
   source: "default" | "custom";
+  /** The earlier documents the question was given as `previousInvoices`. */
+  historyIds?: string[];
 };
 
 export type InvoiceJudgment =
@@ -249,6 +251,8 @@ export type InvoiceJudgment =
 export type PreviousInvoice = {
   id: string;
   extraction: unknown;
+  /** The workspace supplier (after merges) it was resolved to, if any. */
+  supplierId?: string | null;
 };
 
 export type ProcessedInvoice = {
@@ -1373,6 +1377,16 @@ const hasBankDetails = (extraction: unknown) =>
     (value) => typeof value === "string" && value.trim() !== "",
   );
 
+/**
+ * How the earlier invoices given to judgments were chosen. `scoped` history
+ * is already limited to the invoice's resolved supplier; `emptyReason` says
+ * why there is none (for example, the supplier could not be identified).
+ */
+export type JudgmentHistoryScope = {
+  scoped: boolean;
+  emptyReason?: string | null;
+};
+
 /** A previous invoice plausibly from the same supplier: same name or VAT number. */
 const fromSameSupplier = (
   extraction: InvoiceExtraction,
@@ -1400,20 +1414,24 @@ const inapplicableReason = (
   question: InvoiceJudgmentQuestion,
   extraction: InvoiceExtraction,
   previousInvoices: readonly PreviousInvoice[],
+  scope: JudgmentHistoryScope,
 ): string | null => {
+  const noHistory = scope.emptyReason || NO_HISTORY;
   switch (question.id) {
     case "likely_duplicate":
     case "known_supplier":
-      return previousInvoices.length === 0 ? NO_HISTORY : null;
+      return previousInvoices.length === 0 ? noHistory : null;
     case "bank_details_consistent":
       if (!hasBankDetails(extraction)) {
         return "No bank details were found on this invoice to compare.";
       }
-      if (previousInvoices.length === 0) return NO_HISTORY;
+      if (previousInvoices.length === 0) return noHistory;
       return previousInvoices.some(
         (invoice) =>
           hasBankDetails(invoice.extraction) &&
-          (!extraction.supplierName || fromSameSupplier(extraction, invoice)),
+          (scope.scoped ||
+            !extraction.supplierName ||
+            fromSameSupplier(extraction, invoice)),
       )
         ? null
         : "No earlier invoice from this supplier has bank details to compare with.";
@@ -1435,14 +1453,16 @@ export const judgeInvoice = (
   defaultQuestions: readonly InvoiceJudgmentQuestion[] = DEFAULT_INVOICE_JUDGMENTS,
   invoiceText?: string | null,
   validation?: InvoiceValidation | null,
+  scope: JudgmentHistoryScope = { scoped: false },
 ): Effect.Effect<InvoiceJudgment[], TypeSafeError, TypeSafe> =>
   Effect.gen(function* () {
     const typeSafe = yield* TypeSafe;
+    const historyIds = previousInvoices.map((invoice) => invoice.id);
     const configured = [
       ...defaultQuestions.map((question) => ({
         question,
         source: "default" as const,
-        skip: inapplicableReason(question, extraction, previousInvoices),
+        skip: inapplicableReason(question, extraction, previousInvoices, scope),
       })),
       ...customQuestions.map((question) => ({
         question,
@@ -1478,30 +1498,40 @@ export const judgeInvoice = (
                     },
                   }
                 : {}),
-              previousInvoices,
+              previousInvoices: previousInvoices.map(({ id, extraction }) => ({
+                id,
+                extraction,
+              })),
             },
             questions: Object.fromEntries(asked),
           })).answers;
-    return configured.map(({ question, source, skip }, index) => {
-      if (skip) return notApplicable(question, source, skip);
-      const answer = answers[wireId(index)];
-      if (!answer) {
-        return failedJudgment(
-          question,
-          source,
-          "TypeSafe omitted this invoice judgment answer",
-        );
-      }
-      const judgment = toJudgment(question, answer, source);
-      return (
-        judgment ??
-        failedJudgment(
-          question,
-          source,
-          "TypeSafe returned the wrong answer type for this question",
-        )
-      );
-    });
+    return configured.map(
+      ({ question, source, skip }, index): InvoiceJudgment => {
+        if (skip)
+          return { ...notApplicable(question, source, skip), historyIds };
+        const answer = answers[wireId(index)];
+        if (!answer) {
+          return {
+            ...failedJudgment(
+              question,
+              source,
+              "TypeSafe omitted this invoice judgment answer",
+            ),
+            historyIds,
+          };
+        }
+        const judgment = toJudgment(question, answer, source);
+        return {
+          ...(judgment ??
+            failedJudgment(
+              question,
+              source,
+              "TypeSafe returned the wrong answer type for this question",
+            )),
+          historyIds,
+        };
+      },
+    );
   });
 
 export const processInvoice = (
@@ -1515,10 +1545,18 @@ export const processInvoice = (
       textSource,
       document.pageSources,
     );
-    const validation = validateInvoice(
-      extraction,
-      request.previousInvoices ?? [],
-    );
+    // Supplier-scoped history is chosen once the supplier has been read.
+    const history = request.loadHistory
+      ? yield* Effect.tryPromise({
+          try: () => request.loadHistory!(extraction),
+          catch: () =>
+            readError("Unable to load the supplier's earlier invoices", true),
+        })
+      : {
+          previousInvoices: request.previousInvoices ?? [],
+          scope: { scoped: false },
+        };
+    const validation = validateInvoice(extraction, history.previousInvoices);
     const defaultQuestions =
       request.defaultJudgmentQuestions ?? DEFAULT_INVOICE_JUDGMENTS;
     const configuredQuestions = [
@@ -1527,11 +1565,12 @@ export const processInvoice = (
     ];
     const judgments = yield* judgeInvoice(
       extraction,
-      request.previousInvoices ?? [],
+      history.previousInvoices,
       request.judgmentQuestions ?? [],
       defaultQuestions,
       documentPlainText(document.lines),
       validation,
+      history.scope,
     ).pipe(
       Effect.catchAll((error) =>
         Effect.succeed(

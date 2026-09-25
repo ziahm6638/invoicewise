@@ -16,6 +16,7 @@ expected to reach the same decision for the same actor.
 | List and revoke pending invitations | yes | yes | no |
 | Grant the `owner` role | yes | no | no |
 | Manage custom questions | yes | yes | no |
+| Correct supplier identity (reassign an invoice, merge suppliers, undo) | yes | yes | no |
 | Manage integrations: API keys, OAuth apps, accounting, webhooks, mailboxes | yes | yes | no |
 | Manage billing and subscription | yes | no | no |
 | Delete the workspace | yes | no | no |
@@ -48,8 +49,8 @@ no longer grant (see **Invitations**).
 database on every request (`apps/api/src/trpc/middleware/team-permission.ts`).
 `adminProcedure` and `ownerProcedure` in `apps/api/src/trpc/init.ts` gate the
 privileged routers: team settings, members, invitations, questions, API keys,
-OAuth applications, accounting and mailbox connections (admin) and billing
-(owner). `workspaceProcedure` additionally requires an active workspace, so a
+OAuth applications, accounting and mailbox connections, and supplier
+corrections (admin) and billing (owner). `workspaceProcedure` additionally requires an active workspace, so a
 session with none cannot reach workspace-scoped handlers.
 
 **Stale active workspace.** A browser session whose active-workspace pointer
