@@ -32,10 +32,10 @@ export function LogoFooter() {
           }
         `}</style>
 
-      <Link href="https://go.midday.ai/FZwOHud">
+      <Link href="https://invoicewise.uk">
         <Img
           src={`${baseUrl}/email/logo-footer.png`}
-          width="80"
+          width="120"
           alt="InvoiceWise"
           className="block logo-blend"
         />

@@ -31,7 +31,7 @@ export const metadata: Metadata = {
     type: "website",
     images: [
       {
-        url: "/app/og.png",
+        url: "/og.png",
         width: 1200,
         height: 630,
         alt: "InvoiceWise",
@@ -42,7 +42,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title,
     description,
-    images: ["/app/og.png"],
+    images: ["/og.png"],
   },
   robots: {
     index: true,

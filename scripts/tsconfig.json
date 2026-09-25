@@ -14,6 +14,11 @@
     "types": ["bun-types"],
     "baseUrl": "."
   },
-  "include": ["verify/**/*.ts", "deploy/**/*.ts", "ops/**/*.ts"],
+  "include": [
+    "verify/**/*.ts",
+    "deploy/**/*.ts",
+    "ops/**/*.ts",
+    "brand/**/*.ts"
+  ],
   "exclude": ["node_modules"]
 }

@@ -606,6 +606,14 @@ async function unitSuites() {
     env: env(),
     timeoutMs: 5 * 60 * 1000,
   });
+
+  await v.runStep("test:brand-assets", {
+    command: "bun",
+    args: ["--no-env-file", "test", "scripts/brand/brand-assets.test.ts"],
+    cwd: ws(),
+    env: env(),
+    timeoutMs: 5 * 60 * 1000,
+  });
 }
 
 async function buildWorkspace() {

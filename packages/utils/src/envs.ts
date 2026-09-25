@@ -24,12 +24,13 @@ export function getAppUrl() {
   return "http://localhost:3001";
 }
 
+/** Origin of the images in emails: the marketing site serves `public/email`. */
 export function getEmailUrl() {
   if (process.env.NODE_ENV === "development") {
     return "http://localhost:3000";
   }
 
-  return "https://midday.ai";
+  return "https://invoicewise.uk";
 }
 
 export function getWebsiteUrl() {

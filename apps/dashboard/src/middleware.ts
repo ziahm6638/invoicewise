@@ -45,6 +45,10 @@ export async function middleware(request: NextRequest) {
   return response;
 }
 
+// Icons and the web manifest are public so the sign-in page, browser tabs and
+// installed apps can load them without a session.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon.png|icon-192.png|icon-512.png|manifest.webmanifest|api).*)",
+  ],
 };

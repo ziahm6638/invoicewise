@@ -1,9 +1,7 @@
-import { getEmailUrl } from "@invoicewise/utils/envs";
 import {
   Body,
   Container,
   Heading,
-  Img,
   Link,
   Preview,
   Text,
@@ -20,8 +18,6 @@ import {
 interface Props {
   fullName: string;
 }
-
-const baseUrl = getEmailUrl();
 
 export const WelcomeEmail = ({ fullName = "" }: Props) => {
   const firstName = fullName ? fullName.split(" ").at(0) : "";
@@ -89,45 +85,12 @@ export const WelcomeEmail = ({ fullName = "" }: Props) => {
 
           <br />
 
-          <Img
-            src={`${baseUrl}/email/founders.jpeg`}
-            alt="Founders"
-            className="my-0 mx-auto block w-full"
-          />
-
           <Text
             className={themeClasses.mutedText}
             style={{ color: lightStyles.mutedText.color }}
           >
             Best regards, founders
           </Text>
-
-          <style>{`
-            .signature-blend {
-              filter: none;
-            }
-            
-            /* Regular dark mode - exclude Outlook.com */
-            @media (prefers-color-scheme: dark) {
-              .signature-blend:not([class^="x_"]) {
-                filter: invert(1) brightness(1);
-              }
-            }
-            
-            /* Outlook.com specific dark mode targeting */
-            [data-ogsb] .signature-blend,
-            [data-ogsc] .signature-blend,
-            [data-ogac] .signature-blend,
-            [data-ogab] .signature-blend {
-              filter: invert(1) brightness(1);
-            }
-          `}</style>
-
-          <Img
-            src={`${baseUrl}/email/signature.png`}
-            alt="Signature"
-            className="block w-full w-[143px] h-[20px] signature-blend"
-          />
 
           <br />
           <br />
