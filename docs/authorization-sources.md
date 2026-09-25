@@ -48,9 +48,12 @@ by number.
 
 Each version has an **effective date**. A new source's first version takes
 effect from `effectiveFrom`, else its start date, else its issue date, else
-the day it was recorded. An amendment takes effect from `effectiveFrom`, else
-the day it was recorded. A supplier link keeps the current version's effective
-date, because the terms did not change.
+the day it was recorded. An amendment or status change takes effect from
+`effectiveFrom`, else the later of the day it was recorded and the current
+version's effective date, so a version built on a future-dated amendment never
+applies that amendment's terms before its date. An explicit `effectiveFrom` is
+honoured as given. A supplier link keeps the current version's effective date,
+because the terms did not change.
 
 The **version in effect on a date** is the highest-numbered version whose
 effective date is on or before it; there is none before the first version

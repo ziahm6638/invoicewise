@@ -474,6 +474,58 @@ async function main() {
       searched,
     );
 
+    // --- A status change after a future-dated amendment never pulls that
+    // amendment's terms back to an earlier date.
+    const scheduled = await createAuthorizationSource(db, {
+      teamId: teamA,
+      actorId,
+      source: {
+        type: "purchase_order",
+        reference: "PO-SCHEDULED",
+        currency: "GBP",
+        taxBasis: "exclusive",
+        authorizedTotal: "1000",
+        effectiveFrom: "2026-01-01",
+      },
+    });
+    await amendAuthorizationSource(db, {
+      teamId: teamA,
+      actorId,
+      sourceId: scheduled.sourceId!,
+      source: {
+        type: "purchase_order",
+        reference: "PO-SCHEDULED",
+        currency: "GBP",
+        taxBasis: "exclusive",
+        authorizedTotal: "1500",
+        effectiveFrom: "2099-06-01",
+      },
+    });
+    const closed = await setAuthorizationSourceStatus(db, {
+      teamId: teamA,
+      actorId,
+      sourceId: scheduled.sourceId!,
+      status: "closed",
+    });
+    const beforeIncrease = await getEffectiveAuthorizationSourceVersion(db, {
+      teamId: teamA,
+      sourceId: scheduled.sourceId!,
+      on: "2099-03-01",
+    });
+    const closedVersion = await getAuthorizationSourceVersion(db, {
+      teamId: teamA,
+      sourceId: scheduled.sourceId!,
+      version: 3,
+    });
+    assert(
+      closed.outcome === "amended" &&
+        beforeIncrease?.version === 1 &&
+        beforeIncrease.authorizedTotal === "1000.00" &&
+        closedVersion?.effectiveFrom === "2099-06-01",
+      "A default-dated status change takes effect no earlier than the version it follows",
+      { beforeIncrease, closedVersion },
+    );
+
     // --- Retained documents: kept once, readable only in their workspace.
     const attached = await attachAuthorizationSourceDocument(
       db,

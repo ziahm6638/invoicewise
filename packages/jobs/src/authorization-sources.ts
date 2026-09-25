@@ -529,7 +529,7 @@ async function applyBatch(
         item.effectiveFrom ??
         item.terms.effectiveFrom ??
         (head
-          ? today()
+          ? [today(), current?.effectiveFrom ?? ""].sort().at(-1)!
           : (item.terms.startsOn ?? item.terms.issuedOn ?? today()));
 
       plans.push({

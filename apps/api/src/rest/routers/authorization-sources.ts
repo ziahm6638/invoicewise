@@ -1,4 +1,4 @@
-import { readBoundedFormData } from "@api/intake/http";
+import { readBoundedBody, readBoundedFormData } from "@api/intake/http";
 import type { Context } from "@api/rest/types";
 import {
   authorizationSourceDocumentSchema,
@@ -16,6 +16,7 @@ import {
 import { OpenAPIHono } from "@hono/zod-openapi";
 import {
   getAuthorizationSource,
+  getAuthorizationSourceHead,
   getAuthorizationSourceVersion,
   getEffectiveAuthorizationSourceVersion,
   listAuthorizationSourceImports,
@@ -57,6 +58,19 @@ const failure = (error: unknown) => {
   throw error;
 };
 
+const MAX_IMPORT_BODY_BYTES = AUTHORIZATION_SOURCE_LIMITS.maxCsvBytes + 10_000;
+const MAX_BATCH_BODY_BYTES = 20_000_000;
+
+const tooLarge = { error: "The request body is too large" };
+
+const parseJson = (text: string): unknown => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+};
+
 const dryRunParam = (value: string | undefined) =>
   value === "1" || value === "true";
 
@@ -85,8 +99,12 @@ app.post(
   withRequiredScope("sources.write"),
   withRequiredTeamRole("admin"),
   async (c) => {
+    const read = await readBoundedBody(c.req.raw, MAX_BATCH_BODY_BYTES);
+    if (!read.ok && read.code === "too_large") {
+      return c.json(tooLarge, 413, { connection: "close" });
+    }
     const parsed = submitAuthorizationSourcesSchema.safeParse(
-      await c.req.json().catch(() => undefined),
+      read.ok ? parseJson(new TextDecoder().decode(read.bytes)) : undefined,
     );
     if (!parsed.success) {
       return c.json(
@@ -118,24 +136,22 @@ app.post(
   withRequiredScope("sources.write"),
   withRequiredTeamRole("admin"),
   async (c) => {
-    const declared = Number(c.req.header("content-length"));
-    if (
-      Number.isFinite(declared) &&
-      declared > AUTHORIZATION_SOURCE_LIMITS.maxCsvBytes + 10_000
-    ) {
-      return c.json({ error: "The file is too large" }, 413);
+    const read = await readBoundedBody(c.req.raw, MAX_IMPORT_BODY_BYTES);
+    if (!read.ok && read.code === "too_large") {
+      return c.json(tooLarge, 413, { connection: "close" });
     }
+    const text = read.ok ? new TextDecoder().decode(read.bytes) : undefined;
     const contentType = c.req.header("content-type") ?? "";
     let csv: string | undefined;
     let fileName: string | null = c.req.query("fileName") ?? null;
     if (contentType.includes("application/json")) {
-      const body = (await c.req.json().catch(() => undefined)) as
+      const body = (text === undefined ? undefined : parseJson(text)) as
         | { csv?: unknown; fileName?: unknown }
         | undefined;
       if (typeof body?.csv === "string") csv = body.csv;
       if (typeof body?.fileName === "string") fileName = body.fileName;
     } else {
-      csv = await c.req.text().catch(() => undefined);
+      csv = text;
     }
     if (csv === undefined) {
       return c.json({ error: "Send the CSV file as the request body" }, 400);
@@ -208,11 +224,11 @@ app.get("/:id/effective", withRequiredScope("sources.read"), async (c) => {
       400,
     );
   }
-  const source = await getAuthorizationSource(c.get("db"), {
+  const head = await getAuthorizationSourceHead(c.get("db"), {
     teamId: c.get("teamId"),
     sourceId: parsed.data.id,
   });
-  if (!source) return c.json(NOT_FOUND, 404);
+  if (!head) return c.json(NOT_FOUND, 404);
   const version = await getEffectiveAuthorizationSourceVersion(c.get("db"), {
     teamId: c.get("teamId"),
     sourceId: parsed.data.id,
