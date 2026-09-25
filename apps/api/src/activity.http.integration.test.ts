@@ -983,7 +983,7 @@ suite("invoice activity and operator recovery over real HTTP", () => {
         accounting: "held",
         webhooksRequeued: 1,
         notRequeued:
-          "Held by the delivery rules: an owner or admin releases it",
+          "Held by the delivery rules: it cannot be released: correct or re-extract the invoice, or dismiss it",
       },
     });
     expect((await deliveryRow())?.status).toBe("queued");
@@ -995,7 +995,8 @@ suite("invoice activity and operator recovery over real HTTP", () => {
     expect(again.status).toBe(409);
     expect((await again.json()) as Json).toMatchObject({
       status: "refused",
-      reason: "Held by the delivery rules: an owner or admin releases it",
+      reason:
+        "Held by the delivery rules: it cannot be released: correct or re-extract the invoice, or dismiss it",
     });
 
     const [settled] = await client.primaryDb

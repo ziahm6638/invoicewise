@@ -425,6 +425,11 @@ const DECISION_DESTINATION: Record<string, string> = {
   not_scheduled: "not scheduled",
 };
 
+export const HELD_RELEASABLE_TEXT =
+  "An owner or admin releases or dismisses it";
+export const HELD_LOCKED_TEXT =
+  "It cannot be released: correct or re-extract the invoice, or dismiss it";
+
 const ruleLabel = (rule: string) =>
   DELIVERY_RULE_DESCRIPTIONS[rule as DeliveryRuleId]?.label ?? rule;
 
@@ -616,6 +621,8 @@ export function buildInvoiceActivity(
     };
     const destinations = `Accounting: ${DECISION_DESTINATION[decision.accounting] ?? decision.accounting} · Webhooks: ${DECISION_DESTINATION[decision.webhooks] ?? decision.webhooks}`;
     const held = decision.outcome === "hold";
+    const open = held && !decision.resolution;
+    const superseded = open && decision.revision < invoice.processingRevision;
     entries.push({
       id: `decision:${decision.id}`,
       at: decision.createdAt,
@@ -623,10 +630,12 @@ export function buildInvoiceActivity(
       title: held
         ? `Held by the delivery rules: ${[...new Set(decision.rules.map(ruleLabel))].join(", ") || "held"}`
         : "Passed the delivery rules",
-      status: held && !decision.resolution ? "pending" : "ok",
-      reason: held
-        ? `${destinations}${decision.resolution ? "" : " · An owner or admin releases or dismisses it"}`
-        : destinations,
+      status: superseded ? "info" : open ? "pending" : "ok",
+      reason: superseded
+        ? `${destinations} · Superseded by revision ${invoice.processingRevision}`
+        : open
+          ? `${destinations} · ${decision.locked ? HELD_LOCKED_TEXT : HELD_RELEASABLE_TEXT}`
+          : destinations,
       actor: null,
       refs,
     });

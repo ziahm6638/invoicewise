@@ -252,6 +252,7 @@ describe("invoice activity", () => {
       policyVersion: 3,
       outcome: "hold",
       rules: ["bank_details_changed"],
+      locked: false,
       accounting: "held",
       webhooks: "held",
       resolution: null,
@@ -302,9 +303,35 @@ describe("invoice activity", () => {
     ]);
     expect(activity.current.delivery).toBe("held");
 
+    input.invoice.processingRevision = 3;
+    input.decisions = [
+      decision("decision-5", {
+        revision: 3,
+        rules: ["invalid_financials"],
+        locked: true,
+        createdAt: "2026-09-25T12:00:00.000Z",
+      }),
+      ...input.decisions,
+    ];
+    const later = buildInvoiceActivity(input, { audience: "customer" });
+    expect(
+      later.entries.find((entry) => entry.id === "decision:decision-2"),
+    ).toMatchObject({
+      status: "info",
+      reason: "Accounting: held · Webhooks: held · Superseded by revision 3",
+    });
+    expect(
+      later.entries.find((entry) => entry.id === "decision:decision-5"),
+    ).toMatchObject({
+      title: "Held by the delivery rules: Invalid financial data",
+      status: "pending",
+      reason:
+        "Accounting: held · Webhooks: held · It cannot be released: correct or re-extract the invoice, or dismiss it",
+    });
+
     input.decisions = [
       decision("decision-3", {
-        revision: 2,
+        revision: 3,
         outcome: "deliver",
         rules: [],
         accounting: "not_connected",

@@ -232,6 +232,7 @@ export async function getInvoiceActivitySources(
         rules: sql<
           string[]
         >`coalesce((select array_agg(reason ->> 'rule') from jsonb_array_elements(${deliveryDecisions.reasons}) as reason), '{}')`,
+        locked: sql<boolean>`coalesce((select bool_or((reason ->> 'locked')::boolean) from jsonb_array_elements(${deliveryDecisions.reasons}) as reason), false)`,
         accounting: deliveryDecisions.accounting,
         webhooks: deliveryDecisions.webhooks,
         resolution: deliveryDecisions.resolution,

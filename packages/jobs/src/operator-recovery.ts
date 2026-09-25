@@ -4,12 +4,15 @@ import {
   cancelWorkflowJobAsOperator,
   getInboundEmailForProcessing,
   getInvoiceForMatching,
+  getDeliveryDecision,
   hasNewerWorkflowJob,
   reopenFailedInboundEmail,
   requeueFinishedWorkflowJob,
   resumeDeletionRequests,
 } from "@invoicewise/db/queries";
+import { releasable } from "@invoicewise/documents/delivery-policy";
 import { InvoiceActionError } from "./action-error";
+import { HELD_LOCKED_TEXT, HELD_RELEASABLE_TEXT } from "./activity";
 import { workflowKey } from "./client";
 import {
   reconcileDeliveries,
@@ -66,7 +69,6 @@ const ACCOUNTING_REFUSAL: Record<string, string> = {
   no_active_connection: "The workspace has no active accounting connection",
   in_progress: "Already being sent",
   already_posted: "The bill is already posted",
-  held: "Held by the delivery rules: an owner or admin releases it",
   dismissed: "The hold was dismissed: nothing is sent for this revision",
   admin_required: "An owner or admin retries it",
 };
@@ -167,14 +169,28 @@ async function retryFailedJob(
         job.name === "post-accounting-draft"
           ? result.accounting
           : result.billUpdate;
+      const notRequeued =
+        accounting === "held"
+          ? `Held by the delivery rules: ${
+              releasable(
+                (
+                  await getDeliveryDecision(db, {
+                    invoiceId,
+                    teamId,
+                    revision: result.revision,
+                  })
+                )?.reasons ?? [],
+              )
+                ? HELD_RELEASABLE_TEXT.toLowerCase()
+                : HELD_LOCKED_TEXT.toLowerCase()
+            }`
+          : ACCOUNTING_REFUSAL[accounting];
       const redriven =
         result.accounting === "requeued" ||
         result.billUpdate === "requeued" ||
         result.webhooks.requeued > 0;
       if (!redriven) {
-        return refused(
-          ACCOUNTING_REFUSAL[accounting] ?? "Nothing failed to retry",
-        );
+        return refused(notRequeued ?? "Nothing failed to retry");
       }
       return {
         status: "requeued",
@@ -185,9 +201,7 @@ async function retryFailedJob(
           accounting: result.accounting,
           billUpdate: result.billUpdate,
           webhooksRequeued: result.webhooks.requeued,
-          ...(accounting !== "requeued" && ACCOUNTING_REFUSAL[accounting]
-            ? { notRequeued: ACCOUNTING_REFUSAL[accounting] }
-            : {}),
+          ...(accounting !== "requeued" && notRequeued ? { notRequeued } : {}),
         },
       };
     }
