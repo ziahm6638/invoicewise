@@ -30,8 +30,8 @@
         "build/**",
         "lib/**"
       ],
+      "env": ["INBOUND_EMAIL_LIVE"],
       "passThroughEnv": [
-        "INBOUND_EMAIL_LIVE",
         "BETTER_AUTH_SECRET",
         "BETTER_AUTH_URL",
         "BETTER_AUTH_COOKIE_DOMAIN",
