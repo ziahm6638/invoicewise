@@ -96,7 +96,11 @@ it also asks Salt Edge to refresh from the bank), and on a signed Salt Edge
 
 Transactions are stored once per account and Salt Edge id, so a repeated or
 overlapping page never duplicates one. Amounts are kept as the bank's signed
-decimals (money out is negative) in the account's currency.
+amounts (money out is negative) in integer minor units (pence), in the
+account's currency; a provider amount with more than two decimal places is
+rounded half away from zero on its decimal digits (`decimalOf` in
+`packages/jobs/src/salt-edge.ts`). Payment decisions and allocations store
+their amounts the same way; the API and dashboard show two-place decimals.
 
 | Transaction status | When |
 | --- | --- |
@@ -259,16 +263,23 @@ revokes their consent ([data lifecycle](data-lifecycle.md)).
   resuming from the cursor, removal at the provider, disconnect keeping only
   counted evidence, immutability, and no authorization-source decision
   touched.
-- Unit tests: `packages/jobs/src/payment-rules.test.ts` (rules),
-  `packages/jobs/src/salt-edge.test.ts` (client, availability, signing),
-  `apps/api/src/bank-payments/callback.test.ts` (callback signatures),
-  `apps/api/src/effect/invoice-read.test.ts` (`payments.read` summary), and
-  the role and workspace checks in
+- The e2e journey `e2e/journeys/bank-payments.journey.ts` (part of `bun run
+  gate`) drives the running app against a loopback Salt Edge
+  (`e2e/support/stubs.ts`, which serves the verifier's fake and a loopback
+  bank sign-in page): an owner turns bank payments on and connects with
+  consent in the browser, the sync pages through the account, the invoice
+  whose number the payment prints shows Paid with that transaction, another
+  workspace is refused sync, disconnect, unlink and reads, the bank's
+  reversal is recorded and the invoice is no longer paid, and disconnect
+  removes the connection at Salt Edge.
+- The role and workspace checks in
   `apps/api/src/trpc/routers/team.permissions.integration.test.ts` and
-  `apps/api/src/permissions.http.integration.test.ts`.
+  `apps/api/src/permissions.http.integration.test.ts`, and the `payments.read`
+  summary in `apps/api/src/effect/invoice-read.test.ts`.
 - **Sandbox walkthrough** against the real Salt Edge sandbox (Fake Bank
   Simple: any login starting `username`, password `secret`):
-  `bun run --cwd packages/jobs prove:bank-sandbox <step>` (`start`,
+  `bun run --cwd packages/jobs prove:bank-sandbox <step>`
+  (`packages/jobs/src/verify-bank-sandbox.ts`; `start`,
   `complete`, `match`, `reverse`, `revoke`, `reconnect`, `disconnect`,
   `status`) with a sandbox app's `SALT_EDGE_APP_ID`/`SECRET` and a disposable
   `*_test` `DATABASE_PRIMARY_URL`. A person (or a browser driver) completes

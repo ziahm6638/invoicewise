@@ -148,9 +148,20 @@ const journey: Journey = {
     });
     await page.getByText(PAYMENT).first().waitFor({ timeout: 30_000 });
     await page.waitForLoadState("networkidle");
+    await page
+      .getByRole("heading", { name: "Payment", exact: true })
+      .scrollIntoViewIfNeeded();
     await ctx.screenshot(page, "invoice-paid");
 
     ctx.step("another workspace can neither act on nor read the bank");
+    // With bank payments on in its own workspace, so every refusal below is
+    // about whose bank and invoice it is, not about the feature being off.
+    const otherOn = await ctx.trpcMutation(other, "bankPayments.setEnabled", {
+      enabled: true,
+    });
+    if (otherOn.status !== 200) {
+      throw new Error(`enable for the other workspace: ${otherOn.text}`);
+    }
     for (const [path, input] of [
       ["bankPayments.sync", { connectionId: connection.id }],
       ["bankPayments.disconnect", { connectionId: connection.id }],
@@ -206,18 +217,36 @@ const journey: Journey = {
       ctx,
       owner,
       uploaded.id,
-      (view) => view.paymentMatch?.action === "reversal",
-      "recording the reversal",
+      (view) =>
+        Boolean(view.paymentMatch) &&
+        view.paymentMatch.paymentStatus !== "paid",
+      "the reversal undoing the payment",
+      // A manual sync waits 30s for the bank to answer the refresh.
+      150_000,
     );
-    if (reversed.paymentMatch.paymentStatus === "paid") {
-      throw new Error("a reversed payment still counts as paid");
+    if (
+      reversed.paymentMatch.paymentStatus !== "unpaid" ||
+      reversed.paymentMatch.allocations?.length !== 0
+    ) {
+      throw new Error(
+        `after the reversal: ${JSON.stringify(reversed.paymentMatch).slice(0, 600)}`,
+      );
+    }
+    const pair = await ctx.query<{ status: string; amount_minor: string }>(
+      "select status, amount_minor::text from bank_feed_transactions where team_id = $1 and description like $2 order by made_on",
+      [owner.teamId, `%${SYNTHETIC_INVOICE.invoiceNumber}`],
+    );
+    if (pair.map((row) => row.status).join() !== "reversed,reversed") {
+      throw new Error(`the payment and its reversal: ${JSON.stringify(pair)}`);
     }
     await page.goto(`/invoices?inboxId=${uploaded.id}`);
-    await page
-      .getByText("Reversal at the bank recorded")
-      .first()
-      .waitFor({ timeout: 30_000 });
+    await page.getByText("Unpaid", { exact: true }).first().waitFor({
+      timeout: 30_000,
+    });
     await page.waitForLoadState("networkidle");
+    await page
+      .getByRole("heading", { name: "Payment", exact: true })
+      .scrollIntoViewIfNeeded();
     await ctx.screenshot(page, "invoice-reversed");
 
     ctx.step("disconnect");
@@ -243,7 +272,7 @@ const journey: Journey = {
       throw new Error("the connection was not removed at Salt Edge");
     }
 
-    return `consented and connected through the loopback Salt Edge; ${rows.length} transactions synced over paged cursors; ${SYNTHETIC_INVOICE.invoiceNumber} became Paid from the transaction printing its number; another workspace was refused sync, disconnect, unlink and reads; the bank's reversal made it ${reversed.paymentMatch.paymentStatus}; disconnect removed the connection at Salt Edge`;
+    return `consented and connected through the loopback Salt Edge; ${rows.length} transactions synced over paged cursors; ${SYNTHETIC_INVOICE.invoiceNumber} became Paid from the transaction printing its number; another workspace was refused sync, disconnect, unlink and reads; the bank's reversal marked both entries reversed and made it unpaid again; disconnect removed the connection at Salt Edge`;
   },
 };
 

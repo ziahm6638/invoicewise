@@ -75,8 +75,9 @@ against the running app); see [development](development.md#the-gate-e2e-journeys
 1. Calls to a provider live in its adapter only: TypeSafe in
    `packages/documents/src/typesafe/`, Xero and QuickBooks only through the
    self-hosted Nango proxy (`packages/jobs/src/nango.ts`,
-   `packages/jobs/src/accounting-providers.ts`) **(lint: a provider's API host
-   may appear only in its adapter)**. Nango integrations are created with
+   `packages/jobs/src/accounting-providers.ts`), Salt Edge (optional bank
+   payments) only in `packages/jobs/src/salt-edge.ts` **(lint: a provider's
+   API host may appear only in its adapter)**. Nango integrations are created with
    `bun run nango:configure-integration` in `packages/jobs`, never by hand
    ([accounting integrations](accounting-integrations.md)).
 2. A customer-supplied URL is only ever called through the egress guard

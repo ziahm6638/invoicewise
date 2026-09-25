@@ -176,6 +176,8 @@ export async function runE2E(options: RunnerOptions): Promise<number> {
     relative ? join(manifest.workspace, relative) : manifest.workspace;
 
   const storagePath = join(ARTIFACTS_ROOT, `e2e-storage-${runId}`);
+  // The loopback Salt Edge's synthetic app secret (e2e/support/stubs.ts).
+  const saltEdgeSecret = SALT_EDGE_APP.secret;
   const env = (overrides: Record<string, string | undefined> = {}) => {
     const built = syntheticEnv({
       BETTER_AUTH_URL: appOrigin,
@@ -193,7 +195,7 @@ export async function runE2E(options: RunnerOptions): Promise<number> {
       BANK_PAYMENTS_ENABLED: "true",
       SALT_EDGE_BASE_URL: stubs.saltEdgeUrl,
       SALT_EDGE_APP_ID: SALT_EDGE_APP.appId,
-      SALT_EDGE_SECRET: SALT_EDGE_APP.secret,
+      SALT_EDGE_SECRET: saltEdgeSecret,
       WORKFLOW_POLL_MS: "100",
       ...overrides,
     });
