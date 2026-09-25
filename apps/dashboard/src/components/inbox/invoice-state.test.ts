@@ -54,6 +54,23 @@ describe("invoice state", () => {
     expect(getInvoiceState({ ...judged, delivery: { state: "failed" } })).toBe(
       "delivery_failed",
     );
+    // The delivery rules held it, or a person dismissed it.
+    expect(getInvoiceState({ ...judged, delivery: { state: "held" } })).toBe(
+      "held",
+    );
+    expect(
+      getInvoiceState({ ...judged, delivery: { state: "dismissed" } }),
+    ).toBe("dismissed");
+    const [, , , heldStage] = describeInvoiceWorkflow(
+      {
+        ...judged,
+        validation: { status: "valid" },
+        delivery: { state: "held" },
+      },
+      { postToAccounting: false, resolveHeldDeliveries: false },
+    );
+    expect(heldStage).toMatchObject({ key: "delivery", status: "attention" });
+    expect(heldStage?.next).toContain("ask an owner or admin");
     // Every destination cancelled (disabled or disconnected): nothing was
     // delivered, so the invoice keeps its extraction state.
     expect(

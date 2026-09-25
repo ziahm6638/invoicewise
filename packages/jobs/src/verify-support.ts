@@ -3,6 +3,32 @@
  * like a correct model for the committed synthetic invoices.
  */
 
+import type { Database } from "@invoicewise/db/client";
+import { DEFAULT_DELIVERY_POLICY } from "@invoicewise/documents";
+import { saveDeliveryPolicy } from "./delivery-rules";
+
+/**
+ * For a verifier that proves a later guarantee (the accounting job's own
+ * claims, the processing handoff) with fixtures that reuse one date and
+ * total across invoice numbers: the delivery rules' possible-duplicate hold
+ * would stop them before they reach what is being proved. Every other rule
+ * keeps its default.
+ */
+export const deliverPossibleDuplicates = (db: Database, teamId: string) =>
+  saveDeliveryPolicy(db, {
+    teamId,
+    actorId: null,
+    teamRole: "owner",
+    expectedVersion: 0,
+    settings: {
+      ...DEFAULT_DELIVERY_POLICY,
+      rules: {
+        ...DEFAULT_DELIVERY_POLICY.rules,
+        possible_duplicate: "deliver",
+      },
+    },
+  });
+
 export const required = (name: string) => {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);

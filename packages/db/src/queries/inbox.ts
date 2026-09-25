@@ -42,6 +42,8 @@ const visibleIntakeState = () =>
 
 export type InvoiceDeliveryState =
   | "none"
+  | "held"
+  | "dismissed"
   | "pending"
   | "delivered"
   | "failed"
@@ -57,9 +59,26 @@ export type InvoiceDeliverySummary = {
 };
 
 /**
+ * The current revision's delivery decision held a destination and no one has
+ * released or dismissed it yet (docs/delivery.md#delivery-rules).
+ */
+const decisionIs = (resolution: "unresolved" | "dismissed") =>
+  sql`exists (
+    select 1 from delivery_decisions dd
+    where dd.invoice_id = ${inbox.id}
+      and dd.team_id = ${inbox.teamId}
+      and dd.revision = ${inbox.processingRevision}
+      and dd.outcome = 'hold'
+      and (dd.accounting = 'held' or dd.webhooks = 'held')
+      and ${resolution === "unresolved" ? sql`dd.resolution is null` : sql`dd.resolution = 'dismissed'`}
+  )`;
+
+/**
  * Outcome of the destinations the current processing revision was delivered
  * to: its webhook deliveries (not `delivery.failed` notifications) and the
- * invoice's accounting post. "delivered" means at least one destination was
+ * invoice's accounting post. "held" means the delivery rules withheld a
+ * destination and it awaits a person; "dismissed" that a person decided it
+ * is not delivered. "delivered" means at least one destination was
  * configured and every one that was not cancelled succeeded. Legacy
  * `inbox.status` values play no part.
  */
@@ -67,7 +86,9 @@ const invoiceDeliverySummary = () =>
   sql<InvoiceDeliverySummary>`(
     select json_build_object(
       'state', case
+        when ${decisionIs("unresolved")} then 'held'
         when count(*) filter (where d.status = 'failed') > 0 then 'failed'
+        when ${decisionIs("dismissed")} then 'dismissed'
         when count(*) filter (where d.status in ('queued', 'delivering')) > 0 then 'pending'
         when count(*) filter (where d.status = 'succeeded') > 0 then 'delivered'
         when count(*) > 0 then 'cancelled'
@@ -117,6 +138,33 @@ const invoiceDeliverySummary = () =>
   )`;
 
 /**
+ * The decision of the invoice's current revision as JSON, for list and
+ * detail reads: null for invoices processed before delivery rules existed.
+ */
+export const currentDeliveryDecisionSql = () =>
+  sql<Record<string, unknown> | null>`(
+    select json_build_object(
+      'id', d.id,
+      'revision', d.revision,
+      'policyVersion', d.policy_version,
+      'rulesVersion', d.rules_version,
+      'outcome', d.outcome,
+      'reasons', d.reasons,
+      'accounting', d.accounting,
+      'webhooks', d.webhooks,
+      'resolution', d.resolution,
+      'resolutionReason', d.resolution_reason,
+      'resolvedAt', d.resolved_at,
+      'resolvedBy', d.resolved_by,
+      'createdAt', d.created_at
+    )
+    from delivery_decisions d
+    where d.invoice_id = ${inbox.id}
+      and d.team_id = ${inbox.teamId}
+      and d.revision = ${inbox.processingRevision}
+  )`;
+
+/**
  * A document left `processing` although its processing job has failed and
  * none is pending: the worker died after its final attempt before recording
  * the failure. It is shown as failed and may be re-extracted; the delivery
@@ -148,6 +196,7 @@ export const INVOICE_STATE_FILTERS = [
   "failed",
   "invalid",
   "needs_review",
+  "held",
   "delivering",
   "delivery_failed",
   "delivered",
@@ -185,6 +234,8 @@ const stateCondition = (state: InvoiceStateFilter): SQL => {
       return validationIs("invalid");
     case "needs_review":
       return validationIs("needs_review");
+    case "held":
+      return deliveryStateIsShown("held");
     case "delivering":
       return deliveryStateIsShown("pending");
     case "delivery_failed":
@@ -194,11 +245,14 @@ const stateCondition = (state: InvoiceStateFilter): SQL => {
     case "corrected":
       return sql`${correctionCount()} > 0`;
     case "needs_attention":
-      return sql`(${extractionFailed()}
+      // An invoice an owner or admin dismissed has been dealt with.
+      return sql`((${extractionFailed()}
         or ${validationIs("invalid")}
         or ${validationIs("needs_review")}
         or ${deliveryStateIs("failed")}
-        or ${inbox.judgmentsRerunStatus} = 'failed')`;
+        or ${deliveryStateIs("held")}
+        or ${inbox.judgmentsRerunStatus} = 'failed')
+        and not ${decisionIs("dismissed")})`;
   }
 };
 
@@ -409,6 +463,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
+      deliveryDecision: currentDeliveryDecisionSql(),
       processingStalled: processingStalledSql(),
       judgmentsRerunStatus: inbox.judgmentsRerunStatus,
       judgmentsRerunError: inbox.judgmentsRerunError,
@@ -505,6 +560,7 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
+      deliveryDecision: currentDeliveryDecisionSql(),
       processingStalled: processingStalledSql(),
       judgmentsRerunStatus: inbox.judgmentsRerunStatus,
       judgmentsRerunError: inbox.judgmentsRerunError,
