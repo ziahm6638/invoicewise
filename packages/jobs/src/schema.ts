@@ -87,6 +87,11 @@ export const UpdateAccountingBillPayload = Schema.Struct({
 });
 export type UpdateAccountingBillPayload =
   typeof UpdateAccountingBillPayload.Type;
+export const RerunQuestionPayload = Schema.Struct({
+  runId: Schema.String,
+  teamId: Schema.String,
+});
+export type RerunQuestionPayload = typeof RerunQuestionPayload.Type;
 
 export const PurgeDeletedDataPayload = Schema.Struct({
   deletionId: Schema.String,
@@ -145,6 +150,10 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("update-accounting-bill"),
     payload: UpdateAccountingBillPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("rerun-question"),
+    payload: RerunQuestionPayload,
   }),
   Schema.Struct({
     name: Schema.Literal("purge-deleted-data"),

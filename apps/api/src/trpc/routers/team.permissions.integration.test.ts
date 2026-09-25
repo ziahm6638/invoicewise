@@ -305,6 +305,23 @@ suite("workspace permissions (integration)", () => {
           enabled: true,
         }),
       ).rejects.toThrow();
+      // Previews and reruns spend TypeSafe calls and change stored answers.
+      await expect(
+        member.questions.preview({
+          draft: {
+            question: "Was this approved?",
+            type: "boolean",
+            enabled: true,
+          },
+          invoiceIds: [crypto.randomUUID()],
+        }),
+      ).rejects.toThrow();
+      await expect(
+        member.questions.rerun({
+          questionKey: "likely_duplicate",
+          invoiceIds: [crypto.randomUUID()],
+        }),
+      ).rejects.toThrow();
       await expect(member.apiKeys.get()).rejects.toThrow();
       await expect(member.billing.orders({})).rejects.toThrow();
 

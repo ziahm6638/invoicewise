@@ -4,6 +4,7 @@ import { type Database, createDatabaseClient } from "@invoicewise/db/client";
 import {
   type WorkflowJob,
   enqueueWorkflowJob,
+  finishQuestionRun,
   getExistingInboxAttachments,
   getInboxAccountInfo,
   getTeamById,
@@ -76,6 +77,7 @@ import {
 } from "./intake";
 import { isTransientIntakeFailure } from "./intake-failure";
 import { processDocumentAttachment } from "./process-document";
+import { STALLED_QUESTION_RUN_ERROR, runQuestionRerun } from "./questions";
 import {
   RetentionSweepError,
   nextRetentionSlot,
@@ -97,6 +99,7 @@ import {
   type ProcessInboundEmailPayload,
   type PurgeDeletedDataPayload,
   type RerunJudgmentsPayload,
+  type RerunQuestionPayload,
   type SyncInboxAccountPayload,
   type UpdateAccountingBillPayload,
   WorkflowRequest,
@@ -1240,6 +1243,27 @@ export const WorkflowHandlerLive = Layer.effect(
           ),
         ),
       );
+    const rerunQuestionJob = (
+      job: WorkflowJob,
+      payload: RerunQuestionPayload,
+    ) =>
+      attempt(
+        () => runQuestionRerun(db, payload),
+        "Unable to rerun the question",
+      ).pipe(
+        Effect.tapError(() =>
+          job.attempts >= job.maxAttempts
+            ? Effect.promise(() =>
+                finishQuestionRun(db, {
+                  runId: payload.runId,
+                  teamId: payload.teamId,
+                  status: "failed",
+                  error: STALLED_QUESTION_RUN_ERROR,
+                }).catch(() => null),
+              )
+            : Effect.void,
+        ),
+      );
     const deliverWebhookJob = (
       job: WorkflowJob,
       payload: DeliverWebhookPayload,
@@ -1289,6 +1313,8 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* rerunJudgments(job, request.payload);
             case "update-accounting-bill":
               return yield* updateAccountingBillJob(job, request.payload);
+            case "rerun-question":
+              return yield* rerunQuestionJob(job, request.payload);
             case "purge-deleted-data":
               return yield* purgeDeletedData(job, request.payload);
             case "build-data-export":

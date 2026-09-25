@@ -137,7 +137,8 @@ envelope:
 `version` (also the `invoicewise-webhook-version` header) changes only for a
 breaking payload change. `invoiceId` and `revision` identify the exact invoice
 revision the event describes; a reprocessed invoice is a new revision with
-new event IDs. Payloads never contain a document link, because signed
+new event IDs. A [question rerun](#question-reruns) sends a further
+`invoice.judgments.attached` for the same revision, with its own event ID. Payloads never contain a document link, because signed
 document URLs expire after five minutes and a queued or redelivered event can
 arrive later than that. To read the document, call `GET /invoices/:invoiceId`
 with your API key when you handle the event: it returns the current record and
@@ -431,6 +432,34 @@ admin retry, a post that timed out after the provider created the bill
 retried to the same single bill, and a delivered invoice kept, then updated
 in place through a timed-out and retried update with the provider ID and
 bill count unchanged.
+
+## Question reruns
+
+When new result events are emitted, and when they are not:
+
+| Action | Events | Accounting |
+| --- | --- | --- |
+| Processing (or reprocessing) an invoice | `invoice.processed`, and `invoice.judgments.attached` when it has judgments, for the new revision | one post per invoice, as above |
+| Editing, disabling or deleting a question | none; stored answers are unchanged | none |
+| Previewing a question on invoices | none; nothing is stored | none |
+| Rerunning a question on selected invoices | one `invoice.judgments.attached` per invoice whose answer was recorded, per subscribed endpoint | none |
+
+A rerun ([questions](document-intake.md#preview-and-rerun)) changes only
+the invoice's judgments. It never increments `processing_revision`, so it
+cannot schedule an accounting post, re-send `invoice.processed` or repeat
+the processing run's own events. Its event carries the invoice's current
+`revision` and an ID derived from the invoice, that revision, the event type
+and the run (`question-run:<run id>`): a different ID from processing's
+`invoice.judgments.attached`, identical across worker retries and replays of
+the run, so each rerun answer is delivered at most once per endpoint (after
+deduplication on `invoicewise-event-id`). The event is written in the same
+transaction as the answer it announces. Its `data` holds the invoice `id`,
+the invoice's full `judgments` after the change, `answer` (the new answer),
+`previous` (the one it replaced, or null) and `questionRun` (`id`,
+`questionKey`, `questionVersionId`, `questionVersion`). An invoice skipped
+by the run, or whose evaluation failed, gets no event. These deliveries
+belong to the invoice's current revision, so they show in its **Delivery**
+panel and are re-driven by the same retry action.
 
 ## Local proof
 

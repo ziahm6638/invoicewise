@@ -60,6 +60,18 @@ import {
   type LineItemRow,
   lineItemRows,
 } from "./line-items";
+import {
+  type AnswerCertainty,
+  type NumberCandidate,
+  QUESTION_EVALUATOR_VERSION,
+  QUESTION_LIMITS,
+  type QuestionInputSummary,
+  type QuestionNumberFormat,
+  boundedDocumentText,
+  certaintyFor,
+  numberCandidates,
+  unitDescription,
+} from "./questions";
 
 export type { InvoiceLineItem } from "./line-items";
 
@@ -174,52 +186,80 @@ export type InvoiceExtraction = {
   };
 };
 
+type InvoiceJudgmentQuestionBase = {
+  /** The question's stable key: the same across all its revisions. */
+  id: string;
+  /** The stored revision (`user_questions.id`) being asked. */
+  versionId?: string;
+  /** That revision's number. */
+  version?: number;
+  label: string;
+  question: string;
+  context?: string | null;
+};
+
 export type InvoiceJudgmentQuestion =
-  | {
-      id: string;
-      versionId?: string;
-      label: string;
+  | (InvoiceJudgmentQuestionBase & {
       type: "boolean";
-      question: string;
-      context?: string | null;
       criteria?: { yes?: string; no?: string };
-    }
-  | {
-      id: string;
-      versionId?: string;
-      label: string;
+    })
+  | (InvoiceJudgmentQuestionBase & {
       type: "choice";
-      question: string;
-      context?: string | null;
       options: readonly string[];
-    }
-  | {
-      id: string;
-      versionId?: string;
-      label: string;
+    })
+  | (InvoiceJudgmentQuestionBase & {
       type: "score";
-      question: string;
-      context?: string | null;
       levels: readonly string[];
-    };
+    })
+  | (InvoiceJudgmentQuestionBase & {
+      type: "number";
+      format: QuestionNumberFormat;
+    });
 
 type InvoiceJudgmentDetails = {
   questionId: string;
   questionVersionId?: string;
+  /** The revision number of the question that was asked. */
+  questionVersion?: number;
   label: string;
   question: string;
   context?: string | null;
+  /** The choice options or score levels asked, as they were then. */
+  options?: readonly string[];
+  /** A number question's unit and range, as they were then. */
+  format?: QuestionNumberFormat;
   source: "default" | "custom";
   /** The earlier documents the question was given as `previousInvoices`. */
   historyIds?: string[];
+  /**
+   * What answered: the TypeSafe model version (null when no call was made)
+   * and how the question was put to it (`QUESTION_EVALUATOR_VERSION`).
+   */
+  evaluator?: { model: string | null; version: string };
+  /** What the question could read. */
+  input?: QuestionInputSummary;
+  /** Evidence that was cut or missing, in words; empty when none. */
+  limits?: string[];
+  /** When the answer was produced. */
+  answeredAt?: string;
+  /** The deliberate rerun that recorded it; absent for a processing run's answer. */
+  runId?: string;
 };
 
+/**
+ * One answer. `answered` carries a typed value and how far it can be relied
+ * on; `unknown` means the evaluator found no answer on the document (never
+ * recorded as No or zero); `not_applicable` means the question's premise
+ * does not hold; `failed` means evaluation itself did not complete.
+ */
 export type InvoiceJudgment =
   | (InvoiceJudgmentDetails & {
       status: "answered";
       type: "boolean";
       answer: boolean;
+      /** Probability the answer is yes, 0-1. */
       probability: number;
+      certainty?: AnswerCertainty;
     })
   | (InvoiceJudgmentDetails & {
       status: "answered";
@@ -227,14 +267,37 @@ export type InvoiceJudgment =
       answer: string;
       probabilities: Record<string, number>;
       confidence: number;
+      certainty?: AnswerCertainty;
     })
   | (InvoiceJudgmentDetails & {
       status: "answered";
       type: "score";
+      /** Position on the levels, from 0 to the number of levels minus 1. */
       answer: number;
+      /** The same position scaled to 0-1. */
+      position?: number;
       levels: Record<string, string>;
       probabilities: Record<string, number>;
       confidence: number;
+      certainty?: AnswerCertainty;
+    })
+  | (InvoiceJudgmentDetails & {
+      status: "answered";
+      type: "number";
+      /** The printed value; zero is an answer, not a missing one. */
+      answer: number;
+      /** The invoice's currency, for a currency question. */
+      currency?: string | null;
+      /** The printed row the value was copied from. */
+      evidence: { line: number; text: string; printed: string };
+      /** Probability of the chosen value against every other candidate. */
+      confidence: number;
+      certainty?: AnswerCertainty;
+    })
+  | (InvoiceJudgmentDetails & {
+      status: "unknown";
+      type: InvoiceJudgmentQuestion["type"];
+      reason: string;
     })
   | (InvoiceJudgmentDetails & {
       /** The check has nothing to evaluate yet, e.g. no earlier invoices to compare with. */
@@ -263,10 +326,29 @@ export type InvoiceStageTimings = {
   typesafeMs: number;
 };
 
+/**
+ * The document's laid-out text as it was read, kept with the invoice so a
+ * question can later be previewed or rerun against what the document says
+ * without reading the file again.
+ */
+export type RetainedSourceText = {
+  text: string;
+  /** Characters the document had before any cap. */
+  chars: number;
+  truncated: boolean;
+};
+
+export const retainedSourceText = (text: string): RetainedSourceText => ({
+  text: text.slice(0, QUESTION_LIMITS.maxRetainedTextChars),
+  chars: text.length,
+  truncated: text.length > QUESTION_LIMITS.maxRetainedTextChars,
+});
+
 export type ProcessedInvoice = {
   extraction: InvoiceExtraction;
   validation: InvoiceValidation;
   judgments: InvoiceJudgment[];
+  sourceText: RetainedSourceText;
   timings: InvoiceStageTimings;
 };
 
@@ -288,9 +370,6 @@ export const INVOICE_EXTRACTION_LIMITS = {
   /** Pages without a usable text layer that are OCR'd per document. */
   maxOcrPages: 10,
 } as const;
-
-/** Document text given to judgments alongside the complete extraction. */
-const MAX_JUDGMENT_TEXT_CHARS = 16_000;
 
 /** Bounds for the isolated PDF text extraction used by the invoice pipeline. */
 const PDF_TEXT_LIMITS = {
@@ -1258,8 +1337,17 @@ export const extractInvoiceText = (
 
 // --- Judgments -------------------------------------------------------------------
 
+/** Wire key of the no-match option added to choice and number questions. */
+const NO_MATCH = "none";
+
+const NO_MATCHING_OPTION =
+  "None of these options is supported by the invoice, or the invoice does not say.";
+const NO_MATCHING_NUMBER =
+  "The invoice does not state this value, or none of the listed values answers the question.";
+
 const toTypeSafeQuestion = (
   question: InvoiceJudgmentQuestion,
+  candidates: readonly NumberCandidate[] = [],
 ): TypeSafeQuestion => {
   const instructions = question.context
     ? { question: question.question, context: question.context }
@@ -1284,9 +1372,33 @@ const toTypeSafeQuestion = (
     return {
       type: "choice",
       instructions,
-      criteria: Object.fromEntries(
-        question.options.map((option, index) => [`option_${index}`, option]),
-      ),
+      criteria: {
+        ...Object.fromEntries(
+          question.options.map((option, index) => [`option_${index}`, option]),
+        ),
+        // An honest way out, so a question the invoice does not answer is
+        // recorded as unknown instead of forced onto an option.
+        [NO_MATCH]: NO_MATCHING_OPTION,
+      },
+    };
+  }
+  if (question.type === "number") {
+    return {
+      type: "choice",
+      instructions: {
+        question: question.question,
+        ...(question.context ? { context: question.context } : {}),
+        answer: `The answer is ${unitDescription(question.format)}. Choose the value printed on the invoice that answers the question.`,
+      },
+      criteria: {
+        ...Object.fromEntries(
+          candidates.map((candidate) => [
+            candidate.id,
+            { value: candidate.printed, printedIn: candidate.text },
+          ]),
+        ),
+        [NO_MATCH]: NO_MATCHING_NUMBER,
+      },
     };
   }
   return {
@@ -1302,16 +1414,34 @@ const judgmentDetails = (
 ): InvoiceJudgmentDetails => ({
   questionId: question.id,
   questionVersionId: question.versionId,
+  ...(question.version === undefined
+    ? {}
+    : { questionVersion: question.version }),
   label: question.label,
   question: question.question,
   context: question.context,
+  ...(question.type === "choice" ? { options: question.options } : {}),
+  ...(question.type === "score" ? { options: question.levels } : {}),
+  ...(question.type === "number" ? { format: question.format } : {}),
   source,
 });
+
+type AnswerContext = {
+  /** Whether everything the question could need was given to it. */
+  inputComplete: boolean;
+  candidates: readonly NumberCandidate[];
+  currency: string | null;
+};
 
 const toJudgment = (
   question: InvoiceJudgmentQuestion,
   answer: TypeSafeAnswer,
   source: "default" | "custom",
+  context: AnswerContext = {
+    inputComplete: true,
+    candidates: [],
+    currency: null,
+  },
 ): InvoiceJudgment | null => {
   if (question.type === "boolean" && answer.type === "noul") {
     return {
@@ -1320,11 +1450,26 @@ const toJudgment = (
       type: "boolean",
       answer: answer.noul >= 0.5,
       probability: answer.noul,
+      certainty: certaintyFor(
+        { probability: answer.noul },
+        context.inputComplete,
+      ),
     };
   }
   if (question.type === "choice" && answer.type === "choice") {
-    const optionIndex = Number.parseInt(answer.choice.replace("option_", ""));
-    const selected = question.options[optionIndex];
+    const optionName = (key: string) =>
+      key === NO_MATCH
+        ? "None of these"
+        : question.options[Number.parseInt(key.replace("option_", ""))];
+    if (answer.choice === NO_MATCH) {
+      return {
+        ...judgmentDetails(question, source),
+        status: "unknown",
+        type: "choice",
+        reason: NO_MATCHING_OPTION,
+      };
+    }
+    const selected = optionName(answer.choice);
     if (selected === undefined) return null;
     return {
       ...judgmentDetails(question, source),
@@ -1332,23 +1477,66 @@ const toJudgment = (
       type: "choice",
       answer: selected,
       probabilities: Object.fromEntries(
-        Object.entries(answer.probabilities).map(([key, probability]) => {
-          const index = Number.parseInt(key.replace("option_", ""));
-          return [question.options[index] ?? key, probability];
-        }),
+        Object.entries(answer.probabilities).map(([key, probability]) => [
+          optionName(key) ?? key,
+          probability,
+        ]),
       ),
       confidence: answer.confidence,
+      certainty: certaintyFor(
+        { confidence: answer.confidence },
+        context.inputComplete,
+      ),
+    };
+  }
+  if (question.type === "number" && answer.type === "choice") {
+    if (answer.choice === NO_MATCH) {
+      return {
+        ...judgmentDetails(question, source),
+        status: "unknown",
+        type: "number",
+        reason: "The invoice does not state this value.",
+      };
+    }
+    const candidate = context.candidates.find(({ id }) => id === answer.choice);
+    if (!candidate) return null;
+    return {
+      ...judgmentDetails(question, source),
+      status: "answered",
+      type: "number",
+      answer: candidate.value,
+      ...(question.format.unit === "currency"
+        ? { currency: context.currency }
+        : {}),
+      evidence: {
+        line: candidate.line,
+        text: candidate.text,
+        printed: candidate.printed,
+      },
+      confidence: answer.confidence,
+      certainty: certaintyFor(
+        { confidence: answer.confidence },
+        context.inputComplete,
+      ),
     };
   }
   if (question.type === "score" && answer.type === "score") {
+    const top = Math.max(question.levels.length - 1, 1);
+    // The position is bounded by the levels, whatever the wire says.
+    const position = Math.min(Math.max(answer.score, 0), top);
     return {
       ...judgmentDetails(question, source),
       status: "answered",
       type: "score",
-      answer: answer.score,
+      answer: position,
+      position: position / top,
       levels: answer.legend,
       probabilities: answer.probabilities,
       confidence: answer.confidence,
+      certainty: certaintyFor(
+        { confidence: answer.confidence },
+        context.inputComplete,
+      ),
     };
   }
   return null;
@@ -1363,6 +1551,8 @@ const failedJudgment = (
   status: "failed",
   type: question.type,
   error,
+  evaluator: { model: null, version: QUESTION_EVALUATOR_VERSION },
+  answeredAt: new Date().toISOString(),
 });
 
 const notApplicable = (
@@ -1455,7 +1645,22 @@ const inapplicableReason = (
   }
 };
 
-export const judgeInvoice = (
+/** What a judgment call returns besides the answers: the model that gave them. */
+export type JudgmentRun = {
+  judgments: InvoiceJudgment[];
+  /** The TypeSafe model version that answered; null when nothing was asked. */
+  model: string | null;
+  usage: { inputTokens: number; outputTokens: number };
+};
+
+/**
+ * Answers the questions about one invoice in a single TypeSafe call. The
+ * state is fixed in shape and built only from this invoice, its workspace
+ * supplier's history and its own document text; question and invoice text
+ * are data TypeSafe selects over, never instructions code follows, and every
+ * answer is limited to the question's own options, levels or range.
+ */
+export const runJudgments = (
   extraction: InvoiceExtraction,
   previousInvoices: readonly PreviousInvoice[],
   customQuestions: readonly InvoiceJudgmentQuestion[] = [],
@@ -1463,10 +1668,16 @@ export const judgeInvoice = (
   invoiceText?: string | null,
   validation?: InvoiceValidation | null,
   scope: JudgmentHistoryScope = { scoped: false },
-): Effect.Effect<InvoiceJudgment[], TypeSafeError, TypeSafe> =>
+): Effect.Effect<JudgmentRun, TypeSafeError, TypeSafe> =>
   Effect.gen(function* () {
     const typeSafe = yield* TypeSafe;
     const historyIds = previousInvoices.map((invoice) => invoice.id);
+    const text = boundedDocumentText(invoiceText);
+    const input: QuestionInputSummary = {
+      documentText: text.documentText,
+      documentTextChars: text.text?.length ?? 0,
+      historyCount: previousInvoices.length,
+    };
     const configured = [
       ...defaultQuestions.map((question) => ({
         question,
@@ -1478,22 +1689,53 @@ export const judgeInvoice = (
         source: "custom" as const,
         skip: null,
       })),
-    ];
+    ].map((entry) => {
+      // A number question chooses among the numbers printed on the document.
+      const numbers =
+        entry.question.type === "number"
+          ? numberCandidates(text.text ?? "", entry.question.format)
+          : { candidates: [], truncated: false };
+      const limits = [
+        ...(text.limit ? [text.limit] : []),
+        ...(numbers.truncated
+          ? [
+              `Only the first ${numbers.candidates.length} printed numbers in range were offered as answers.`,
+            ]
+          : []),
+      ];
+      const noNumbers =
+        entry.question.type === "number" && numbers.candidates.length === 0;
+      return {
+        ...entry,
+        numbers,
+        limits,
+        unknown: noNumbers
+          ? text.text === null
+            ? "The document's text was not available, so no printed value could be chosen."
+            : "No number within the question's range is printed on the invoice."
+          : null,
+      };
+    });
     const wireId = (index: number) => `judgment_${index}`;
     const asked = configured.flatMap((entry, index) =>
-      entry.skip ? [] : [[wireId(index), toTypeSafeQuestion(entry.question)]],
+      entry.skip || entry.unknown
+        ? []
+        : [
+            [
+              wireId(index),
+              toTypeSafeQuestion(entry.question, entry.numbers.candidates),
+            ],
+          ],
     );
-    const answers: Record<string, TypeSafeAnswer> =
+    const response =
       asked.length === 0
-        ? {}
-        : (yield* typeSafe.evaluate({
+        ? null
+        : yield* typeSafe.evaluate({
             state: {
               currentInvoice: extraction,
               // The document itself, so a question can be answered from what
               // the invoice says even where no field captured it.
-              invoiceText: invoiceText
-                ? invoiceText.slice(0, MAX_JUDGMENT_TEXT_CHARS)
-                : null,
+              invoiceText: text.text,
               // The deterministic checks, so a question can build on what
               // code already verified (totals, duplicates, missing fields).
               ...(validation
@@ -1513,11 +1755,33 @@ export const judgeInvoice = (
               })),
             },
             questions: Object.fromEntries(asked),
-          })).answers;
-    return configured.map(
-      ({ question, source, skip }, index): InvoiceJudgment => {
-        if (skip)
-          return { ...notApplicable(question, source, skip), historyIds };
+          });
+    const answers: Record<string, TypeSafeAnswer> = response?.answers ?? {};
+    const answeredAt = new Date().toISOString();
+    const judgments = configured.map(
+      ({ question, source, skip, unknown, numbers, limits }, index) => {
+        const shared = {
+          historyIds,
+          input,
+          limits,
+          answeredAt,
+          evaluator: {
+            model: skip || unknown ? null : (response?.model ?? null),
+            version: QUESTION_EVALUATOR_VERSION,
+          },
+        };
+        if (skip) {
+          return { ...notApplicable(question, source, skip), ...shared };
+        }
+        if (unknown) {
+          return {
+            ...judgmentDetails(question, source),
+            status: "unknown" as const,
+            type: question.type,
+            reason: unknown,
+            ...shared,
+          };
+        }
         const answer = answers[wireId(index)];
         if (!answer) {
           return {
@@ -1526,10 +1790,14 @@ export const judgeInvoice = (
               source,
               "TypeSafe omitted this invoice judgment answer",
             ),
-            historyIds,
+            ...shared,
           };
         }
-        const judgment = toJudgment(question, answer, source);
+        const judgment = toJudgment(question, answer, source, {
+          inputComplete: limits.length === 0,
+          candidates: numbers.candidates,
+          currency: extraction.currency,
+        });
         return {
           ...(judgment ??
             failedJudgment(
@@ -1537,11 +1805,21 @@ export const judgeInvoice = (
               source,
               "TypeSafe returned the wrong answer type for this question",
             )),
-          historyIds,
-        };
+          ...shared,
+        } as InvoiceJudgment;
       },
     );
+    return {
+      judgments,
+      model: response?.model ?? null,
+      usage: response?.usage ?? { inputTokens: 0, outputTokens: 0 },
+    };
   });
+
+export const judgeInvoice = (
+  ...args: Parameters<typeof runJudgments>
+): Effect.Effect<InvoiceJudgment[], TypeSafeError, TypeSafe> =>
+  runJudgments(...args).pipe(Effect.map((run) => run.judgments));
 
 export const processInvoice = (
   request: GetDocumentRequest,
@@ -1574,12 +1852,13 @@ export const processInvoice = (
       ...defaultQuestions,
       ...(request.judgmentQuestions ?? []),
     ];
+    const plainText = documentPlainText(document.lines);
     const judgments = yield* judgeInvoice(
       extraction,
       history.previousInvoices,
       request.judgmentQuestions ?? [],
       defaultQuestions,
-      documentPlainText(document.lines),
+      plainText,
       validation,
       history.scope,
     ).pipe(
@@ -1599,6 +1878,7 @@ export const processInvoice = (
       extraction,
       validation,
       judgments,
+      sourceText: retainedSourceText(plainText),
       timings: {
         readMs: Math.round(readAt - startedAt),
         typesafeMs: Math.round(performance.now() - readAt),

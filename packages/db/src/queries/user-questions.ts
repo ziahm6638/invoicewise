@@ -2,15 +2,64 @@ import type { Database, DatabaseWithPrimary } from "@invoicewise/db/client";
 import { userQuestions } from "@invoicewise/db/schema";
 import { and, asc, desc, eq } from "drizzle-orm";
 
-export type UserQuestionType = "boolean" | "choice" | "score";
+export type UserQuestionType = "boolean" | "choice" | "score" | "number";
+
+export type UserQuestionNumberFormat = NonNullable<
+  (typeof userQuestions.$inferSelect)["numberFormat"]
+>;
 
 export type UserQuestionInput = {
   question: string;
   type: UserQuestionType;
   options?: string[] | null;
+  numberFormat?: UserQuestionNumberFormat | null;
   context?: string | null;
   enabled: boolean;
 };
+
+/** Enabled custom questions a workspace may have; each adds to every call. */
+export const MAX_ENABLED_CUSTOM_QUESTIONS = 20;
+
+export class QuestionLimitError extends Error {
+  constructor() {
+    super(
+      `A workspace can have at most ${MAX_ENABLED_CUSTOM_QUESTIONS} enabled questions of its own. Disable or delete one first.`,
+    );
+  }
+}
+
+const sameConfiguration = (
+  a: {
+    question: string;
+    type: string;
+    options?: unknown;
+    numberFormat?: unknown;
+    context?: string | null;
+  },
+  b: typeof a,
+) =>
+  a.question === b.question &&
+  a.type === b.type &&
+  JSON.stringify(a.options ?? null) === JSON.stringify(b.options ?? null) &&
+  JSON.stringify(a.numberFormat ?? null) ===
+    JSON.stringify(b.numberFormat ?? null) &&
+  (a.context ?? null) === (b.context ?? null);
+
+async function assertCustomQuestionCapacity(
+  db: Database,
+  teamId: string,
+  exceptKey?: string,
+) {
+  const enabled = (await getUserQuestions(db, teamId)).filter(
+    (question) =>
+      !question.isDefault &&
+      question.enabled &&
+      question.questionKey !== exceptKey,
+  );
+  if (enabled.length >= MAX_ENABLED_CUSTOM_QUESTIONS) {
+    throw new QuestionLimitError();
+  }
+}
 
 const DEFAULT_QUESTIONS = [
   {
@@ -106,6 +155,29 @@ export async function getUserQuestionVersions(
     .orderBy(desc(userQuestions.version));
 }
 
+/**
+ * One revision of a workspace question, or the latest one when no version
+ * id is given. Never another workspace's.
+ */
+export async function getUserQuestionRevision(
+  db: Database,
+  params: { teamId: string; questionKey: string; versionId?: string },
+) {
+  if (!params.versionId) return getLatestUserQuestion(db, params);
+  const [question] = await db
+    .select()
+    .from(userQuestions)
+    .where(
+      and(
+        eq(userQuestions.teamId, params.teamId),
+        eq(userQuestions.questionKey, params.questionKey),
+        eq(userQuestions.id, params.versionId),
+      ),
+    )
+    .limit(1);
+  return question;
+}
+
 async function getLatestUserQuestion(
   db: Database,
   params: { teamId: string; questionKey: string },
@@ -128,6 +200,7 @@ export async function createUserQuestion(
   db: Database,
   params: UserQuestionInput & { teamId: string; userId: string },
 ) {
+  if (params.enabled) await assertCustomQuestionCapacity(db, params.teamId);
   const questionKey = crypto.randomUUID();
   const [question] = await db
     .insert(userQuestions)
@@ -137,6 +210,7 @@ export async function createUserQuestion(
       version: 1,
       label: params.question,
       options: params.options ?? null,
+      numberFormat: params.numberFormat ?? null,
       context: params.context ?? null,
       isDefault: false,
       createdBy: params.userId,
@@ -155,15 +229,11 @@ export async function updateUserQuestion(
 ) {
   const current = await getLatestUserQuestion(db, params);
   if (!current || current.deletedAt) return null;
-  if (
-    current.isDefault &&
-    (params.question !== current.question ||
-      params.type !== current.type ||
-      JSON.stringify(params.options ?? null) !==
-        JSON.stringify(current.options ?? null) ||
-      (params.context ?? null) !== current.context)
-  ) {
+  if (current.isDefault && !sameConfiguration(params, current)) {
     throw new Error("Default questions can only be enabled or disabled");
+  }
+  if (!current.isDefault && params.enabled && !current.enabled) {
+    await assertCustomQuestionCapacity(db, params.teamId, current.questionKey);
   }
 
   const [question] = await db
@@ -176,6 +246,7 @@ export async function updateUserQuestion(
       question: params.question,
       type: params.type,
       options: params.options ?? null,
+      numberFormat: params.numberFormat ?? null,
       context: params.context ?? null,
       enabled: params.enabled,
       isDefault: current.isDefault,
@@ -205,6 +276,7 @@ export async function deleteUserQuestion(
       question: current.question,
       type: current.type,
       options: current.options,
+      numberFormat: current.numberFormat,
       context: current.context,
       enabled: false,
       isDefault: false,

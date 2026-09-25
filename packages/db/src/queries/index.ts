@@ -43,6 +43,7 @@ export * from "./transaction-tags";
 export * from "./transactions";
 export * from "./user-invites";
 export * from "./users";
+export * from "./question-answers";
 export * from "./user-questions";
 export * from "./users-on-team";
 export * from "./workflows";

@@ -15,7 +15,8 @@ expected to reach the same decision for the same actor.
 | Invite, remove and re-role members | yes | yes, except owners | no |
 | List and revoke pending invitations | yes | yes | no |
 | Grant the `owner` role | yes | no | no |
-| Manage custom questions | yes | yes | no |
+| Manage custom questions; preview them on invoices and rerun them on a selection | yes | yes | no |
+| Read question rerun history and earlier answers | yes | yes | yes |
 | Correct supplier identity (reassign an invoice, merge suppliers, undo) | yes | yes | no |
 | Read authorization sources (jobs, purchase orders, contracts), their versions and documents | yes | yes | yes |
 | Manage authorization sources: create, import, amend, close, cancel, link a supplier, attach documents ([authorization sources](authorization-sources.md)) | yes | yes | no |

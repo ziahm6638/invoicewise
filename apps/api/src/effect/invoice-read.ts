@@ -410,7 +410,9 @@ export const invoicesToCsv = (rows: ExportRowsResult) => {
                 judgment.answer ??
                   (judgment.status === "not_applicable"
                     ? "not applicable"
-                    : judgment.error) ??
+                    : judgment.status === "unknown"
+                      ? "unknown"
+                      : judgment.error) ??
                   "",
               ] as const,
             ]

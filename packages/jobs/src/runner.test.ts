@@ -186,7 +186,11 @@ describe("Effect workflow runner", () => {
     await run(10);
     await run(3);
 
-    expect(claims).toEqual([[], ["process-attachment", "rerun-judgments"], []]);
+    expect(claims).toEqual([
+      [],
+      ["process-attachment", "rerun-judgments", "rerun-question"],
+      [],
+    ]);
   });
 
   test("claims into a free slot while a slow job still runs", async () => {

@@ -381,6 +381,10 @@ export async function runMigrationVerification(
       ["inbox", "extraction_original"],
       ["inbox", "judgments_rerun_status"],
       ["invoice_corrections", "update_status"],
+      ["user_questions", "number_format"],
+      ["document_texts", "text"],
+      ["question_runs", "invoice_ids"],
+      ["question_answers", "previous"],
     ];
     for (const [table, column] of expectedColumns) {
       if (!(await columnExists(FRESH_DATABASE, table, column))) {

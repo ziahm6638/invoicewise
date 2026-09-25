@@ -63,9 +63,8 @@ export class InvoiceProcessor {
   public async getInvoice(
     params: GetDocumentRequest,
   ): Promise<GetInvoiceResponse> {
-    const { extraction, validation, judgments, timings } = await run(
-      processInvoice(params),
-    );
+    const { extraction, validation, judgments, sourceText, timings } =
+      await run(processInvoice(params));
     const columns = invoiceColumnsFromExtraction(extraction);
 
     return {
@@ -82,6 +81,7 @@ export class InvoiceProcessor {
       extraction,
       validation,
       judgments,
+      sourceText,
       timings,
       metadata: {
         invoice_number: extraction.invoiceNumber,

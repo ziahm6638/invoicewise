@@ -26,6 +26,7 @@ import { reconcileDeliveries } from "./delivery";
 import { reconcileInvoiceOperations } from "./exceptions";
 import { reconcileInboundEmails } from "./inbound-email";
 import { observeNangoCalls } from "./nango";
+import { reconcileQuestionRuns } from "./questions";
 import { publishDeliveryFailureById } from "./webhooks";
 import {
   WorkflowDatabase,
@@ -244,9 +245,18 @@ export const DeliveryReconcilerLive = Layer.effect(
         const inbound = await reconcileInboundEmails(db);
         const exports = await failStalledDataExports(db);
         const operations = await reconcileInvoiceOperations(db);
+        const questionRuns = await reconcileQuestionRuns(db);
         return {
-          rescheduled: deliveries.rescheduled + operations.rescheduled,
-          failed: deliveries.failed + inbound.failed + operations.failed,
+          ...deliveries,
+          rescheduled:
+            deliveries.rescheduled +
+            operations.rescheduled +
+            questionRuns.rescheduled,
+          failed:
+            deliveries.failed +
+            inbound.failed +
+            operations.failed +
+            questionRuns.failed,
           exportsFailed: exports.length,
         };
       }, "Unable to reconcile deliveries"),
@@ -407,6 +417,7 @@ const runClaimedWorkflow = (job: WorkflowJob) =>
 export const PROVIDER_BUDGETED_WORKFLOWS = [
   "process-attachment",
   "rerun-judgments",
+  "rerun-question",
 ] as const;
 
 let providerBudgetExhausted = false;

@@ -872,6 +872,17 @@ async function workflowAndStorageVerifiers() {
     timeoutMs: 10 * 60 * 1000,
   });
 
+  await v.runStep("verify:jobs-questions", {
+    command: "bun",
+    args: ["--no-env-file", "run", "verify:questions"],
+    cwd: ws(JOBS_DIR),
+    env: env({
+      DATABASE_PRIMARY_URL: databaseUrl(JOBS_DATABASE),
+      LOCAL_STORAGE_PATH: join(v.tmpDir, "jobs-storage"),
+    }),
+    timeoutMs: 10 * 60 * 1000,
+  });
+
   await v.runStep("verify:storage-s3-minio", {
     command: "bun",
     args: ["--no-env-file", "test", "src/storage.s3.test.ts"],

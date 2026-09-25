@@ -96,8 +96,9 @@ builder:
   # Build on hp-slice itself (amd64) instead of emulating on an arm64 laptop.
   remote: ssh://root@100.90.24.83
 
-# Container logs rotate by size so they cannot grow without bound; time-based
-# 30-day expiry is not yet enforced (docs/data-lifecycle.md).
+# Container logs rotate by size here so they cannot grow without bound; the
+# daily host prune (ops/log-retention/) enforces the 30-day time-based expiry
+# that the log driver cannot (docs/data-lifecycle.md). Keep the two in step.
 logging:
   driver: json-file
   options:

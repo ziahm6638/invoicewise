@@ -25,6 +25,7 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { CorrectionForm } from "./correction-form";
 import { DeliveryResults } from "./delivery-results";
+import { EarlierAnswers } from "./earlier-answers";
 import { InboxStatus } from "./inbox-status";
 import { InvoiceHistory } from "./invoice-history";
 import { InvoiceWorkflow } from "./invoice-workflow";
@@ -461,6 +462,7 @@ export function InboxDetails() {
                 <section className="mt-7">
                   <h3 className="text-sm font-semibold">Checks</h3>
                   <JudgmentResults judgments={data.judgments} />
+                  <EarlierAnswers invoiceId={data.id} />
                 </section>
 
                 <DeliveryResults invoiceId={data.id} />

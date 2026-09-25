@@ -400,6 +400,8 @@ export function buildExportRecords(
     supplierEvents: data.supplierEvents,
     corrections: data.corrections,
     questions: data.questions,
+    questionRuns: data.questionRuns,
+    questionAnswers: data.questionAnswers,
     inboundEmails,
     audit,
   };
@@ -717,6 +719,16 @@ export async function buildDataExport(
         path: "questions.json",
         records: records.questions.length,
         content: json(records.questions),
+      },
+      {
+        path: "question-runs.json",
+        records: records.questionRuns.length,
+        content: json(records.questionRuns),
+      },
+      {
+        path: "question-answers.json",
+        records: records.questionAnswers.length,
+        content: json(records.questionAnswers),
       },
       {
         path: "inbound-emails.json",

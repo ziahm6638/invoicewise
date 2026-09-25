@@ -8,6 +8,8 @@ import {
   inboxAccounts,
   inboxRedeliveries,
   invoiceCorrections,
+  questionAnswers,
+  questionRuns,
   supplierEvents,
   suppliers,
   teams,
@@ -473,6 +475,8 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     jobs,
     exports,
     receivedEmails,
+    questionRunRows,
+    questionAnswerRows,
   ] = await Promise.all([
     db
       .select({
@@ -587,6 +591,7 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
         question: userQuestions.question,
         type: userQuestions.type,
         options: userQuestions.options,
+        numberFormat: userQuestions.numberFormat,
         context: userQuestions.context,
         enabled: userQuestions.enabled,
         isDefault: userQuestions.isDefault,
@@ -693,6 +698,43 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
       .from(inboundEmails)
       .where(eq(inboundEmails.teamId, teamId))
       .orderBy(asc(inboundEmails.createdAt), asc(inboundEmails.id)),
+    db
+      .select({
+        id: questionRuns.id,
+        questionKey: questionRuns.questionKey,
+        questionVersionId: questionRuns.questionVersionId,
+        questionVersion: questionRuns.questionVersion,
+        invoiceIds: questionRuns.invoiceIds,
+        status: questionRuns.status,
+        answered: questionRuns.answered,
+        unknown: questionRuns.unknown,
+        failed: questionRuns.failed,
+        skipped: questionRuns.skipped,
+        error: questionRuns.error,
+        requestedBy: questionRuns.requestedBy,
+        createdAt: questionRuns.createdAt,
+        completedAt: questionRuns.completedAt,
+      })
+      .from(questionRuns)
+      .where(eq(questionRuns.teamId, teamId))
+      .orderBy(asc(questionRuns.createdAt), asc(questionRuns.id)),
+    // Rerun answers on exported invoices, each with the answer it replaced.
+    db
+      .select({
+        id: questionAnswers.id,
+        runId: questionAnswers.runId,
+        invoiceId: questionAnswers.invoiceId,
+        questionKey: questionAnswers.questionKey,
+        questionVersionId: questionAnswers.questionVersionId,
+        invoiceRevision: questionAnswers.invoiceRevision,
+        judgment: questionAnswers.judgment,
+        previous: questionAnswers.previous,
+        createdAt: questionAnswers.createdAt,
+      })
+      .from(questionAnswers)
+      .innerJoin(inbox, eq(inbox.id, questionAnswers.invoiceId))
+      .where(and(eq(questionAnswers.teamId, teamId), exportedInvoice))
+      .orderBy(asc(questionAnswers.createdAt), asc(questionAnswers.id)),
   ]);
 
   return {
@@ -711,6 +753,8 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     jobs,
     exports,
     inboundEmails: receivedEmails,
+    questionRuns: questionRunRows,
+    questionAnswers: questionAnswerRows,
   };
 }
 

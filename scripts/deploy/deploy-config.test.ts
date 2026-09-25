@@ -364,3 +364,57 @@ describe("production preflight", () => {
     expect(preflight("worker", roleEnv("api")).exitCode).toBe(2);
   });
 });
+
+// The marketing site (Vercel, root apps/website) is built through Turbo, whose
+// strict env mode hands a task only the variables it declares. A build-time
+// setting missing from the declaration is silently dropped, as
+// INBOUND_EMAIL_LIVE was: the site kept saying the mailbox was "coming soon"
+// after the flag was set in Vercel (docs/inbound-email.md#going-live). The
+// flag must also be part of the task hash, or a remote-cached build made with
+// the old value is restored after the flag changes.
+describe("website build environment", () => {
+  const websiteBuild = (inboundEmailLive: string) => {
+    const result = Bun.spawnSync(
+      [
+        "bun",
+        "--no-env-file",
+        "x",
+        "turbo",
+        "run",
+        "build",
+        "--filter=@invoicewise/website",
+        "--dry=json",
+      ],
+      {
+        cwd: ROOT,
+        env: {
+          ...process.env,
+          TURBO_TELEMETRY_DISABLED: "1",
+          INBOUND_EMAIL_LIVE: inboundEmailLive,
+        },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const plan = JSON.parse(result.stdout.toString()) as {
+      tasks: {
+        taskId: string;
+        hash: string;
+        environmentVariables: { specified: { env: string[] } };
+      }[];
+    };
+    const build = plan.tasks.find(
+      ({ taskId }) => taskId === "@invoicewise/website#build",
+    );
+    expect(build).toBeDefined();
+    return build!;
+  };
+
+  test("Turbo passes INBOUND_EMAIL_LIVE to the build and hashes it", () => {
+    const live = websiteBuild("true");
+    const notLive = websiteBuild("false");
+    expect(live.environmentVariables.specified.env).toContain(
+      "INBOUND_EMAIL_LIVE",
+    );
+    expect(live.hash).not.toBe(notLive.hash);
+  });
+});
