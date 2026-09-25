@@ -1543,6 +1543,19 @@ export const workflowJobs = pgTable(
     ),
     index("workflow_jobs_due_idx").on(table.status, table.runAt),
     index("workflow_jobs_team_id_idx").on(table.teamId),
+    // The links an invoice's activity trace follows (invoiceJobsQuery).
+    index("workflow_jobs_team_inbox_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'inboxId')`)
+      .where(sql`(${table.payload} ->> 'inboxId') is not null`),
+    index("workflow_jobs_team_invoice_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'invoiceId')`)
+      .where(sql`(${table.payload} ->> 'invoiceId') is not null`),
+    index("workflow_jobs_team_delivery_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'deliveryId')`)
+      .where(sql`(${table.payload} ->> 'deliveryId') is not null`),
+    index("workflow_jobs_team_correction_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'correctionId')`)
+      .where(sql`(${table.payload} ->> 'correctionId') is not null`),
   ],
 );
 

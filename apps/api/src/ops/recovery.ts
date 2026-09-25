@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { presentAuditEvent, readInvoiceActivity } from "@api/services/activity";
 import type { Database } from "@invoicewise/db/client";
 import {
@@ -27,7 +28,9 @@ import { isOperatorAuthorized } from "./route";
  * Operator authority is separate from every customer role: these routes
  * accept only `Authorization: Bearer $OPS_TOKEN` (never a session, API key
  * or OAuth token) and do not exist when no token is configured. Each request
- * names its operator (`X-Operator`); an action or any access to a
+ * names its operator (`X-Operator`), a declared name the shared token does
+ * not authenticate, so each record also carries the token's fingerprint; an
+ * action or any access to a
  * workspace's records also states a purpose and a reason, and is written to
  * that workspace's audit trail, where its owners and admins see it.
  *
@@ -99,7 +102,11 @@ const jobTarget = (job: NonNullable<OperatorJob>) => {
 const log = (event: Record<string, unknown>) =>
   console.log(JSON.stringify({ event: "ops_action", ...event }));
 
-type Operator = { name: string };
+type Operator = { name: string; tokenFingerprint: string };
+
+/** A non-secret identifier of the operator token: 8 hex of its SHA-256. */
+export const operatorTokenFingerprint = (token: string) =>
+  createHash("sha256").update(token).digest("hex").slice(0, 8);
 
 export function registerOperatorRoutes(
   app: Hono<any>,
@@ -141,7 +148,12 @@ export function registerOperatorRoutes(
         ),
       };
     }
-    return { operator: { name } };
+    return {
+      operator: {
+        name,
+        tokenFingerprint: operatorTokenFingerprint(env.OPS_TOKEN),
+      },
+    };
   };
 
   const audit = (
@@ -150,6 +162,7 @@ export function registerOperatorRoutes(
   ) =>
     startAuditEvent(deps.db, {
       ...input,
+      detail: { ...input.detail, tokenFingerprint: operator.tokenFingerprint },
       actor: { type: "operator", ref: operator.name },
       surface: "ops",
       category: "operator",
@@ -246,6 +259,7 @@ export function registerOperatorRoutes(
         }).catch(() => undefined);
         log({
           operator: auth.operator.name,
+          tokenFingerprint: auth.operator.tokenFingerprint,
           action,
           jobId: job.id,
           result: "error",
@@ -276,6 +290,7 @@ export function registerOperatorRoutes(
       });
       log({
         operator: auth.operator.name,
+        tokenFingerprint: auth.operator.tokenFingerprint,
         action,
         jobId: job.id,
         workflow: job.name,
@@ -346,6 +361,7 @@ export function registerOperatorRoutes(
     });
     log({
       operator: auth.operator.name,
+      tokenFingerprint: auth.operator.tokenFingerprint,
       action: "invoice_activity_view",
       invoiceId: id.data,
       auditEventId: started.id,

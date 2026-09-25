@@ -105,8 +105,12 @@ database change. The routes sit beside `/ops/metrics`
   `Authorization: Bearer $OPS_TOKEN` is accepted (a session, API key or OAuth
   token gets `401`), and without a configured token the routes do not exist.
   Every request names its operator in `X-Operator` (`400` without it), which
-  the audit trail records; the token is the authority and the name the
-  attribution.
+  the audit trail records. The token is the authority; the name is declared,
+  not authenticated: anyone holding the shared token can send any name. Each
+  operator audit record and log line therefore also carries
+  `tokenFingerprint`, the first 8 hex characters of the token's SHA-256, so a
+  record can be tied to the credential that made it (and a rotated token
+  tells old records from new). Per-operator credentials are a follow-up.
 - **Purpose-bound.** An action (retry, cancel) or any read of a workspace's
   records states a `purpose` (`incident`, `support` or `security`) and a
   `reason` (5 to 200 characters), and is written to that workspace's

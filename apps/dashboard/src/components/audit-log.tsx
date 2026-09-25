@@ -145,7 +145,9 @@ export function AuditLog() {
           <p className="text-sm text-muted-foreground">
             Changes to invoices, questions, integrations, keys and members,
             delivery actions, and every InvoiceWise operator action or access to
-            this workspace. Kept for a year.
+            this workspace. Kept for a year. An operator&apos;s name is the one
+            they declared, not an authenticated identity; the token fingerprint
+            identifies the operator credential used.
           </p>
         </div>
         <Select value={category} onValueChange={setCategory}>

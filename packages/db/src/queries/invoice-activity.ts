@@ -18,6 +18,64 @@ import { listInvoiceAuditEvents } from "./audit-events";
 export const INVOICE_ACTIVITY_SOURCE_LIMIT = 100;
 
 /**
+ * The queue's jobs for one invoice, newest first. Jobs are linked through
+ * the identifiers in their payload (the retention job empties it 30 days
+ * after a job finished); each link is served by a workflow_jobs expression
+ * index on (team_id, payload ->> key), so the read never scans the
+ * workspace's whole job history.
+ */
+export const invoiceJobsQuery = (
+  db: Database,
+  params: {
+    teamId: string;
+    invoiceId: string;
+    deliveryIds: string[];
+    correctionIds: string[];
+  },
+) =>
+  db
+    .select({
+      id: workflowJobs.id,
+      name: workflowJobs.name,
+      status: workflowJobs.status,
+      attempts: workflowJobs.attempts,
+      maxAttempts: workflowJobs.maxAttempts,
+      runAt: workflowJobs.runAt,
+      leaseExpiresAt: workflowJobs.leaseExpiresAt,
+      finishedAt: workflowJobs.finishedAt,
+      lastError: workflowJobs.lastError,
+      createdAt: workflowJobs.createdAt,
+      updatedAt: workflowJobs.updatedAt,
+      deliveryId: sql<string | null>`${workflowJobs.payload} ->> 'deliveryId'`,
+      correctionId: sql<
+        string | null
+      >`${workflowJobs.payload} ->> 'correctionId'`,
+      revision: sql<
+        number | null
+      >`(${workflowJobs.payload} ->> 'revision')::int`,
+    })
+    .from(workflowJobs)
+    .where(
+      and(
+        eq(workflowJobs.teamId, params.teamId),
+        or(
+          sql`${workflowJobs.payload} ->> 'inboxId' = ${params.invoiceId}`,
+          sql`${workflowJobs.payload} ->> 'invoiceId' = ${params.invoiceId}`,
+          inArray(
+            sql`${workflowJobs.payload} ->> 'deliveryId'`,
+            params.deliveryIds,
+          ),
+          inArray(
+            sql`${workflowJobs.payload} ->> 'correctionId'`,
+            params.correctionIds,
+          ),
+        ),
+      ),
+    )
+    .orderBy(desc(workflowJobs.createdAt))
+    .limit(INVOICE_ACTIVITY_SOURCE_LIMIT);
+
+/**
  * Everything the invoice activity trace is built from, read for one invoice
  * of one workspace from the existing records: the intake row, the received
  * message, re-deliveries, the queue's jobs for the invoice, webhook
@@ -59,24 +117,28 @@ export async function getInvoiceActivitySources(
   if (!invoice) return null;
 
   const scope = { teamId: params.teamId, invoiceId: invoice.id };
-  const deliveryIds = db
-    .select({ id: sql<string>`${webhookDeliveries.id}::text` })
-    .from(webhookDeliveries)
-    .where(
-      and(
-        eq(webhookDeliveries.teamId, params.teamId),
-        eq(webhookDeliveries.invoiceId, invoice.id),
-      ),
-    );
-  const correctionIds = db
-    .select({ id: sql<string>`${invoiceCorrections.id}::text` })
-    .from(invoiceCorrections)
-    .where(
-      and(
-        eq(invoiceCorrections.teamId, params.teamId),
-        eq(invoiceCorrections.invoiceId, invoice.id),
-      ),
-    );
+  const [deliveryIds, correctionIds] = await Promise.all([
+    db
+      .select({ id: sql<string>`${webhookDeliveries.id}::text` })
+      .from(webhookDeliveries)
+      .where(
+        and(
+          eq(webhookDeliveries.teamId, params.teamId),
+          eq(webhookDeliveries.invoiceId, invoice.id),
+        ),
+      )
+      .then((rows) => rows.map((row) => row.id)),
+    db
+      .select({ id: sql<string>`${invoiceCorrections.id}::text` })
+      .from(invoiceCorrections)
+      .where(
+        and(
+          eq(invoiceCorrections.teamId, params.teamId),
+          eq(invoiceCorrections.invoiceId, invoice.id),
+        ),
+      )
+      .then((rows) => rows.map((row) => row.id)),
+  ]);
 
   const [
     email,
@@ -123,48 +185,12 @@ export async function getInvoiceActivitySources(
       )
       .orderBy(asc(inboxRedeliveries.receivedAt))
       .limit(INVOICE_ACTIVITY_SOURCE_LIMIT),
-    // Jobs are linked through the identifiers in their payload, which the
-    // retention job empties 30 days after a job finished.
-    db
-      .select({
-        id: workflowJobs.id,
-        name: workflowJobs.name,
-        status: workflowJobs.status,
-        attempts: workflowJobs.attempts,
-        maxAttempts: workflowJobs.maxAttempts,
-        runAt: workflowJobs.runAt,
-        leaseExpiresAt: workflowJobs.leaseExpiresAt,
-        finishedAt: workflowJobs.finishedAt,
-        lastError: workflowJobs.lastError,
-        createdAt: workflowJobs.createdAt,
-        updatedAt: workflowJobs.updatedAt,
-        deliveryId: sql<
-          string | null
-        >`${workflowJobs.payload} ->> 'deliveryId'`,
-        correctionId: sql<
-          string | null
-        >`${workflowJobs.payload} ->> 'correctionId'`,
-        revision: sql<
-          number | null
-        >`(${workflowJobs.payload} ->> 'revision')::int`,
-      })
-      .from(workflowJobs)
-      .where(
-        and(
-          eq(workflowJobs.teamId, params.teamId),
-          or(
-            sql`${workflowJobs.payload} ->> 'inboxId' = ${invoice.id}`,
-            sql`${workflowJobs.payload} ->> 'invoiceId' = ${invoice.id}`,
-            inArray(sql`${workflowJobs.payload} ->> 'deliveryId'`, deliveryIds),
-            inArray(
-              sql`${workflowJobs.payload} ->> 'correctionId'`,
-              correctionIds,
-            ),
-          ),
-        ),
-      )
-      .orderBy(desc(workflowJobs.createdAt))
-      .limit(INVOICE_ACTIVITY_SOURCE_LIMIT),
+    invoiceJobsQuery(db, {
+      teamId: params.teamId,
+      invoiceId: invoice.id,
+      deliveryIds,
+      correctionIds,
+    }),
     db
       .select({
         id: webhookDeliveries.id,

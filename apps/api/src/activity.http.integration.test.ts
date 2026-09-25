@@ -22,6 +22,7 @@
  *     bun test src/activity.http.integration.test.ts
  */
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,10 @@ const testDatabaseUrl = process.env.ACTIVITY_TEST_DATABASE_URL;
 const PORT = Number(process.env.ACTIVITY_TEST_PORT ?? 31791);
 const BASE = `http://localhost:${PORT}`;
 const OPS_TOKEN = `ops-${crypto.randomUUID()}`;
+const OPS_TOKEN_FINGERPRINT = createHash("sha256")
+  .update(OPS_TOKEN)
+  .digest("hex")
+  .slice(0, 8);
 const storageRoot = join(
   tmpdir(),
   `invoicewise-activity-test-${crypto.randomUUID()}`,
@@ -743,7 +748,11 @@ suite("invoice activity and operator recovery over real HTTP", () => {
       actor: { name: "on-call" },
       purpose: "incident",
       target: { type: "invoice", id: invoiceId },
-      detail: { workflow: "process-attachment", result: "requeued" },
+      detail: {
+        workflow: "process-attachment",
+        result: "requeued",
+        tokenFingerprint: OPS_TOKEN_FINGERPRINT,
+      },
     });
     expect(
       find("operator.invoice_activity_view", "succeeded", "operator"),
@@ -760,6 +769,11 @@ suite("invoice activity and operator recovery over real HTTP", () => {
       "operator.job_retry",
       "operator.job_retry",
     ]);
+    expect(
+      operatorEvents.every(
+        (event) => event.detail.tokenFingerprint === OPS_TOKEN_FINGERPRINT,
+      ),
+    ).toBe(true);
 
     // --- Redaction everywhere an operator or customer looks ----------------
     const surfaces = JSON.stringify([
@@ -778,6 +792,40 @@ suite("invoice activity and operator recovery over real HTTP", () => {
     expect(surfaces).not.toContain("receiver-secret");
     expect(surfaces).not.toContain(readKey);
   }, 120_000);
+
+  test("an invoice's job links are read through the workflow_jobs payload indexes", async () => {
+    const owner = await createUser("activity-explain");
+    const teamId = owner.teamId;
+    // A workspace with a long job history, most of it about other invoices.
+    await client.primaryDb.execute(orm.sql`
+      insert into workflow_jobs (name, team_id, payload, status, idempotency_key)
+      select 'process-attachment', ${teamId}::uuid,
+        jsonb_build_object('inboxId', gen_random_uuid()::text),
+        'succeeded', 'explain-' || ${teamId} || '-' || g
+      from generate_series(1, 20000) g`);
+    await client.primaryDb.execute(orm.sql`analyze workflow_jobs`);
+
+    const query = queries.invoiceJobsQuery(client.db, {
+      teamId,
+      invoiceId: crypto.randomUUID(),
+      deliveryIds: [crypto.randomUUID()],
+      correctionIds: [crypto.randomUUID()],
+    });
+    const explained = await client.primaryDb.execute<{
+      "QUERY PLAN": unknown;
+    }>(orm.sql`explain (format json) ${query}`);
+    const plan = JSON.stringify(explained.rows[0]!["QUERY PLAN"]);
+    for (const index of [
+      "workflow_jobs_team_inbox_id_idx",
+      "workflow_jobs_team_invoice_id_idx",
+      "workflow_jobs_team_delivery_id_idx",
+      "workflow_jobs_team_correction_id_idx",
+    ]) {
+      expect(plan).toContain(`"Index Name":"${index}"`);
+    }
+    expect(plan).not.toContain('"Node Type":"Seq Scan"');
+    expect(plan).not.toContain('"Index Name":"workflow_jobs_team_id_idx"');
+  }, 60_000);
 
   test("an operator cancels a queued job and the customer recovers it", async () => {
     const owner = await createUser("activity-cancel");

@@ -50,7 +50,9 @@ export const actorLabel = (actor: Entry["actor"]) => {
   if (!actor) return null;
   switch (actor.type) {
     case "operator":
-      return `InvoiceWise operator ${actor.name ?? ""}`.trim();
+      return actor.name
+        ? `InvoiceWise operator (declared as ${actor.name}, not authenticated)`
+        : "InvoiceWise operator";
     case "api_key":
       return actor.name ? `${actor.name} (API key)` : "An API key";
     case "oauth":
