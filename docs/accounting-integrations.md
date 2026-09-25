@@ -215,10 +215,12 @@ same create, and a credit note, which has no `Url`, gets it as a history
 note right after it is created. A retry long after an ambiguous timeout, or
 a repeated delivery of the same invoice, therefore finds the record instead
 of adding one, and a same-numbered record from that contact that InvoiceWise
-did not create is refused ("check whether it is this invoice"). The one gap
-is a credit note whose create answer was lost before its history note was
-written and whose retry comes after Xero's replay window: it is refused for
-a person to check rather than duplicated. The attachment upload first lists
+did not create is refused ("check whether it is this invoice"). A credit
+note whose create answer was lost, or whose history note failed, has no key
+yet: its retry adopts the one unmarked `DRAFT` credit note of that number
+from that contact whose currency and lines (account, tax type, amount) are
+exactly those InvoiceWise sends, writes the history note, and carries on;
+any other same-numbered credit note is refused as above. The attachment upload first lists
 the record's attachments and skips a file of the same name, so a retried
 upload (including one whose answer was lost) never adds a copy. Nango
 refreshes the token before proxied calls and retries nothing itself
@@ -463,16 +465,29 @@ bill whose create reaches Xero but whose answer is dropped, retries it and
 gets that bill, replays the raw create under the same `Idempotency-Key`,
 delivers the same invoice again (found by number, contact and key), uploads
 the PDF with its answer dropped and retries the upload twice on its own,
-posts and repeats a draft credit note, then counts what Xero holds per
-reference. For QuickBooks it
+posts and repeats a draft credit note, counts what Xero holds per
+reference, then disconnects (deletes the Nango connection, as Settings →
+Accounting does) and shows the connection gone and a post through it refused.
+An admin then reconnects Xero to the same Demo Company in Settings →
+Accounting, and
+
+```bash
+infisical run --env prod -- bun run prove:accounting-sandbox xero-reconnect <new connection id> <stamp>
+```
+
+(with the `stamp` the first run printed) shows the new connection reaching
+that organisation and a repeated delivery of the first run's bill and credit
+note returning the same records, each still with one attachment. For
+QuickBooks it
 chooses the first expense account (or `QUICKBOOKS_PROOF_ACCOUNT_ID`), posts a
 bill whose create reaches QuickBooks but whose answer is dropped, retries it
 and gets that bill, replays the raw create under the same `requestid`, uploads
 the PDF with its answer dropped and retries the upload twice on its own, posts
 and replays a vendor credit, then counts what QuickBooks holds per reference.
 It exits non-zero unless the token refreshed, each reference has exactly one
-record (Xero: in `DRAFT`) with one attachment, and every retry and repeated
-delivery returned the original. Its output is the evidence: the organisation,
+record (Xero: in `DRAFT`) with one attachment, every retry and repeated
+delivery returned the original, and (Xero) the disconnect left nothing to
+post through. Its output is the evidence: the organisation,
 record IDs and links, never a credential.
 
 ### Xero Demo Company connection
@@ -541,6 +556,10 @@ connect session sends the browser to Xero's authorize endpoint with
 `redirect_uri=https://nango.invoicewise.uk/oauth/callback`, which Xero
 currently refuses as `invalid_request: Invalid redirect_uri`: the Xero app
 must list that redirect URI (developer.xero.com → the app → Configuration).
-Waiting on the account owner for that and for a Xero sign-in to connect the
-Demo Company, after which the [Demo Company proof](#xero-demo-company-connection)
-runs. Everything else is proven against the fake (`verify-xero.ts`).
+
+There is no live Xero sandbox evidence yet. It is pending the account owner
+adding the Nango redirect URI to the Xero app and signing in to Xero to
+connect the Demo Company, tracked on issue #43; then the
+[sandbox proof](#sandbox-proof) records connect, post, attachment, retry after
+an ambiguous timeout, a repeated delivery, disconnect and reconnect. Until
+then everything is proven against the fake only (`verify-xero.ts`).

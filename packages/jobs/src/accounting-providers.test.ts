@@ -391,6 +391,72 @@ describe("Xero", () => {
     expect(bills()).toHaveLength(0);
   });
 
+  describe("a credit note left without its history note", () => {
+    const credit: DraftBill = {
+      ...bill,
+      idempotencyKey: "invoicewise:credit-2",
+      documentType: "credit_note",
+      invoiceNumber: "CN-8",
+    };
+    const notes = () => xero.records("tenant-1", "CreditNotes");
+
+    test("recovers on retry after its create answer was lost and Xero forgot the key", async () => {
+      xero.fail({
+        on: "CreditNotes",
+        method: "POST",
+        status: 504,
+        afterApply: true,
+      });
+      const lost = await post(credit, null).catch((error) => error);
+      expect(isRetryable(lost)).toBe(true);
+      xero.expireIdempotencyKeys();
+      const posted = await post(credit, null);
+      expect(notes()).toHaveLength(1);
+      expect(posted.providerId).toBe(String(notes()[0]!.CreditNoteID));
+      expect(xero.history("tenant-1", posted.providerId)).toEqual([
+        "InvoiceWise invoicewise:credit-2",
+      ]);
+      expect((await post(credit, null)).providerId).toBe(posted.providerId);
+      expect(xero.history("tenant-1", posted.providerId)).toHaveLength(1);
+    });
+
+    test("recovers on retry after its history note failed", async () => {
+      xero.fail({ on: "History", method: "PUT", status: 500 });
+      const failed = await post(credit, null).catch((error) => error);
+      expect(isRetryable(failed)).toBe(true);
+      const [created] = notes();
+      expect(xero.history("tenant-1", String(created!.CreditNoteID))).toEqual(
+        [],
+      );
+      xero.expireIdempotencyKeys();
+      const posted = await post(credit, null);
+      expect(notes()).toHaveLength(1);
+      expect(posted.providerId).toBe(String(created!.CreditNoteID));
+      expect(xero.history("tenant-1", posted.providerId)).toEqual([
+        "InvoiceWise invoicewise:credit-2",
+      ]);
+    });
+
+    test("still refuses a same-numbered credit note with other lines", async () => {
+      xero.fail({ on: "History", method: "PUT", status: 500 });
+      await post(credit, null).catch(() => undefined);
+      xero.expireIdempotencyKeys();
+      const refused = await post(
+        {
+          ...credit,
+          netAmount: 50,
+          vatAmount: 10,
+          grossAmount: 60,
+          lineItems: [],
+        },
+        null,
+      ).catch((error) => error);
+      expect(refused).toBeInstanceOf(BillRejectedError);
+      expect(refused.message).toContain("that InvoiceWise did not create");
+      expect(notes()).toHaveLength(1);
+    });
+  });
+
   test("prefers the chosen tax rate where several share one, and refuses an ambiguous or unmatched rate", async () => {
     const zeroRated: DraftBill = {
       ...bill,

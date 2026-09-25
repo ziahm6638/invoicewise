@@ -536,11 +536,43 @@ function xeroFailure(error: unknown, entity: ProviderEntity): unknown {
   );
 }
 
+/** Writes InvoiceWise's key on a credit note, which has no `Url`. */
+const markXeroCreditNote = (api: XeroApi, id: string, key: string) =>
+  api.call(
+    "PUT",
+    `/${XERO_ENTITY.vendor_credit.collection}/${encodeURIComponent(id)}/History`,
+    { json: { HistoryRecords: [{ Details: `InvoiceWise ${key}` }] } },
+  );
+
+/** Whether a Xero record has the currency and lines InvoiceWise sends. */
+const matchesXeroFields = (
+  row: Record<string, unknown>,
+  fields: Awaited<ReturnType<typeof xeroContext>>["fields"],
+) => {
+  const lines = Array.isArray(row.LineItems) ? row.LineItems.map(asRecord) : [];
+  return (
+    (fields.CurrencyCode === undefined ||
+      row.CurrencyCode === fields.CurrencyCode) &&
+    lines.length === fields.LineItems.length &&
+    fields.LineItems.every((line, index) => {
+      const sent = lines[index]!;
+      return (
+        sent.AccountCode === line.AccountCode &&
+        sent.TaxType === line.TaxType &&
+        round2(Number(sent.Quantity) * Number(sent.UnitAmount)) ===
+          round2(line.Quantity * line.UnitAmount)
+      );
+    })
+  );
+};
+
 /**
  * The record this post already created, found by number and contact with
- * InvoiceWise's key on it. A same-numbered record from the same contact that
- * InvoiceWise did not create is someone else's entry of this invoice:
- * refused rather than duplicated.
+ * InvoiceWise's key on it. A credit note gets its key only after the create,
+ * so an unmarked draft credit note carrying exactly this invoice's lines is
+ * the one a lost create answer or failed history note left behind: it is
+ * marked and adopted. Any other same-numbered record from the same contact
+ * is someone else's entry of this invoice: refused rather than duplicated.
  */
 async function findXeroRecord(
   context: Awaited<ReturnType<typeof xeroContext>>,
@@ -580,6 +612,18 @@ async function findXeroRecord(
               record.Details.includes(bill.idempotencyKey),
           );
     if (ours) return id;
+  }
+  const unmarked =
+    entity === "vendor_credit"
+      ? sameNumber.filter(
+          (row) =>
+            row.Status === "DRAFT" && matchesXeroFields(row, context.fields),
+        )
+      : [];
+  if (unmarked.length === 1) {
+    const id = String(unmarked[0]![idField]);
+    await markXeroCreditNote(context.api, id, bill.idempotencyKey);
+    return id;
   }
   if (sameNumber.length) {
     throw new BillRejectedError(
@@ -629,15 +673,7 @@ async function postXeroDocument(
     if (entity === "vendor_credit") {
       // A credit note has no Url, so its key goes in its history, where a
       // later lookup recognises it.
-      await context.api.call(
-        "PUT",
-        `/${collection}/${encodeURIComponent(providerId)}/History`,
-        {
-          json: {
-            HistoryRecords: [{ Details: `InvoiceWise ${bill.idempotencyKey}` }],
-          },
-        },
-      );
+      await markXeroCreditNote(context.api, providerId, bill.idempotencyKey);
     }
   }
   const id = providerId;
