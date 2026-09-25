@@ -44,9 +44,8 @@ current, observed repository map is:
 Retired or inherited and deliberately outside the product path: bank feeds
 (GoCardless/Plaid/Teller), bank-line transaction matching, time tracking,
 invoice creation, vault, desktop/mobile apps and the Trigger.dev task runner.
-The remaining retired bank-matching code lives in `packages/db/src/queries/inbox-matching.ts`,
-`packages/db/src/queries/transaction-matching.ts` and `packages/db/src/test/transaction-matching*.test.ts`;
-`bun run test:legacy` pins its three known failures as a recorded baseline (see `docs/development.md`).
+The remaining retired bank-matching code lives in `packages/db/src/queries/inbox-matching.ts`
+and `packages/db/src/queries/transaction-matching.ts`; its test suites were removed as out of scope.
 
 ## Stack
 

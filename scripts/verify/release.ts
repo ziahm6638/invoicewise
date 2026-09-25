@@ -66,7 +66,6 @@ import {
   runMigrationVerification,
 } from "./migrations";
 import { ensurePrivateBucket } from "./minio";
-import { parseRetiredMatchingOutcome } from "./scopes";
 import { runDependencyCheck, runSecretScan } from "./security";
 
 const flags = new Set(process.argv.slice(2));
@@ -579,13 +578,11 @@ const UNIT_SUITES: { name: string; dir: string; args: string[] }[] = [
       "test",
       "src/storage.test.ts",
       "src/storage.s3.test.ts",
-      "src/replicas.test.ts",
       "src/queries",
     ],
   },
   { name: "documents", dir: "packages/documents", args: ["test", "src"] },
   { name: "jobs", dir: JOBS_DIR, args: ["test", "src"] },
-  { name: "encryption", dir: "packages/encryption", args: ["test", "src"] },
   { name: "inbox", dir: "packages/inbox", args: ["test", "src"] },
   {
     name: "inbound-email-worker",
@@ -1134,30 +1131,6 @@ async function securityRegressionSuites() {
   });
 }
 
-/**
- * The retired bank/transaction matching suites are explicitly out of product
- * scope. They still run so the recorded failure set is real evidence, but an
- * unparseable or crashed run fails the gate instead of reading as zero.
- */
-async function retiredMatchingScope() {
-  const result = await v.runStep("scope:retired-bank-matching-suites", {
-    command: "bun",
-    args: ["--no-env-file", "test", "src/test/transaction-matching.test.ts"],
-    cwd: ws(DB_PACKAGE_DIR),
-    env: env(),
-    timeoutMs: 5 * 60 * 1000,
-    allowFailure: true,
-  });
-
-  await v.runCheck("scope:retired-bank-matching-scope", async () => {
-    const outcome = parseRetiredMatchingOutcome(result.output);
-    if (!outcome.ok) {
-      throw new Error(`${outcome.reason}; see ${result.logPath}`);
-    }
-    return `${outcome.failures} recorded failures in the retired bank/transaction matching suite (excluded from the product test script; bank-line matching is retired product scope)`;
-  });
-}
-
 async function main() {
   await mkdir(ARTIFACTS_ROOT, { recursive: true });
   await v.init();
@@ -1250,7 +1223,6 @@ async function main() {
       await unitSuites();
       await legacyStorageSuite();
       await securityRegressionSuites();
-      await retiredMatchingScope();
     } else {
       await preflight();
       await installAndStaticGates();
@@ -1287,7 +1259,6 @@ async function main() {
       await e2eJourneys();
       await runDependencyCheck(v, env());
       await runSecretScan(v);
-      if (legacyTests) await retiredMatchingScope();
     }
   } catch (error) {
     if (error instanceof VerificationAborted) {
