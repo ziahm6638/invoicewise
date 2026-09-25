@@ -356,7 +356,9 @@ suite("dedicated receiving address over real HTTP", () => {
       }),
     );
     server = Bun.serve({ port: PORT, fetch: app.fetch });
-  });
+    // Loading the API, router and workflow modules is most of this hook; under
+    // a full verification run it can pass the 5s default on its own.
+  }, 60_000);
 
   afterAll(async () => {
     server?.stop(true);
