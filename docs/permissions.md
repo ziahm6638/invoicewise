@@ -9,6 +9,7 @@ expected to reach the same decision for the same actor.
 | Capability | Owner | Admin | Member |
 | --- | --- | --- | --- |
 | Read workspace, invoices, inbox, judgments, CSV exports, MCP, retention schedule | yes | yes | yes |
+| Read an invoice's activity trace (receipt, runs, actions, destinations; `inbox.activity`, `GET /invoices/:id/activity`) | yes | yes | yes |
 | Upload, process, retry, annotate invoices (including re-driving failed webhook deliveries, re-extracting, rerunning questions and correcting extracted fields, keeping a posted bill as it is) | yes | yes | yes |
 | Re-post an invoice to the accounting provider (`POST /accounting/invoices/:id/retry`, and the accounting part of `inbox.retryDelivery` and `POST /invoices/:id/delivery/retry`, which report `admin_required` to a member), re-send it after a correction, or update a posted bill in place after a correction (`inbox.correct` with `update_bill`, refused to a member) | yes | yes | no |
 | Read the delivery rules and why an invoice was held ([delivery rules](delivery.md#delivery-rules)) | yes | yes | yes |
@@ -27,10 +28,16 @@ expected to reach the same decision for the same actor.
 | Read an invoice's payment status and amounts ([bank payments](bank-payments.md)) | yes | yes | yes |
 | Turn bank payments on or off, connect, reconnect, sync or disconnect a bank, read bank connections and transactions and an invoice's payment evidence, and confirm, record or unlink an invoice's payment | yes | yes | no |
 | Manage integrations: API keys, OAuth apps, accounting, mailboxes, webhooks (endpoints, secret rotation, test events, per-endpoint redelivery), replacing the workspace's receiving address | yes | yes | no |
+| Read the workspace audit log, including operator actions and access (**Settings → Audit log**, `audit.list`) | yes | yes | no |
 | Manage billing and subscription | yes | no | no |
 | Export all workspace data ([data lifecycle](data-lifecycle.md)) | yes | no | no |
 | Delete the workspace | yes | no | no |
 | Transfer ownership | yes | no | no |
+
+InvoiceWise operators are outside this matrix: they hold no workspace role
+and act only through the operator routes with the operator token, for a stated
+purpose, and every action or access is written to the workspace's audit log
+([operations](operations.md#recovery)).
 
 An owner cannot be removed or demoted by an admin. The last remaining owner
 cannot leave, be removed or be demoted by anyone, including themselves, until

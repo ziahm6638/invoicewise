@@ -85,7 +85,7 @@ function DeliveryDecision({
         settled(
           "Invoice released",
           result.accounting === "not_scheduled"
-            ? "No accounting connection is active, so no bill was queued."
+            ? "Accounting is not connected or its automatic posting is off, so no bill was queued."
             : undefined,
         ),
       onError: failed("The invoice was not released"),
@@ -129,7 +129,7 @@ function DeliveryDecision({
           {decision.accounting === "off"
             ? " Posting to accounting is switched off."
             : decision.accounting === "not_scheduled"
-              ? " This revision did not post to accounting."
+              ? " It was not posted to accounting automatically (automatic posting is off, or this revision did not re-post)."
               : ""}
         </p>
       )}
@@ -375,6 +375,13 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
   const providerName = accounting?.provider
     ? (PROVIDER_NAME[accounting.provider] ?? "Accounting connection")
     : "Accounting connection";
+  // Xero calls a supplier credit a credit note, QuickBooks a vendor credit.
+  const record =
+    accounting?.entity !== "vendor_credit"
+      ? "bill"
+      : accounting.provider === "xero"
+        ? "credit note"
+        : "vendor credit";
   const hasDestinations = data.webhooks.length > 0 || accounting !== null;
   const decision = data.decision;
   // A held post is sent by a release, never by a retry.
@@ -387,6 +394,7 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
       (delivery) =>
         delivery.status === "failed" || delivery.status === "cancelled",
     ) ||
+    accounting?.attachmentStatus === "failed" ||
     (!accountingHeld &&
       (accounting?.status === "failed" ||
         accounting?.status === "needs_review" ||
@@ -431,10 +439,18 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
           ))}
           {accounting && (
             <Outcome
-              label="Accounting draft bill"
+              label={
+                accounting.entity === "vendor_credit"
+                  ? accounting.provider === "xero"
+                    ? "Accounting draft credit note"
+                    : "Accounting vendor credit"
+                  : accounting.provider === "quickbooks"
+                    ? "Accounting bill (open, unpaid)"
+                    : "Accounting draft bill"
+              }
               detail={
                 accounting.providerId
-                  ? `${providerName} · bill ${accounting.providerId}`
+                  ? `${providerName} · ${record} ${accounting.providerId}`
                   : providerName
               }
               status={accounting.status ?? "queued"}
@@ -445,6 +461,19 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
                   ? { href: accounting.url, label: `Open in ${providerName}` }
                   : null
               }
+            />
+          )}
+          {accounting?.providerId && accounting.attachmentStatus && (
+            <Outcome
+              label="Source document attachment"
+              detail={`${providerName} · attached separately from the ${record}`}
+              status={
+                accounting.attachmentStatus === "attached"
+                  ? "succeeded"
+                  : accounting.attachmentStatus
+              }
+              error={accounting.attachmentError}
+              retryable={accounting.attachmentStatus === "failed" ? true : null}
             />
           )}
           {billUpdate?.status && (

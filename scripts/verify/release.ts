@@ -1,11 +1,17 @@
 /**
  * InvoiceWise authoritative release verification.
  *
- *   bun run verify                 # full local release gate
+ *   bun run verify                 # full local release verification
  *   bun run verify --migrations-only
  *   bun run verify --security-only
- *   bun run verify --e2e-only
+ *   bun run verify --e2e-only      # the e2e journeys (scripts/e2e.ts) only
  *   bun run verify --preflight-only
+ *   bun run test:legacy            # --legacy-tests-only: the retained legacy
+ *                                  # unit/integration suites, outside the gate
+ *
+ * The project's gate is `bun run gate` (typecheck, lint, build, e2e
+ * journeys). Legacy `*.test.*` suites listed in .test-policy-legacy.txt run
+ * only with --legacy-tests / --legacy-tests-only until they are retired.
  *
  * The command is reproducible and isolated: every product process runs inside a
  * symlink overlay of the repository that contains no `.env` file, every
@@ -25,12 +31,12 @@ import {
   resetDisposableDatabase,
 } from "./database";
 import { runDependencyRangeCheck } from "./dependency-ranges";
-import { E2E_DATABASE, runProductionE2E } from "./e2e";
 import {
   ARTIFACTS_ROOT,
   BLOCKED_PROVIDER_KEYS,
   type IsolatedWorkspace,
   LOCAL_MINIO_ENDPOINT,
+  LOCAL_POSTGRES_BASE,
   LOCAL_REDIS_URL,
   ManagedProcess,
   type ProviderTrap,
@@ -68,12 +74,15 @@ const migrationsOnly = flags.has("--migrations-only");
 const securityOnly = flags.has("--security-only");
 const e2eOnly = flags.has("--e2e-only");
 const preflightOnly = flags.has("--preflight-only");
+const legacyTestsOnly = flags.has("--legacy-tests-only");
+const legacyTests = legacyTestsOnly || flags.has("--legacy-tests");
 
 const SMOKE_DATABASE = "invoicewise_verify_smoke_test";
 const PERMISSIONS_DATABASE = "invoicewise_perms_test";
 const INTAKE_DATABASE = "invoicewise_intake_test";
 const IDENTITY_DATABASE = "invoicewise_identity_test";
 const JOBS_DATABASE = "invoicewise_jobs_verify_test";
+const ACTIVITY_DATABASE = "invoicewise_activity_test";
 
 /**
  * App-server ports. They are resolved once per run so the dashboard build, the
@@ -244,10 +253,10 @@ async function preflight() {
       INTAKE_DATABASE,
       IDENTITY_DATABASE,
       JOBS_DATABASE,
+      ACTIVITY_DATABASE,
       FRESH_DATABASE,
       UPGRADE_DATABASE,
       RECOVERY_DATABASE,
-      E2E_DATABASE,
     ]) {
       assertDisposableDatabaseName(name);
     }
@@ -514,6 +523,13 @@ async function installAndStaticGates() {
     command: "bun",
     args: ["--no-env-file", "x", "biome", "check", "scripts"],
     cwd: ws(),
+    env: env(),
+  });
+
+  await v.runStep("lint:gates", {
+    command: "bun",
+    args: ["run", "lint:gates"],
+    cwd: ROOT,
     env: env(),
   });
 
@@ -841,6 +857,28 @@ async function workflowAndStorageVerifiers() {
     timeoutMs: 10 * 60 * 1000,
   });
 
+  await v.runStep("verify:jobs-quickbooks", {
+    command: "bun",
+    args: ["--no-env-file", "run", "verify:quickbooks"],
+    cwd: ws(JOBS_DIR),
+    env: env({
+      DATABASE_PRIMARY_URL: databaseUrl(JOBS_DATABASE),
+      LOCAL_STORAGE_PATH: join(v.tmpDir, "jobs-storage"),
+    }),
+    timeoutMs: 10 * 60 * 1000,
+  });
+
+  await v.runStep("verify:jobs-xero", {
+    command: "bun",
+    args: ["--no-env-file", "run", "verify:xero"],
+    cwd: ws(JOBS_DIR),
+    env: env({
+      DATABASE_PRIMARY_URL: databaseUrl(JOBS_DATABASE),
+      LOCAL_STORAGE_PATH: join(v.tmpDir, "jobs-storage"),
+    }),
+    timeoutMs: 10 * 60 * 1000,
+  });
+
   await v.runStep("verify:jobs-handoff", {
     command: "bun",
     args: ["--no-env-file", "run", "verify:handoff"],
@@ -926,8 +964,11 @@ async function workflowAndStorageVerifiers() {
     }),
     timeoutMs: 10 * 60 * 1000,
   });
+}
 
-  await v.runStep("verify:storage-s3-minio", {
+/** Legacy: the S3/MinIO storage adapter suite (a `*.test.ts` file). */
+async function legacyStorageSuite() {
+  await v.runStep("legacy:storage-s3-minio", {
     command: "bun",
     args: ["--no-env-file", "test", "src/storage.s3.test.ts"],
     cwd: ws(DB_PACKAGE_DIR),
@@ -937,6 +978,31 @@ async function workflowAndStorageVerifiers() {
       STORAGE_SIGNING_SECRET: "invoicewise-verify-storage-signing-secret",
     }),
     timeoutMs: 5 * 60 * 1000,
+  });
+}
+
+/**
+ * The project's e2e journeys (scripts/e2e.ts) against this run's loopback
+ * services: a production build of the app, a per-run database, every
+ * provider stubbed. The runner writes its own evidence and report.
+ */
+async function e2eJourneys() {
+  await v.runStep("e2e:journeys", {
+    command: "bun",
+    args: ["--no-env-file", "scripts/e2e.ts"],
+    cwd: ROOT,
+    env: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      HOME: process.env.HOME ?? "/tmp",
+      TMPDIR: process.env.TMPDIR ?? "/tmp",
+      E2E_POSTGRES_BASE: LOCAL_POSTGRES_BASE,
+      E2E_REDIS_URL: LOCAL_REDIS_URL,
+      ...(process.env.E2E_EVIDENCE_ROOT
+        ? { E2E_EVIDENCE_ROOT: process.env.E2E_EVIDENCE_ROOT }
+        : {}),
+    },
+    outputIncludes: "E2E_REPORT=",
+    timeoutMs: 40 * 60 * 1000,
   });
 }
 
@@ -1038,6 +1104,19 @@ async function securityRegressionSuites() {
     timeoutMs: 20 * 60 * 1000,
   });
 
+  // Issue #51: a stuck synthetic invoice diagnosed and recovered only
+  // through the status and operator recovery surfaces, then audited.
+  await v.runStep("verify:activity-recovery-http", {
+    command: "bun",
+    args: ["--no-env-file", "test", "src/activity.http.integration.test.ts"],
+    cwd: ws(API_DIR),
+    env: env({
+      ACTIVITY_TEST_DATABASE_URL: databaseUrl(ACTIVITY_DATABASE),
+      ACTIVITY_TEST_PORT: String(await freePort()),
+    }),
+    timeoutMs: 20 * 60 * 1000,
+  });
+
   await v.runStep("verify:identity-http-regressions", {
     command: "bun",
     args: ["--no-env-file", "test", "src/identity.http.integration.test.ts"],
@@ -1102,7 +1181,11 @@ async function main() {
         ? "e2e-only"
         : preflightOnly
           ? "preflight-only"
-          : "full";
+          : legacyTestsOnly
+            ? "legacy-tests-only"
+            : legacyTests
+              ? "full+legacy-tests"
+              : "full";
 
   providerTrap = startProviderTrap();
   setProviderStubBaseUrl(providerTrap.origin);
@@ -1149,7 +1232,24 @@ async function main() {
         env: env(),
         timeoutMs: 10 * 60 * 1000,
       });
-      for (const database of [SMOKE_DATABASE]) {
+      await e2eJourneys();
+    } else if (preflightOnly) {
+      await preflight();
+    } else if (legacyTestsOnly) {
+      await preflight();
+      await v.runStep("install:frozen-lockfile", {
+        command: "bun",
+        args: ["install", "--frozen-lockfile"],
+        cwd: ROOT,
+        env: env(),
+        timeoutMs: 10 * 60 * 1000,
+      });
+      for (const database of [
+        PERMISSIONS_DATABASE,
+        INTAKE_DATABASE,
+        IDENTITY_DATABASE,
+        ACTIVITY_DATABASE,
+      ]) {
         v.onCleanup(`drop ${database}`, () => dropDisposableDatabase(database));
         await resetDisposableDatabase(database);
         await v.runStep(
@@ -1157,22 +1257,27 @@ async function main() {
           migrateSpec(database),
         );
       }
-      await buildWorkspace();
-      await runProductionE2E(v, { env, ws, apiPort, dashboardPort });
-    } else if (preflightOnly) {
-      await preflight();
+      await unitSuites();
+      await legacyStorageSuite();
+      await securityRegressionSuites();
+      await retiredMatchingScope();
     } else {
       await preflight();
       await installAndStaticGates();
-      await unitSuites();
+      if (legacyTests) await unitSuites();
       await runMigrationVerification(v, env(), ws());
 
       for (const database of [
         SMOKE_DATABASE,
-        PERMISSIONS_DATABASE,
-        INTAKE_DATABASE,
-        IDENTITY_DATABASE,
         JOBS_DATABASE,
+        ...(legacyTests
+          ? [
+              PERMISSIONS_DATABASE,
+              INTAKE_DATABASE,
+              IDENTITY_DATABASE,
+              ACTIVITY_DATABASE,
+            ]
+          : []),
       ]) {
         v.onCleanup(`drop ${database}`, () => dropDisposableDatabase(database));
         await resetDisposableDatabase(database);
@@ -1185,11 +1290,14 @@ async function main() {
       await buildWorkspace();
       await runtimeSmoke();
       await workflowAndStorageVerifiers();
-      await securityRegressionSuites();
-      await runProductionE2E(v, { env, ws, apiPort, dashboardPort });
+      if (legacyTests) {
+        await legacyStorageSuite();
+        await securityRegressionSuites();
+      }
+      await e2eJourneys();
       await runDependencyCheck(v, env());
       await runSecretScan(v);
-      await retiredMatchingScope();
+      if (legacyTests) await retiredMatchingScope();
     }
   } catch (error) {
     if (error instanceof VerificationAborted) {

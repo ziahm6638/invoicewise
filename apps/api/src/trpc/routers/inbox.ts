@@ -9,6 +9,7 @@ import {
   retryInboxSchema,
   updateInboxSchema,
 } from "@api/schemas/inbox";
+import { readInvoiceActivity } from "@api/services/activity";
 import { createTRPCRouter, workspaceProcedure } from "@api/trpc/init";
 import type { Database } from "@invoicewise/db/client";
 import {
@@ -25,7 +26,7 @@ import {
   updateInbox,
 } from "@invoicewise/db/queries";
 import { signedUrl } from "@invoicewise/db/storage";
-import { providerBillUrl } from "@invoicewise/jobs/accounting";
+import { accountingRecordUrl } from "@invoicewise/jobs/accounting";
 import {
   dismissHeldDelivery,
   releaseHeldDelivery,
@@ -302,14 +303,27 @@ export const inboxRouter = createTRPCRouter({
                 provider: accounting.provider,
                 providerId: accounting.providerId,
                 postedAt: accounting.postedAt,
-                url: providerBillUrl(
-                  accounting.provider,
-                  accounting.providerId,
-                ),
+                entity: accounting.entity,
+                url: await accountingRecordUrl(db, teamId!, accounting),
               }
             : null,
       };
     }),
+
+  /**
+   * The invoice's activity trace: receipt, each reading and question rerun,
+   * corrections and actions with who took them, and every destination with
+   * its outcome and correlation identifiers. Every member may read it.
+   */
+  activity: workspaceProcedure
+    .input(getInboxByIdSchema)
+    .query(async ({ ctx: { db, teamId }, input }) =>
+      readInvoiceActivity(db, {
+        teamId: teamId!,
+        invoiceId: input.id,
+        audience: "customer",
+      }),
+    ),
 
   /**
    * Per-destination delivery outcome of the invoice's current revision:
@@ -346,10 +360,7 @@ export const inboxRouter = createTRPCRouter({
         ),
         accounting: accounting && {
           ...accounting,
-          url:
-            accounting.provider && accounting.providerId
-              ? providerBillUrl(accounting.provider, accounting.providerId)
-              : null,
+          url: await accountingRecordUrl(db, teamId!, accounting),
         },
         billUpdate: billUpdate && {
           version: billUpdate.version,

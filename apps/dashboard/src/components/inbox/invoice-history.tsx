@@ -116,7 +116,12 @@ export function InvoiceHistory({ invoiceId }: { invoiceId: string }) {
       {data.bill && (
         <p className="mt-2 flex flex-wrap items-center gap-x-2 text-sm">
           <span>
-            Bill in {provider}{" "}
+            {data.bill.entity !== "vendor_credit"
+              ? "Bill"
+              : data.bill.provider === "xero"
+                ? "Credit note"
+                : "Vendor credit"}{" "}
+            in {provider}{" "}
             <span className="font-mono text-xs">{data.bill.providerId}</span>
             {data.bill.postedAt && (
               <span className="text-muted-foreground">
@@ -126,7 +131,7 @@ export function InvoiceHistory({ invoiceId }: { invoiceId: string }) {
             )}
           </span>
           <a
-            href={data.bill.url}
+            href={data.bill.url ?? undefined}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center text-xs underline underline-offset-2"

@@ -13,6 +13,7 @@ import { handleSaltEdgeCallbackRequest } from "./bank-payments/callback";
 import { invoiceHttp } from "./effect/invoice-http";
 import { publicApiHttp } from "./effect/public-api-http";
 import { handleInboundEmail } from "./inbound-email/http";
+import { registerOperatorRoutes } from "./ops/recovery";
 import { registerHealthRoutes } from "./ops/route";
 import { routers } from "./rest/routers";
 import type { Context } from "./rest/types";
@@ -67,6 +68,7 @@ app.use(
 );
 
 registerHealthRoutes(app, { db, checkDatabase: checkHealth });
+registerOperatorRoutes(app, { db });
 
 app.get("/storage/*", (c) => storageCapabilityResponse(c.req.raw));
 app.get("/exports/:id/download", (c) => exportDownloadResponse(c.req.raw));

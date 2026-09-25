@@ -216,8 +216,8 @@ if (validation.valid && accuracy >= 0.85 && avgConfidenceGap <= 0.05) {
 }
 
 console.log("\n🎯 Next steps:");
-console.log("   1. Run tests: bun run test:all-matching");
-console.log("   2. Monitor performance: bun run test:performance");
+console.log("   1. Run tests: bun run test:legacy:retired-bank-matching");
+console.log("   2. Monitor performance: bun test src/test/transaction-matching.performance.test.ts");
 console.log("   3. Update golden dataset as you get more real user feedback");
 console.log("   4. Re-run validation after algorithm changes");
 

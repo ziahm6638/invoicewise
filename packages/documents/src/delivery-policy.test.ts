@@ -65,7 +65,6 @@ describe("evaluateDeliveryPolicy", () => {
     expect(evaluate()).toEqual({
       outcome: "deliver",
       reasons: [],
-      accountingApplicable: true,
     });
   });
 
@@ -333,12 +332,11 @@ describe("evaluateDeliveryPolicy", () => {
     expect(euro.reasons[0]?.message).toContain("not converted");
   });
 
-  test("a credit note is delivered but not applicable to accounting", () => {
+  test("a credit note is delivered like an invoice", () => {
     const result = evaluate({
       validation: { ...validValidation, documentType: "credit_note" },
     });
     expect(result.outcome).toBe("deliver");
-    expect(result.accountingApplicable).toBe(false);
   });
 });
 

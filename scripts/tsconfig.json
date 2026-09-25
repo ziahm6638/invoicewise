@@ -12,8 +12,19 @@
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
     "types": ["bun-types"],
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@db/*": ["../packages/db/src/*"],
+      "@jobs/*": ["../packages/jobs/src/*"]
+    }
   },
-  "include": ["verify/**/*.ts", "deploy/**/*.ts", "ops/**/*.ts"],
+  "include": [
+    "*.ts",
+    "verify/**/*.ts",
+    "deploy/**/*.ts",
+    "ops/**/*.ts",
+    "../e2e/**/*.ts",
+    "../types"
+  ],
   "exclude": ["node_modules"]
 }

@@ -33,6 +33,7 @@ export function useTeamPermissions() {
       manageAuthorizationSources: false,
       manageDeliveryRules: false,
       resolveHeldDeliveries: false,
+      readAuditLog: false,
     }
   );
 }

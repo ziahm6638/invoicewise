@@ -8,8 +8,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
-    "test:watch": "bun test --watch",
+    "test:legacy": "bun test",
     "contract:v1": "bun run src/scripts/write-openapi-v1.ts",
     "smoke:public-api": "bun run src/public-api-smoke.ts",
     "verify:public-api": "bun run src/verify-public-api.ts"

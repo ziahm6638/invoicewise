@@ -3,15 +3,22 @@ import {
   accountingConnectSessionSchema,
   accountingConnectionSchema,
   accountingInvoiceParamSchema,
+  accountingOrganisationSchema,
   accountingProviderParamSchema,
+  accountingSettingsSchema,
 } from "@api/schemas/accounting";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { getAccountingConnections } from "@invoicewise/db/queries";
 import {
+  AccountingSettingsError,
+  checkAccountingConnection,
   completeAccountingConnection,
   createAccountingConnectSession,
   disconnectAccountingConnection,
+  getAccountingSetup,
   retryAccountingPost,
+  selectAccountingOrganisation,
+  updateAccountingSettings,
 } from "@invoicewise/jobs/accounting";
 import { withRequiredScope, withRequiredTeamRole } from "../middleware";
 
@@ -113,6 +120,128 @@ app.delete(
     } catch (error) {
       return c.json({ error: message(error) }, 502);
     }
+  },
+);
+
+// Posting setup for the active connection: the live company's expense
+// accounts and purchase tax codes (and for Xero the organisations the
+// authorisation reaches) with the current choices.
+app.get(
+  "/connections/:provider/setup",
+  withRequiredScope("inbox.read"),
+  withRequiredTeamRole("admin"),
+  async (c) => {
+    const parsed = accountingProviderParamSchema.safeParse(c.req.param());
+    if (!parsed.success) {
+      return c.json({ error: "Invalid accounting provider" }, 400);
+    }
+    try {
+      const setup = await getAccountingSetup(c.get("db"), {
+        teamId: c.get("teamId"),
+      });
+      return setup?.provider === parsed.data.provider
+        ? c.json(setup)
+        : c.json({ error: "Accounting connection not found" }, 404);
+    } catch (error) {
+      return c.json({ error: message(error) }, 502);
+    }
+  },
+);
+
+app.put(
+  "/connections/:provider/settings",
+  withRequiredScope("inbox.write"),
+  withRequiredTeamRole("admin"),
+  async (c) => {
+    const parsed = accountingSettingsSchema.safeParse({
+      ...((await c.req.json().catch(() => ({}))) as object),
+      provider: c.req.param("provider"),
+    });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid accounting settings", issues: parsed.error.issues },
+        400,
+      );
+    }
+    try {
+      const connection = await updateAccountingSettings(c.get("db"), {
+        ...parsed.data,
+        teamId: c.get("teamId"),
+        userId: c.get("session")?.user?.id ?? null,
+      });
+      return c.json({
+        id: connection?.id ?? null,
+        settings: connection?.settings ?? null,
+        autoPostEnabledAt: connection?.autoPostEnabledAt ?? null,
+      });
+    } catch (error) {
+      return c.json(
+        { error: message(error) },
+        error instanceof AccountingSettingsError ? 400 : 502,
+      );
+    }
+  },
+);
+
+// Chooses which organisation a Xero connection posts to; another
+// organisation starts its setup and automatic-posting opt-in over.
+app.put(
+  "/connections/:provider/organisation",
+  withRequiredScope("inbox.write"),
+  withRequiredTeamRole("admin"),
+  async (c) => {
+    const parsed = accountingOrganisationSchema.safeParse({
+      ...((await c.req.json().catch(() => ({}))) as object),
+      provider: c.req.param("provider"),
+    });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid organisation", issues: parsed.error.issues },
+        400,
+      );
+    }
+    try {
+      const connection = await selectAccountingOrganisation(c.get("db"), {
+        ...parsed.data,
+        teamId: c.get("teamId"),
+      });
+      return c.json({
+        id: connection?.id ?? null,
+        organisationId: connection?.organisationId ?? null,
+        organisationName: connection?.organisationName ?? null,
+        autoPostEnabledAt: connection?.autoPostEnabledAt ?? null,
+      });
+    } catch (error) {
+      return c.json(
+        { error: message(error) },
+        error instanceof AccountingSettingsError ? 400 : 502,
+      );
+    }
+  },
+);
+
+// A live check of the active connection through Nango; the result is stored.
+app.post(
+  "/connections/:provider/health-check",
+  withRequiredScope("inbox.write"),
+  withRequiredTeamRole("admin"),
+  async (c) => {
+    const parsed = accountingProviderParamSchema.safeParse(c.req.param());
+    if (!parsed.success) {
+      return c.json({ error: "Invalid accounting provider" }, 400);
+    }
+    const connection = await checkAccountingConnection(c.get("db"), {
+      teamId: c.get("teamId"),
+    });
+    return connection?.provider === parsed.data.provider
+      ? c.json({
+          status: connection.healthStatus,
+          error: connection.healthError,
+          checkedAt: connection.healthCheckedAt,
+          organisationId: connection.organisationId,
+          organisationName: connection.organisationName,
+        })
+      : c.json({ error: "Accounting connection not found" }, 404);
   },
 );
 
