@@ -149,6 +149,8 @@ export function InboxEmailSettings() {
   const { data } = useSuspenseQuery(trpc.inboundEmail.get.queryOptions());
   const { manageIntegrations } = useTeamPermissions();
 
+  if (!data.address) return null;
+
   return (
     <Card>
       <CardHeader>

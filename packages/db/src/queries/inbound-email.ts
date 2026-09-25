@@ -5,8 +5,9 @@ import {
   inboundEmailAddresses,
   inboundEmails,
   teams,
+  workflowJobs,
 } from "@db/schema";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 
 type Executor = Database | PrimaryDatabase;
 
@@ -268,6 +269,36 @@ export async function settleInboundEmail(
         eq(inboundEmails.status, "received"),
       ),
     );
+}
+
+/**
+ * Messages still "received" whose processing job has already given up, for
+ * example a lease that expired after the final attempt or a failure the
+ * handler could not record.
+ */
+export async function listStalledInboundEmails(
+  db: Pick<Database, "select">,
+  params: { limit: number },
+) {
+  return db
+    .select({ id: inboundEmails.id, teamId: inboundEmails.teamId })
+    .from(inboundEmails)
+    .innerJoin(
+      workflowJobs,
+      and(
+        eq(workflowJobs.name, "process-inbound-email"),
+        eq(workflowJobs.teamId, inboundEmails.teamId),
+        eq(workflowJobs.idempotencyKey, sql`${inboundEmails.id}::text`),
+      ),
+    )
+    .where(
+      and(
+        eq(inboundEmails.status, "received"),
+        eq(workflowJobs.status, "failed"),
+      ),
+    )
+    .orderBy(asc(inboundEmails.createdAt))
+    .limit(params.limit);
 }
 
 /** Recent messages for the workspace settings page; never the MIME source. */

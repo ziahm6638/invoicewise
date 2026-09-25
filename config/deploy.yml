@@ -70,6 +70,9 @@ servers:
         # Shared with the Email Worker (wrangler secret); authenticates every
         # POST /inbound/email.
         - INBOUND_EMAIL_SECRET
+        # "true" once the receiving address passed its live proof; until then
+        # no workspace is shown an address (docs/inbound-email.md#going-live).
+        - INBOUND_EMAIL_LIVE
     proxy:
       host: api.invoicewise.uk
       app_port: 3003

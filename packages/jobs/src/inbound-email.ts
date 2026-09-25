@@ -6,6 +6,7 @@ import {
   getInboundEmailForProcessing,
   insertInboundEmail,
   isInboundLocalPart,
+  listStalledInboundEmails,
   recordInboundEmailRedelivery,
   resolveInboundEmailRecipient,
   settleInboundEmail,
@@ -44,6 +45,14 @@ export const inboundEmailDomain = (env: NodeJS.ProcessEnv = process.env) =>
   env.INBOUND_EMAIL_DOMAIN?.trim().toLowerCase() ||
   DEFAULT_INBOUND_EMAIL_DOMAIN;
 
+/**
+ * Whether workspaces are shown their address. Off until the Cloudflare
+ * receiving setup and its live proof pass; the endpoint accepts mail either
+ * way (docs/inbound-email.md#going-live).
+ */
+export const inboundEmailLive = (env: NodeJS.ProcessEnv = process.env) =>
+  env.INBOUND_EMAIL_LIVE?.trim().toLowerCase() === "true";
+
 /** Stored header values are display and audit metadata, never identity. */
 const clip = (value: string | null | undefined, max = 998) => {
   const trimmed = value?.trim();
@@ -52,7 +61,8 @@ const clip = (value: string | null | undefined, max = 998) => {
 
 /**
  * The workspace local part of an envelope recipient on the receiving domain,
- * or null. A `+tag` subaddress routes to the same workspace.
+ * or null. Only the exact issued local part routes; a `+tag` subaddress is
+ * an unknown recipient.
  */
 export function inboundLocalPart(recipient: string, domain: string) {
   const address = recipient.trim().toLowerCase();
@@ -60,7 +70,7 @@ export function inboundLocalPart(recipient: string, domain: string) {
   if (at <= 0 || address.slice(at + 1) !== domain.trim().toLowerCase()) {
     return null;
   }
-  const localPart = address.slice(0, at).split("+")[0] ?? "";
+  const localPart = address.slice(0, at);
   return isInboundLocalPart(localPart) ? localPart : null;
 }
 
@@ -245,9 +255,27 @@ export async function acceptInboundEmail(
 /**
  * Gmail asks the new forwarding address to confirm before it forwards
  * anything. Its message carries the confirmation link and code, which the
- * workspace needs to see; it is never an invoice.
+ * workspace needs to see; it is never an invoice. The From header is only
+ * believed when the topmost Authentication-Results, the one Cloudflare adds
+ * on receipt, shows a DKIM pass for google.com; otherwise the message is
+ * ordinary mail.
  */
 const GMAIL_FORWARDING_SENDER = "forwarding-noreply@google.com";
+const RECEIVING_AUTHSERV_ID = "mx.cloudflare.net";
+
+export function isGoogleSigned(authenticationResults: string | undefined) {
+  if (!authenticationResults) return false;
+  const [authservId, ...results] = authenticationResults
+    .toLowerCase()
+    .split(";")
+    .map((part) => part.trim());
+  if (authservId?.split(/\s+/)[0] !== RECEIVING_AUTHSERV_ID) return false;
+  return results.some(
+    (result) =>
+      /^dkim=pass(\s|$)/.test(result) &&
+      /(^|\s)header\.d=google\.com(\s|$)/.test(result),
+  );
+}
 
 const DOCUMENT_EXTENSIONS: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -357,7 +385,12 @@ export async function processInboundEmail(
     return fail("This message could not be read as email.");
   }
 
-  if (parsed.from?.address?.toLowerCase() === GMAIL_FORWARDING_SENDER) {
+  if (
+    parsed.from?.address?.toLowerCase() === GMAIL_FORWARDING_SENDER &&
+    isGoogleSigned(
+      parsed.headers.find(({ key }) => key === "authentication-results")?.value,
+    )
+  ) {
     const text = (parsed.text ?? "").replace(/\s+/g, " ").trim();
     await settleInboundEmail(db, {
       id: email.id,
@@ -516,4 +549,24 @@ export async function failInboundEmail(
     detail:
       "A temporary processing problem stopped this message from being read. Send it again.",
   });
+}
+
+/**
+ * Part of the periodic delivery reconciler: settles messages whose job ended
+ * failed without the handler recording it, so none stays "received".
+ */
+export async function reconcileInboundEmails(
+  db: PrimaryDatabase | Database,
+  input: { limit?: number } = {},
+) {
+  const stalled = await listStalledInboundEmails(db, {
+    limit: input.limit ?? 100,
+  });
+  for (const email of stalled) {
+    await failInboundEmail(db, {
+      teamId: email.teamId,
+      inboundEmailId: email.id,
+    });
+  }
+  return { failed: stalled.length };
 }

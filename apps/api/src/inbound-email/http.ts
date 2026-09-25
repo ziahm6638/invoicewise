@@ -68,8 +68,6 @@ async function readBoundedBody(
   request: Request,
   maxBytes: number,
 ): Promise<Uint8Array | "too_large" | "unreadable"> {
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) return "too_large";
   if (!request.body) return new Uint8Array();
 
   const reader = request.body.getReader();
@@ -103,8 +101,12 @@ async function readBoundedBody(
 /**
  * Status codes are the Worker's instructions: 202 accept the message; 404,
  * 413 and 400 refuse it permanently at SMTP time (the sending server reports
- * it to its own user, so nothing here can bounce in a loop); 401 and 503 are
- * temporary, so a misconfigured secret or an outage never loses mail.
+ * it to its own user, so nothing here can bounce in a loop); 401, 411 and 503
+ * are temporary, so a misconfigured secret or an outage never loses mail.
+ *
+ * Nothing is buffered before the cheap checks pass: a well-formed signature
+ * header and a declared length within the limit (the Worker always sends a
+ * fixed-length body). The HMAC over the exact body is still the only proof.
  */
 export async function handleInboundEmail(
   request: Request,
@@ -128,11 +130,22 @@ export async function handleInboundEmail(
 
   if (
     !recipient ||
-    !signature ||
+    !/^v1=[0-9a-f]{64}$/.test(signature) ||
     !Number.isFinite(signedAt) ||
     Math.abs(nowSeconds - signedAt) > INBOUND_SIGNATURE_TOLERANCE_SECONDS
   ) {
     return json({ error: "Unauthorized", code: "unauthorized" }, 401);
+  }
+
+  const declaredLength = request.headers.get("content-length") ?? "";
+  if (!/^\d{1,12}$/.test(declaredLength)) {
+    return json(
+      { error: "A content-length is required", code: "length_required" },
+      411,
+    );
+  }
+  if (Number(declaredLength) > INBOUND_EMAIL_LIMITS.maxMessageBytes) {
+    return json({ error: "Message too large", code: "too_large" }, 413);
   }
 
   const body = await readBoundedBody(

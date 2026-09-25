@@ -51,6 +51,7 @@ async function signedRequest(
     recipient?: string;
     signature?: string;
     secret?: string;
+    contentLength?: string | null;
   } = {},
 ) {
   const body = overrides.body ?? RAW;
@@ -74,11 +75,41 @@ async function signedRequest(
       [INBOUND_HEADERS.recipient]: recipient,
       [INBOUND_HEADERS.sender]: sender,
       [INBOUND_HEADERS.signature]: signature,
+      // As on the wire: the Worker always sends a fixed-length body.
+      ...(overrides.contentLength === null
+        ? {}
+        : {
+            "content-length":
+              overrides.contentLength ?? String(body.byteLength),
+          }),
       // A forwarded-for header proves nothing and is ignored.
       "x-forwarded-for": "127.0.0.1",
     },
     body,
   });
+}
+
+/** A request whose body records whether anything read it. */
+function unreadRequest(request: Request, headers = request.headers) {
+  let pulled = false;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        pulled = true;
+        controller.enqueue(RAW);
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return {
+    request: new Request(request.url, {
+      method: "POST",
+      headers,
+      body,
+    }),
+    pulled: () => pulled,
+  };
 }
 
 describe("inbound email endpoint", () => {
@@ -136,6 +167,29 @@ describe("inbound email endpoint", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("a malformed signature or a missing or oversized length is refused before the body is read", async () => {
+    const { deps, calls } = depsWith(accepted);
+    const cases: [Request, number][] = [
+      [await signedRequest({ signature: "v1=abc" }), 401],
+      [await signedRequest({ signature: `sha256=${"0".repeat(64)}` }), 401],
+      [await signedRequest({ signature: `v1=${"G".repeat(64)}` }), 401],
+      [await signedRequest({ contentLength: null }), 411],
+      [await signedRequest({ contentLength: "-1" }), 411],
+      [await signedRequest({ contentLength: "12abc" }), 411],
+      [
+        await signedRequest({ contentLength: String(20 * 1024 * 1024 + 1) }),
+        413,
+      ],
+    ];
+    for (const [signed, status] of cases) {
+      const { request, pulled } = unreadRequest(signed);
+      const response = await handleInboundEmail(request, deps);
+      expect(response.status).toBe(status);
+      expect(pulled()).toBe(false);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
   test("an unset secret fails closed and temporarily", async () => {
     const { deps, calls } = depsWith(accepted);
     const response = await handleInboundEmail(await signedRequest(), {
@@ -146,11 +200,11 @@ describe("inbound email endpoint", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("an oversized body is refused while it is read", async () => {
+  test("an oversized body is refused while it is read, whatever its declared length", async () => {
     const { deps, calls } = depsWith(accepted);
     const body = new Uint8Array(20 * 1024 * 1024 + 1);
     const response = await handleInboundEmail(
-      await signedRequest({ body }),
+      await signedRequest({ body, contentLength: "10" }),
       deps,
     );
     expect(response.status).toBe(413);
@@ -203,8 +257,17 @@ describe("inbound email endpoint", () => {
           INBOUND_EMAIL_ENDPOINT: "http://api.test/inbound/email",
         },
         {
-          fetch: (url, init) =>
-            handleInboundEmail(new Request(url, init), deps),
+          fetch: (url, init) => {
+            const headers = new Headers(init.headers);
+            headers.set(
+              "content-length",
+              String((init.body as Uint8Array).byteLength),
+            );
+            return handleInboundEmail(
+              new Request(url, { ...init, headers }),
+              deps,
+            );
+          },
           now: () => NOW,
           sleep: async () => undefined,
         },

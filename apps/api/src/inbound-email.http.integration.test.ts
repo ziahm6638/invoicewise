@@ -56,6 +56,7 @@ if (testDatabaseUrl) {
   process.env.WORKFLOW_RETRY_BASE_MS = "10";
   process.env.WORKFLOW_RETRY_MAX_MS = "10";
   process.env.INBOUND_EMAIL_DOMAIN = DOMAIN;
+  process.env.INBOUND_EMAIL_LIVE = "true";
 }
 
 // No provider call may ever leave this test.
@@ -101,6 +102,7 @@ class FakeDocumentClient {
 /** A multipart message with the given attachments, base64 encoded. */
 function buildMessage(input: {
   to: string;
+  from?: string;
   messageId?: string | null;
   subject?: string;
   extraHeaders?: string[];
@@ -109,7 +111,7 @@ function buildMessage(input: {
   const boundary = `b-${crypto.randomUUID()}`;
   const headers = [
     ...(input.extraHeaders ?? []),
-    "From: Acme Supplies <billing@supplier.example>",
+    `From: ${input.from ?? "Acme Supplies <billing@supplier.example>"}`,
     `To: ${input.to}`,
     `Subject: ${input.subject ?? "Invoice INV-2026-0042"}`,
     "Date: Tue, 22 Sep 2026 10:00:00 +0100",
@@ -146,6 +148,7 @@ suite("dedicated receiving address over real HTTP", () => {
   let worker: typeof import("../../inbound-email/src/worker");
   let server: ReturnType<typeof Bun.serve>;
   let runBatch: () => Promise<void>;
+  let reconcile: () => Promise<{ rescheduled: number; failed: number }>;
   let invoicePdf: Uint8Array;
 
   const created = { userIds: [] as string[], teamIds: [] as string[] };
@@ -316,9 +319,8 @@ suite("dedicated receiving address over real HTTP", () => {
     const { createTRPCContext } = await import("@api/trpc/init");
     const { appRouter } = await import("@api/trpc/routers/_app");
     const { handleInboundEmail } = await import("@api/inbound-email/http");
-    const { WorkflowRuntimeLive, runWorkflowBatch } = await import(
-      "@invoicewise/jobs/runner"
-    );
+    const { DeliveryReconciler, WorkflowRuntimeLive, runWorkflowBatch } =
+      await import("@invoicewise/jobs/runner");
     const { Effect, LogLevel, Logger } = await import("effect");
 
     runBatch = async () => {
@@ -330,6 +332,15 @@ suite("dedicated receiving address over real HTTP", () => {
         ),
       );
     };
+
+    reconcile = () =>
+      Effect.runPromise(
+        Effect.flatMap(DeliveryReconciler, (reconciler) => reconciler.run).pipe(
+          Effect.provide(WorkflowRuntimeLive),
+          Effect.provide(Logger.minimumLogLevel(LogLevel.None)),
+          Effect.scoped,
+        ),
+      );
 
     const app = new OpenAPIHono();
     app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
@@ -484,6 +495,8 @@ suite("dedicated receiving address over real HTTP", () => {
       `invoices@${DOMAIN}`,
       `${address.split("@")[0]}@invoicewise.uk`,
       `${owner.teamId}@${DOMAIN}`,
+      // A subaddress of a real address is not the issued address.
+      `${address.split("@")[0]}+acme@${DOMAIN}`,
     ]) {
       const result = await deliver(recipient, raw);
       expect(result).toEqual({
@@ -700,6 +713,140 @@ suite("dedicated receiving address over real HTTP", () => {
     expect(failed?.detail).toContain("could not be stored");
     // The source is kept for an operator to re-drive.
     expect(failed?.raw).not.toBeNull();
+  }, 60_000);
+
+  test("a message whose job gave up without recording it is settled by the reconciler", async () => {
+    const owner = await createUser("inbound-stalled");
+    const { address } = await addressFor(owner.cookie);
+    const stalled = buildMessage({ to: address, subject: "Stalled" });
+    const waiting = buildMessage({ to: address, subject: "Waiting" });
+    expect((await deliver(address, stalled)).error).toBeNull();
+    expect((await deliver(address, waiting)).error).toBeNull();
+
+    const rows = await inboundRowsFor(owner.teamId);
+    const stalledRow = rows.find(({ subject }) => subject === "Stalled")!;
+    // The worker died during the final attempt: the queue marks the job
+    // failed when its lease expires and no inbound-email code runs.
+    await client.primaryDb
+      .update(schema.workflowJobs)
+      .set({
+        status: "failed",
+        attempts: 3,
+        lastError: "Workflow lease expired after its final attempt",
+      })
+      .where(orm.eq(schema.workflowJobs.idempotencyKey, stalledRow.id));
+
+    const result = await reconcile();
+    expect(result.failed).toBeGreaterThanOrEqual(1);
+
+    const after = await inboundRowsFor(owner.teamId);
+    const failed = after.find(({ subject }) => subject === "Stalled")!;
+    expect(failed.status).toBe("failed");
+    expect(failed.detail).toContain("temporary processing problem");
+    expect(failed.raw).not.toBeNull();
+    // A message whose job is still queued is left for the worker.
+    expect(after.find(({ subject }) => subject === "Waiting")?.status).toBe(
+      "received",
+    );
+    const listed = await addressFor(owner.cookie);
+    expect(listed.messages.map(({ status }) => status).sort()).toEqual([
+      "failed",
+      "received",
+    ]);
+  }, 60_000);
+
+  test("a Gmail forwarding confirmation is believed only with Cloudflare's DKIM pass for google.com", async () => {
+    const owner = await createUser("inbound-gmail");
+    const { address } = await addressFor(owner.cookie);
+    const attachments = [
+      { name: "invoice.pdf", type: "application/pdf", bytes: invoicePdf },
+    ];
+    const from = "Gmail Team <forwarding-noreply@google.com>";
+
+    const genuine = buildMessage({
+      to: address,
+      from,
+      subject: "Genuine",
+      extraHeaders: [
+        "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=google.com header.s=20230601",
+      ],
+    });
+    // Spoofed From with no authentication, and with a forged google.com pass
+    // below the result Cloudflare added for the real signer.
+    const unsigned = buildMessage({
+      to: address,
+      from,
+      subject: "Unsigned",
+      attachments,
+    });
+    const forged = buildMessage({
+      to: address,
+      from,
+      subject: "Forged",
+      extraHeaders: [
+        "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=evil.example",
+        "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=google.com",
+      ],
+      attachments: [
+        {
+          name: "invoice-2.pdf",
+          type: "application/pdf",
+          bytes: new Uint8Array([...invoicePdf, 10]),
+        },
+      ],
+    });
+    for (const raw of [genuine, unsigned, forged]) {
+      expect((await deliver(address, raw)).error).toBeNull();
+    }
+
+    const settled = await runWorker(async () =>
+      (await inboundRowsFor(owner.teamId)).every(
+        ({ status }) => status !== "received",
+      ),
+    );
+    expect(settled).toBe(true);
+
+    const rows = await inboundRowsFor(owner.teamId);
+    const bySubject = (subject: string) =>
+      rows.find((row) => row.subject === subject)!;
+    expect(bySubject("Genuine").detail).toStartWith(
+      "Gmail forwarding confirmation:",
+    );
+    for (const subject of ["Unsigned", "Forged"]) {
+      const row = bySubject(subject);
+      expect(row.status).toBe("processed");
+      expect(row.detail ?? "").not.toContain("Gmail forwarding confirmation");
+      expect(row.attachments.map(({ outcome }) => outcome)).toEqual([
+        "accepted",
+      ]);
+    }
+    expect(await inboxRowsFor(owner.teamId)).toHaveLength(2);
+  }, 90_000);
+
+  test("no address is shown or rotated until the mailbox is live", async () => {
+    const owner = await createUser("inbound-not-live");
+    process.env.INBOUND_EMAIL_LIVE = "false";
+    try {
+      const hidden = await trpc(owner.cookie, "inboundEmail.get", null);
+      expect(hidden.error).toBeNull();
+      expect(hidden.data).toEqual({
+        address: null,
+        createdAt: null,
+        messages: [],
+      });
+      const rotate = await trpc(
+        owner.cookie,
+        "inboundEmail.rotate",
+        null,
+        "mutation",
+      );
+      expect(rotate.status).toBe(412);
+    } finally {
+      process.env.INBOUND_EMAIL_LIVE = "true";
+    }
+    expect((await addressFor(owner.cookie)).address).toMatch(
+      /@in\.invoicewise\.uk$/,
+    );
   }, 60_000);
 
   test("members see the address but only admins rotate it", async () => {

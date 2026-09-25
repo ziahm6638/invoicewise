@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { generateInboundLocalPart } from "@invoicewise/db/queries";
 import {
+  inboundEmailLive,
   inboundLocalPart,
   inboundMessageKey,
+  isGoogleSigned,
   readInboundEmailHeaders,
 } from "./inbound-email";
 
@@ -13,11 +15,10 @@ describe("inbound recipients", () => {
     const local = generateInboundLocalPart();
     expect(local).toMatch(/^[a-hj-km-np-z2-9]{16}$/);
     expect(inboundLocalPart(`${local}@${DOMAIN}`, DOMAIN)).toBe(local);
-    // Case and a +tag subaddress still route to the same address.
+    // Case does not matter.
     expect(
       inboundLocalPart(`${local.toUpperCase()}@IN.InvoiceWise.uk`, DOMAIN),
     ).toBe(local);
-    expect(inboundLocalPart(`${local}+acme@${DOMAIN}`, DOMAIN)).toBe(local);
 
     for (const recipient of [
       `${local}@invoicewise.uk`,
@@ -25,6 +26,9 @@ describe("inbound recipients", () => {
       `${local}@${DOMAIN}.evil.example`,
       `invoices@${DOMAIN}`,
       `${local}x@${DOMAIN}`,
+      // Only the exact issued local part routes, never a subaddress.
+      `${local}+acme@${DOMAIN}`,
+      `${local}+@${DOMAIN}`,
       `@${DOMAIN}`,
       local,
       "",
@@ -76,5 +80,43 @@ describe("inbound headers", () => {
     expect(headers.messageId).toBeNull();
     expect(inboundMessageKey(headers.messageId, "ab12")).toBe("sha256:ab12");
     expect(inboundMessageKey("<m@x>", "ab12")).toBe("mid:<m@x>");
+  });
+});
+
+describe("gmail forwarding confirmation", () => {
+  test("only Cloudflare's own DKIM pass for google.com is believed", () => {
+    expect(
+      isGoogleSigned(
+        "mx.cloudflare.net; dkim=pass header.d=google.com header.s=20230601; spf=pass smtp.mailfrom=google.com",
+      ),
+    ).toBe(true);
+    expect(
+      isGoogleSigned(
+        "mx.cloudflare.net;\r\n\tdkim=pass header.i=@google.com header.d=google.com",
+      ),
+    ).toBe(true);
+
+    for (const results of [
+      undefined,
+      "",
+      "mx.cloudflare.net; dkim=fail header.d=google.com",
+      "mx.cloudflare.net; dkim=none; spf=pass smtp.mailfrom=google.com",
+      "mx.cloudflare.net; dkim=pass header.d=evil.example",
+      "mx.cloudflare.net; dkim=pass header.d=google.com.evil.example",
+      "mx.cloudflare.net; dkim=pass header.d=notgoogle.com",
+      // Not added by Cloudflare on receipt.
+      "mx.evil.example; dkim=pass header.d=google.com",
+    ]) {
+      expect(isGoogleSigned(results)).toBe(false);
+    }
+  });
+});
+
+describe("going live", () => {
+  test("the address is shown only once INBOUND_EMAIL_LIVE is true", () => {
+    expect(inboundEmailLive({})).toBe(false);
+    expect(inboundEmailLive({ INBOUND_EMAIL_LIVE: "false" })).toBe(false);
+    expect(inboundEmailLive({ INBOUND_EMAIL_LIVE: "1" })).toBe(false);
+    expect(inboundEmailLive({ INBOUND_EMAIL_LIVE: " TRUE " })).toBe(true);
   });
 });

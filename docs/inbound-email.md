@@ -36,8 +36,8 @@ Effect worker: process-inbound-email
   address is refused from that moment. Local parts are globally unique and
   never reissued, so a revoked address can never start delivering to another
   workspace.
-- A `+tag` subaddress (`<local>+acme@…`) routes to the same workspace; case is
-  ignored.
+- Only the exact issued local part routes; a `+tag` subaddress
+  (`<local>+acme@…`) is an unknown recipient. Case is ignored.
 
 ## Recipient mapping and refusals
 
@@ -64,7 +64,11 @@ own workspace.
 | `x-invoicewise-inbound-sender` | envelope sender, `encodeURIComponent` |
 | `x-invoicewise-inbound-signature` | `v1=` + hex HMAC-SHA256 with `INBOUND_EMAIL_SECRET` over `v1\n<timestamp>\n<recipient>\n<sender>\n<sha256 hex of the body>` |
 
-The body is the raw RFC 5322 message. The signature covers the envelope and
+The body is the raw RFC 5322 message. Before any of it is read, the request
+must carry a well-formed `v1=<64 hex>` signature and a current timestamp
+(else `401`) and a `content-length` (else `411`) of at most 20 MiB (else
+`413`); the Worker always sends a fixed-length body. The body is then read
+with the same bound whatever the header claimed. The signature covers the envelope and
 the exact bytes, so neither the recipient nor the content can be changed in
 transit. Nothing about the network path is trusted: production traffic
 arrives through the Cloudflare Tunnel and kamal-proxy, where any
@@ -85,6 +89,7 @@ construction on both sides.
 | `413` | over 20 MiB | `setReject` | permanent rejection |
 | `400` | empty message | `setReject` | permanent rejection |
 | `401` | bad signature (for example a secret mismatch after rotation) | retries, then throws | temporary failure; the sending server retries later |
+| `411` | no `content-length` (never sent by the Worker) | retries, then throws | temporary failure |
 | `503` / network error | database, storage or API unavailable | retries 3 times (1 s, 4 s back-off, 20 s per attempt), then throws | temporary failure; the sending server retries later |
 
 - **Accepted mail is durable before it is acknowledged.** The row (with the
@@ -141,9 +146,12 @@ Email lists the recent messages with their status and reasons.
   "No PDF, JPEG or PNG attachment was found in this message."
 - **Only rejected attachments**: `processed` with "No attachment in this
   message could be read as an invoice."
-- **Gmail forwarding confirmation** (`forwarding-noreply@google.com`): the
+- **Gmail forwarding confirmation** (`forwarding-noreply@google.com`, and the
+  topmost `Authentication-Results`, the one Cloudflare adds on receipt as
+  `mx.cloudflare.net`, shows `dkim=pass header.d=google.com`): the
   confirmation text, including its link and code, is shown as the message's
-  detail so the workspace can finish setting up Gmail forwarding.
+  detail so the workspace can finish setting up Gmail forwarding. The same
+  From without that DKIM pass is ordinary mail.
 - **Unreadable MIME**: `failed` at once ("This message could not be read as
   email."), not retried.
 - **Transient intake failure** (storage, parser capacity): the job retries; on
@@ -152,6 +160,10 @@ Email lists the recent messages with their status and reasons.
 - **Any other final job failure**: the message settles `failed` with a generic
   temporary-problem detail and the reason in the worker log
   (`inbound_email_processing_failed`).
+- **A job that ends failed without that record** (the worker is killed during
+  the final attempt and its lease expires, or the database refuses the
+  failure write): the periodic delivery reconciler (`WORKFLOW_RECONCILE_MS`)
+  settles the message `failed` the same way, so none stays "received".
 
 A message is never retried after it settles, so a poison message costs at most
 one job's attempts. A processed message drops its raw source (the invoices
@@ -205,15 +217,35 @@ Rotating the secret: put the new value in Infisical, update the Worker secret,
 then redeploy the API. Mail that arrives while the two disagree gets `401`,
 which the Worker treats as temporary, so it is retried rather than lost.
 
+## Going live
+
+Every customer-facing mention of the mailbox waits for one setting,
+`INBOUND_EMAIL_LIVE`, which is off unless it is `true`:
+
+- API (Infisical `prod`/`staging`, passed through Kamal): while off,
+  `inboundEmail.get` still provisions the address but returns no address or
+  messages, so Settings → Email and the empty inbox show nothing, and
+  `inboundEmail.rotate` is refused. `POST /inbound/email` and the Worker work
+  either way.
+- Website (`apps/website`, Vercel environment): while off, the marketing copy
+  keeps the "(coming soon)" wording. Pages are rendered at build time, so
+  redeploy the site after changing it.
+
+Set it to `true` in both only after the Cloudflare setup above and the live
+proof below pass.
+
 ## Live proof
 
-With a throwaway workspace:
+With a throwaway workspace, before `INBOUND_EMAIL_LIVE` is on (open its
+Settings → Email once to provision the address, then read it with
+`select local_part from inbound_email_addresses where team_id = '<id>' and revoked_at is null`):
 
 1. `dig +short MX in.invoicewise.uk` shows Cloudflare's route servers and
    `dig +short MX invoicewise.uk` still shows Purelymail.
 2. From an external mailbox, send a PDF invoice to the workspace address. It
-   appears once in Settings → Email as processed and once in the inbox, and the
-   invoice's `inboundEmail` carries the message's Message-ID and sender.
+   appears once in the inbox (and `inbound_emails` holds one processed row),
+   and the invoice's `inboundEmail` carries the message's Message-ID and
+   sender.
 3. Redeliver the same message (resend the identical `.eml` with the same
    Message-ID, for example with `swaks --data`). Its `delivery_count` rises and
    there is still one invoice.
@@ -231,12 +263,15 @@ With a throwaway workspace:
 - `apps/inbound-email/src/worker.test.ts` — signing, permanent vs temporary
   answers, size cap, retries.
 - `apps/api/src/inbound-email/http.test.ts` — signature, clock window, body
-  bound, fail-closed secret, status mapping, and the real Worker against the
-  real handler.
-- `packages/jobs/src/inbound-email.test.ts` — recipient parsing, local part
-  shape, header reading, message identity.
+  bound, cheap refusals before the body is read, fail-closed secret, status
+  mapping, and the real Worker against the real handler.
+- `packages/jobs/src/inbound-email.test.ts` — recipient parsing (no
+  subaddresses), local part shape, header reading, message identity, the
+  Gmail confirmation's DKIM check, the live setting.
 - `apps/api/src/inbound-email.http.integration.test.ts` (in `bun run verify`)
   — real HTTP and Postgres: delivery through the Worker to the right
   workspace once with provenance, redelivery, refusals (unknown, revoked,
-  deleted workspace, spoofed/unsigned), attachment outcomes without retries,
-  transient failure then visible failure, and member vs admin rotation.
+  deleted workspace, subaddress, spoofed/unsigned), attachment outcomes
+  without retries, transient failure then visible failure, a job that gave up
+  unrecorded settled by the reconciler, spoofed Gmail confirmations read as
+  ordinary mail, nothing shown until live, and member vs admin rotation.
