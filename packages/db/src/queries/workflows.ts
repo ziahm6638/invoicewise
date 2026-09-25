@@ -69,6 +69,11 @@ export async function claimWorkflowJobs(
     leaseMs: number;
     /** Workflows left queued this round (for example while a provider budget is spent). */
     excludeNames?: readonly string[];
+    /**
+     * Most jobs of a workflow claimed in one round, so work that waits on
+     * third parties (webhook endpoints) cannot take every slot.
+     */
+    caps?: readonly { name: string; limit: number }[];
   },
 ) {
   return db.transaction(async (tx) => {
@@ -95,30 +100,61 @@ export async function claimWorkflowJobs(
         ),
       );
 
-    const claimable = await tx
-      .select({ id: workflowJobs.id })
-      .from(workflowJobs)
-      .where(
-        and(
-          lt(workflowJobs.attempts, workflowJobs.maxAttempts),
-          params.excludeNames?.length
-            ? notInArray(workflowJobs.name, [...params.excludeNames])
-            : undefined,
-          or(
-            and(
-              eq(workflowJobs.status, "queued"),
-              lte(workflowJobs.runAt, nowIso),
-            ),
-            and(
-              eq(workflowJobs.status, "running"),
-              lte(workflowJobs.leaseExpiresAt, nowIso),
+    const excluded = params.excludeNames ?? [];
+    const caps = (params.caps ?? []).filter(
+      ({ name }) => !excluded.includes(name),
+    );
+    const select = (name: string | null, limit: number) =>
+      tx
+        .select({
+          id: workflowJobs.id,
+          runAt: workflowJobs.runAt,
+          createdAt: workflowJobs.createdAt,
+        })
+        .from(workflowJobs)
+        .where(
+          and(
+            lt(workflowJobs.attempts, workflowJobs.maxAttempts),
+            name === null
+              ? excluded.length || caps.length
+                ? notInArray(workflowJobs.name, [
+                    ...excluded,
+                    ...caps.map((cap) => cap.name),
+                  ])
+                : undefined
+              : eq(workflowJobs.name, name),
+            or(
+              and(
+                eq(workflowJobs.status, "queued"),
+                lte(workflowJobs.runAt, nowIso),
+              ),
+              and(
+                eq(workflowJobs.status, "running"),
+                lte(workflowJobs.leaseExpiresAt, nowIso),
+              ),
             ),
           ),
-        ),
+        )
+        .orderBy(asc(workflowJobs.runAt), asc(workflowJobs.createdAt))
+        .limit(limit)
+        .for("update", { skipLocked: true });
+
+    // Candidates are merged in queue order; rows locked here but not claimed
+    // are released when the transaction commits.
+    const candidates = [await select(null, params.limit)];
+    for (const cap of caps) {
+      candidates.push(
+        await select(cap.name, Math.min(params.limit, Math.max(0, cap.limit))),
+      );
+    }
+    const claimable = candidates
+      .flat()
+      .sort(
+        (a, b) =>
+          a.runAt.localeCompare(b.runAt) ||
+          a.createdAt.localeCompare(b.createdAt),
       )
-      .orderBy(asc(workflowJobs.runAt), asc(workflowJobs.createdAt))
-      .limit(params.limit)
-      .for("update", { skipLocked: true });
+      .slice(0, params.limit);
 
     if (claimable.length === 0) return [];
 

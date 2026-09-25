@@ -86,7 +86,13 @@ committing it to a shared config file.
 
 ## Webhooks
 
-Register an endpoint with an API key that has `inbox.write`:
+Owners and admins manage endpoints in **Settings → Webhooks** without any
+tooling: add an HTTPS endpoint and choose its events, copy the signing secret
+(shown once), send a test event, rotate the secret, open **Deliveries** to see
+each event's status, attempts, HTTP results and errors, redeliver a failed
+event, and disable the endpoint. The same operations are available over REST
+with an API key; every route is scoped to the key's workspace, and an endpoint
+or delivery of another workspace is `404`.
 
 ```bash
 curl --fail --silent \
@@ -97,15 +103,49 @@ curl --fail --silent \
   "$INVOICEWISE_API_URL/webhooks"
 ```
 
-The response returns the signing secret once. Store it as a secret. Endpoint
-management routes are:
-
-| Route | Required scope | Result |
+| Route | Required scope and role | Result |
 | --- | --- | --- |
-| `GET /webhooks` | `inbox.read` | Registered endpoints (never their secrets) |
-| `POST /webhooks` | `inbox.write` | Registers an endpoint and returns its secret once |
-| `GET /webhooks/:id/attempts` | `inbox.read` | Visible attempt history for that workspace endpoint |
-| `DELETE /webhooks/:id` | `inbox.write` | Disables the endpoint |
+| `GET /webhooks` | `inbox.read` | Endpoints with events, state, last rotation and the previous secret's expiry (never a secret) |
+| `POST /webhooks` | `inbox.write`, admin | Registers an endpoint and returns its secret once; `400` for a refused destination, `409` for an active duplicate URL or more than 20 active endpoints. Registering a disabled endpoint's URL enables it again with a new secret |
+| `GET /webhooks/:id/deliveries` | `inbox.read` | The 50 most recent deliveries: event, logical event ID, invoice and revision, status, attempts, last error and whether a retry may succeed |
+| `GET /webhooks/:id/attempts[?deliveryId=]` | `inbox.read` | HTTP attempts (status code, error, duration), newest first, at most 200 |
+| `POST /webhooks/:id/test` | `inbox.write`, admin | Queues a `webhook.test` event to that endpoint (`202`) |
+| `POST /webhooks/:id/rotate-secret` | `inbox.write`, admin | Returns a new secret once; body `{"revokePrevious": true}` ends the old one immediately |
+| `POST /webhooks/:id/deliveries/:deliveryId/redeliver` | `inbox.write`, admin | Re-sends one failed delivery (`202`); `409` if it is not failed or the endpoint is disabled, `410` once retention removed its payload |
+| `DELETE /webhooks/:id` | `inbox.write`, admin | Disables the endpoint; its queued deliveries are cancelled |
+
+### Events and payloads
+
+Events are `invoice.processed`, `invoice.judgments.attached` and
+`delivery.failed`, plus `webhook.test`, which is sent only when requested and
+regardless of the endpoint's subscriptions. Every body is a versioned
+envelope:
+
+```json
+{
+  "id": "<logical event ID>",
+  "type": "invoice.processed",
+  "version": 1,
+  "createdAt": "2026-09-25T10:00:00.000Z",
+  "teamId": "<workspace ID>",
+  "invoiceId": "<invoice ID>",
+  "revision": 3,
+  "data": { "...": "the processed invoice record" }
+}
+```
+
+`version` (also the `invoicewise-webhook-version` header) changes only for a
+breaking payload change. `invoiceId` and `revision` identify the exact invoice
+revision the event describes; a reprocessed invoice is a new revision with
+new event IDs. Payloads never contain a document link, because signed
+document URLs expire after five minutes and a queued or redelivered event can
+arrive later than that. To read the document, call `GET /invoices/:invoiceId`
+with your API key when you handle the event: it returns the current record and
+a fresh signed `documentUrl`. The retention job empties the stored payload of a
+finished delivery after 30 days ([data lifecycle](data-lifecycle.md)); such an
+event can no longer be redelivered, and the invoice is read over REST instead.
+
+### Signatures, rotation and replay
 
 InvoiceWise sends these headers with the exact JSON request body:
 
@@ -113,31 +153,80 @@ InvoiceWise sends these headers with the exact JSON request body:
 invoicewise-event: invoice.processed
 invoicewise-event-id: <logical event UUID, also the body's "id">
 invoicewise-delivery: <delivery UUID>
-invoicewise-signature: t=<unix-seconds>,v1=<hex HMAC-SHA256>
+invoicewise-webhook-version: 1
+invoicewise-signature: t=<unix-seconds>,v1=<hex HMAC-SHA256>[,v1=<hex>]
 ```
 
+Verify by computing HMAC-SHA256 over `<timestamp>.<exact-request-body>` with
+the endpoint secret, comparing it in constant time with each `v1` value, and
+rejecting timestamps outside your tolerance to block replays. The repository
+helper `verifyWebhookSignature` accepts any matching `v1` and uses a
+five-minute tolerance by default.
+
+Rotating a secret returns the new one once. For the next 24 hours each
+delivery carries two `v1` signatures, one per secret, so a consumer verifying
+with either the old or the new secret keeps accepting events while it deploys
+the new one; `previousSecretExpiresAt` on the endpoint shows when the overlap
+ends. Rotating again during an overlap replaces the previous secret with the
+one being rotated out, and the older one stops signing at once. For a leaked
+secret, rotate with `revokePrevious` (or tick **Stop signing with the previous
+secret now** in the dashboard) so only the new secret signs.
+
+### Delivery semantics and recovery
+
 Delivery is at least once. A worker that dies after your endpoint answered but
-before InvoiceWise recorded the answer sends the same request again, so
+before InvoiceWise recorded the answer sends the same request again, and an
+explicit redelivery re-sends an event you may already have processed, so
 deduplicate on `invoicewise-event-id` (the body's `id`). The ID is derived
-from the invoice, its processing `revision` (also in the body) and the event
-type: it is the same on every endpoint and every redelivery, and a
-reprocessed invoice gets a new revision and new event IDs.
+from the invoice, its processing `revision` and the event type: it is the same
+on every endpoint, every retry and every redelivery.
 
-Verify the signature by computing HMAC-SHA256 over
-`<timestamp>.<exact-request-body>` with the endpoint secret, comparing the hex
-digest in constant time, and rejecting old timestamps. The repository helper
-`verifyWebhookSignature` uses a five-minute tolerance by default.
+Only a `2xx` answer is a success. A non-`2xx` response (including a redirect,
+which is never followed), a timeout or a network error is retried: four
+attempts per delivery with bounded exponential backoff, each stored before the
+next. The last failed attempt marks the delivery failed and schedules
+`delivery.failed` to the workspace's other subscribed endpoints in the same
+transaction, so the notification cannot be lost to a crash. Its event ID
+derives from the failed delivery and its attempt count: replays of one failure
+deduplicate, and a delivery that fails again after a redelivery is a new
+event. A failed `delivery.failed` notification or test event announces
+nothing, so failures cannot cascade into a storm.
 
-Webhook HTTP calls run only in the Postgres-backed Effect workflow runner. A
-non-2xx response, redirect, or network error is retried four times with bounded
-exponential backoff. Each HTTP attempt is stored before the job is retried. A
-terminal failure marks the delivery failed and schedules `delivery.failed` for
-other subscribed endpoints in the same transaction, so the notification cannot
-be lost to a crash. Its event ID derives from the failed delivery and its
-attempt count: replays of one failure deduplicate, and a delivery that fails
-again after an explicit retry is a new event. Failures of that notification are
-not emitted again, so failure events cannot recurse. Slow or unavailable
-customer endpoints therefore do not block invoice processing.
+Recovery is explicit. **Redeliver** on a failed delivery (or the redeliver
+route) re-queues the same delivery row and event ID for four more attempts,
+continuing its attempt history; delivered, in-flight and cancelled deliveries
+and disabled endpoints are refused. The invoice's **Delivery** panel retries
+every failed destination of its current revision at once (see below).
+
+### Outbound request safety
+
+Every webhook request goes through one transport (`packages/jobs/src/egress.ts`):
+
+- **Destination policy.** The URL must be `https`, without credentials, and
+  its host must not be a private, loopback, link-local, carrier-grade NAT,
+  multicast, documentation or other reserved IPv4 or IPv6 address, including
+  IPv4-mapped, NAT64 and 6to4 forms of them, cloud metadata addresses
+  (`169.254.169.254`, `fd00:ec2::254`) and local names (`localhost`, `.local`,
+  `.internal`, single-label hosts). Registration resolves the hostname and
+  refuses it if any address it resolves to is not public, so a
+  public-looking name pointing at a private address is rejected up front.
+- **Checked on every connection.** Each attempt resolves the name again,
+  requires every address to be public and connects to exactly the validated
+  address, so a DNS answer that changes after registration (rebinding) is
+  refused before any connection. TLS still verifies the certificate against
+  the hostname. Requests are written on that socket directly, so proxy
+  environment variables, redirects and connection pools cannot send them
+  elsewhere.
+- **Bounded.** One 10-second deadline covers resolution, connection, request
+  and response. Only the status line and headers are read, up to 16 KiB; the
+  response body is never read and the connection is closed as soon as the
+  status is known. A workspace has at most 20 active endpoints, and at
+  most half of the workflow runner's slots (at least one) deliver webhooks at
+  once, so slow or hostile endpoints cannot starve document processing.
+
+Local development and the verification suites (any `NODE_ENV` other than
+`production`) also allow loopback and private destinations, over plain HTTP,
+so a local listener can receive events. Production refuses them.
 
 ## Processing-to-delivery handoff
 
@@ -253,6 +342,26 @@ Failed endpoint attempts:[1, 2, 3, 4]
 CSV:                     200, judgment:duplicate column present
 MCP tool call:           isError=false, duplicate judgment answer=false
 ```
+
+The same command then proves self-service endpoint management over REST
+against the running API and its workflow runner. Observed on 2026-09-25:
+
+```text
+Test event:              202, webhook.test, version 1, signature valid
+Rotation overlap:        old secret verifies=true, new secret verifies=true
+Overlap expired:         previous secret verifies=false, new secret verifies=true
+Revoke previous now:     previous secret verifies=false, new secret verifies=true
+Terminal failure:        attempts=4, delivery.failed notices=1, duplicate URL=409
+Redelivery:              202, same event ID=true, then succeeded after 5 attempts; again=409
+Other workspace:         deliveries/test/rotate/redeliver/disable all 404
+Cascading notices:       0 (failed test events and failed notifications announce nothing)
+Disabled endpoint:       active=false, test event=404
+```
+
+DNS rebinding, private resolution, redirects and response bounds are covered
+by `packages/jobs/src/egress.test.ts`, and the production-mode e2e
+(`e2e:webhook-management-production-egress`) renders the dashboard page and
+checks that private and metadata destinations are refused.
 
 The command prints the full JSON evidence, including the actual CSV header and
 row, webhook retry error, and MCP structured content.

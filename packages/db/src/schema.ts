@@ -2730,6 +2730,17 @@ export const webhookEndpoints = pgTable(
     teamId: uuid("team_id").notNull(),
     url: text("url").notNull(),
     secretEncrypted: text("secret_encrypted").notNull(),
+    // The secret replaced by the last rotation. Deliveries are signed with
+    // both until it expires, so consumers can switch without dropping events.
+    previousSecretEncrypted: text("previous_secret_encrypted"),
+    previousSecretExpiresAt: timestamp("previous_secret_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    secretRotatedAt: timestamp("secret_rotated_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     events: text("events").array().notNull(),
     active: boolean("active").default(true).notNull(),
     createdBy: uuid("created_by").notNull(),

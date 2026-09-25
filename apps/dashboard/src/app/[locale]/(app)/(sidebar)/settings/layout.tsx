@@ -27,6 +27,7 @@ export default async function Layout({
     ...(permissions?.manageIntegrations
       ? [
           { path: "/settings/accounting", label: "Accounting" },
+          { path: "/settings/webhooks", label: "Webhooks" },
           { path: "/settings/developer", label: "Developer" },
         ]
       : []),

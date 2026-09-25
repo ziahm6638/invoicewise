@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { Database } from "@invoicewise/db/client";
 import {
   type TeamRole,
+  WEBHOOK_PAYLOAD_VERSION,
+  WEBHOOK_TEST_EVENT,
   type UpdateInboxWithProcessedDataParams,
   type WebhookEndpointForDelivery,
   type WebhookEvent,
@@ -11,8 +13,10 @@ import {
   failStalledAccountingPost,
   failWebhookDelivery,
   getActiveAccountingConnection,
+  getActiveWebhookEndpointForDelivery,
   getInvoiceForDeliveryUpdate,
   getRevisionWebhookDeliveries,
+  getWebhookDeliveryForUpdate,
   getWebhookEndpointsForEvent,
   listStalledAccountingPosts,
   listStalledWebhookDeliveries,
@@ -113,6 +117,7 @@ export async function scheduleInvoiceDeliveries(
   const event = (type: WebhookEvent["type"]): WebhookEvent => ({
     id: logicalEventId(invoice.id, revision, type),
     type,
+    version: WEBHOOK_PAYLOAD_VERSION,
     createdAt,
     teamId,
     invoiceId: invoice.id,
@@ -356,29 +361,20 @@ export async function retryInvoiceDelivery(
       if (delivery.status !== "failed" && delivery.status !== "cancelled") {
         continue;
       }
-      if (!delivery.endpointActive || !delivery.eventId) {
+      if (
+        !delivery.endpointActive ||
+        !delivery.eventId ||
+        delivery.payloadExpired
+      ) {
         skipped += 1;
         continue;
       }
-      await requeueWebhookDelivery(executor, {
+      await redriveWebhookDelivery(executor, {
         deliveryId: delivery.id,
+        eventId: delivery.eventId,
+        endpointId: delivery.endpointId,
         teamId: input.teamId,
       });
-      const key = workflowKey.webhook(delivery.eventId, delivery.endpointId);
-      const restarted = await requeueFinishedWorkflowJob(executor, {
-        name: "deliver-webhook",
-        idempotencyKey: key,
-        teamId: input.teamId,
-      });
-      if (!restarted) {
-        await enqueueWorkflowJob(executor, {
-          name: "deliver-webhook",
-          teamId: input.teamId,
-          payload: { deliveryId: delivery.id, teamId: input.teamId },
-          idempotencyKey: key,
-          maxAttempts: WEBHOOK_MAX_ATTEMPTS,
-        });
-      }
       requeued += 1;
     }
 
@@ -395,6 +391,119 @@ export async function retryInvoiceDelivery(
         permitted: roleAtLeast(input.teamRole, "admin"),
       }),
     };
+  });
+}
+
+/**
+ * Moves one settled webhook delivery back to queued and restarts its job
+ * under the original key, so the retry keeps the delivery row, its attempt
+ * history and the logical event id.
+ */
+async function redriveWebhookDelivery(
+  db: Database,
+  delivery: {
+    deliveryId: string;
+    eventId: string;
+    endpointId: string;
+    teamId: string;
+  },
+) {
+  await requeueWebhookDelivery(db, {
+    deliveryId: delivery.deliveryId,
+    teamId: delivery.teamId,
+  });
+  const key = workflowKey.webhook(delivery.eventId, delivery.endpointId);
+  const restarted = await requeueFinishedWorkflowJob(db, {
+    name: "deliver-webhook",
+    idempotencyKey: key,
+    teamId: delivery.teamId,
+  });
+  if (!restarted) {
+    await enqueueWorkflowJob(db, {
+      name: "deliver-webhook",
+      teamId: delivery.teamId,
+      payload: { deliveryId: delivery.deliveryId, teamId: delivery.teamId },
+      idempotencyKey: key,
+      maxAttempts: WEBHOOK_MAX_ATTEMPTS,
+    });
+  }
+}
+
+export type WebhookRedeliveryResult =
+  | { status: "requeued"; deliveryId: string; eventId: string }
+  | {
+      status:
+        | "not_found"
+        | "not_failed"
+        | "endpoint_disabled"
+        | "payload_expired";
+    };
+
+/**
+ * Explicit redelivery of one failed webhook delivery of the workspace
+ * (optionally of one endpoint). The same delivery row and logical event id
+ * are sent again, so a consumer that already processed the event
+ * deduplicates it. Only a failed delivery on an active endpoint whose payload
+ * retention has not yet emptied is redriven:
+ * delivered, in-flight and cancelled deliveries are left alone. If it fails
+ * again, the failure is announced as a new `delivery.failed` event.
+ */
+export async function redeliverWebhook(
+  db: Database,
+  input: { deliveryId: string; teamId: string; endpointId?: string },
+): Promise<WebhookRedeliveryResult> {
+  return db.transaction(async (tx) => {
+    const executor = asDatabase(tx);
+    const delivery = await getWebhookDeliveryForUpdate(executor, input);
+    if (!delivery || !delivery.eventId) return { status: "not_found" };
+    if (delivery.status !== "failed") return { status: "not_failed" };
+    if (!delivery.endpointActive) return { status: "endpoint_disabled" };
+    if (delivery.payloadExpired) return { status: "payload_expired" };
+    await redriveWebhookDelivery(executor, {
+      deliveryId: delivery.id,
+      eventId: delivery.eventId,
+      endpointId: delivery.endpointId,
+      teamId: input.teamId,
+    });
+    return {
+      status: "requeued",
+      deliveryId: delivery.id,
+      eventId: delivery.eventId,
+    };
+  });
+}
+
+/**
+ * Queues a synthetic `webhook.test` event to one active endpoint of the
+ * workspace, through the same ledger, signing and transport as real events.
+ * Each request is a new event; its failure is visible on the endpoint but is
+ * never announced as `delivery.failed`. Returns null for an unknown or
+ * disabled endpoint.
+ */
+export async function sendWebhookTestEvent(
+  db: Database,
+  input: { endpointId: string; teamId: string },
+) {
+  return db.transaction(async (tx) => {
+    const executor = asDatabase(tx);
+    const endpoint = await getActiveWebhookEndpointForDelivery(executor, {
+      id: input.endpointId,
+      teamId: input.teamId,
+    });
+    if (!endpoint) return null;
+    const event: WebhookEvent = {
+      id: crypto.randomUUID(),
+      type: WEBHOOK_TEST_EVENT,
+      version: WEBHOOK_PAYLOAD_VERSION,
+      createdAt: new Date().toISOString(),
+      teamId: input.teamId,
+      data: {
+        endpointId: endpoint.id,
+        message: "Test event from InvoiceWise. No invoice changed.",
+      },
+    };
+    const delivery = await scheduleWebhookDelivery(executor, event, endpoint);
+    return { deliveryId: delivery.id, eventId: event.id };
   });
 }
 

@@ -463,6 +463,55 @@ export async function runProductionE2E(v: Verification, context: E2EContext) {
     return `preview ${metadata.width}x${metadata.height}; proxy bytes ${proxiedHash.slice(0, 12)} match the original; cross-tenant reads denied`;
   });
 
+  await v.runCheck("e2e:webhook-management-production-egress", async () => {
+    if (!tenantA || !tenantB) throw new Error("verification tenants missing");
+    // Production refuses private, loopback, link-local and metadata
+    // destinations at registration, whatever form the address takes.
+    const refused: string[] = [];
+    for (const url of [
+      "http://localhost:3014/hook",
+      "https://127.0.0.1/hook",
+      "https://169.254.169.254/latest/meta-data",
+      "https://[::1]/hook",
+      "https://[::ffff:169.254.169.254]/hook",
+      "https://[fd00:ec2::254]/hook",
+      "https://2130706433/hook",
+      "https://metadata.google.internal/computeMetadata",
+    ]) {
+      const created = await trpcMutation(
+        tenantA,
+        "webhooks.create",
+        { url, events: ["invoice.processed"] },
+        API_ORIGIN,
+        APP_ORIGIN,
+      );
+      if (created.status === 200) {
+        throw new Error(`production accepted a private webhook URL ${url}`);
+      }
+      refused.push(`${url}=${created.status}`);
+    }
+    const listed = await trpcQuery(
+      tenantA,
+      "webhooks.list",
+      undefined,
+      API_ORIGIN,
+      APP_ORIGIN,
+    );
+    if (listed.status !== 200 || !listed.text.includes("invoice.processed")) {
+      throw new Error(`webhooks.list failed: ${listed.status} ${listed.text}`);
+    }
+    const page = await fetch(`${APP_ORIGIN}/settings/webhooks`, {
+      headers: { cookie: tenantA.cookie },
+    });
+    const html = await page.text();
+    if (page.status !== 200 || !html.includes("Add endpoint")) {
+      throw new Error(
+        `dashboard webhooks page did not render: ${page.status} ${html.slice(0, 200)}`,
+      );
+    }
+    return `owner dashboard /settings/webhooks rendered; production refused ${refused.length} private destinations (${refused.join(", ")})`;
+  });
+
   await v.runCheck("e2e:sole-owner-account-deletion", async () => {
     const password = "VerifyPassword123!";
     // Sign-up provisions exactly one workspace this tenant solely owns.

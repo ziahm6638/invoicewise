@@ -26,12 +26,28 @@ export const WEBHOOK_EVENTS = [
   "delivery.failed",
 ] as const;
 
-export type WebhookEventName = (typeof WEBHOOK_EVENTS)[number];
+/** Sent only on request to one endpoint, whatever events it subscribes to. */
+export const WEBHOOK_TEST_EVENT = "webhook.test";
+
+export type WebhookEventName =
+  | (typeof WEBHOOK_EVENTS)[number]
+  | typeof WEBHOOK_TEST_EVENT;
+
+/**
+ * Payload schema version, sent in the body and the
+ * `invoicewise-webhook-version` header. A breaking payload change gets a new
+ * version; deliveries stored before versioning had this same shape.
+ */
+export const WEBHOOK_PAYLOAD_VERSION = 1;
+
+/** How long a rotated-out secret keeps signing deliveries by default. */
+export const WEBHOOK_SECRET_OVERLAP_MS = 24 * 60 * 60 * 1000;
 
 export type WebhookEvent = {
   /** Logical event id: identical for every endpoint and every redelivery. */
   id: string;
   type: WebhookEventName;
+  version?: number;
   createdAt: string;
   teamId: string;
   invoiceId?: string;
@@ -39,6 +55,13 @@ export type WebhookEvent = {
   revision?: number;
   data: Record<string, unknown>;
 };
+
+/**
+ * True once the retention job emptied the delivery's payload
+ * (docs/data-lifecycle.md): the event can no longer be sent again.
+ */
+const payloadExpired = () =>
+  sql<boolean>`${webhookDeliveries.payload} = '{}'::jsonb`;
 
 /** Any executor a query can run on: the pool or an open transaction. */
 type Executor = Pick<Database, "select" | "insert" | "update">;
@@ -51,6 +74,8 @@ export type WebhookEndpointForDelivery = {
   events: string[];
 };
 
+const generateWebhookSecret = () => `whsec_${randomBytes(32).toString("hex")}`;
+
 export async function createWebhookEndpoint(
   db: Database,
   input: {
@@ -60,7 +85,10 @@ export async function createWebhookEndpoint(
     events: WebhookEventName[];
   },
 ) {
-  const secret = `whsec_${randomBytes(32).toString("hex")}`;
+  const secret = generateWebhookSecret();
+  const secretEncrypted = encrypt(secret);
+  // Registering the URL of a disabled endpoint enables it again with a new
+  // secret and the chosen events; an active duplicate returns nothing.
   const [endpoint] = await db
     .insert(webhookEndpoints)
     .values({
@@ -68,7 +96,21 @@ export async function createWebhookEndpoint(
       createdBy: input.userId,
       url: input.url,
       events: input.events,
-      secretEncrypted: encrypt(secret),
+      secretEncrypted,
+    })
+    .onConflictDoUpdate({
+      target: [webhookEndpoints.teamId, webhookEndpoints.url],
+      set: {
+        active: true,
+        createdBy: input.userId,
+        events: input.events,
+        secretEncrypted,
+        previousSecretEncrypted: null,
+        previousSecretExpiresAt: null,
+        secretRotatedAt: null,
+        updatedAt: sql`now()`,
+      },
+      setWhere: sql`${webhookEndpoints.active} = false`,
     })
     .returning({
       id: webhookEndpoints.id,
@@ -81,16 +123,23 @@ export async function createWebhookEndpoint(
   return endpoint ? { ...endpoint, secret } : undefined;
 }
 
+const endpointColumns = {
+  id: webhookEndpoints.id,
+  url: webhookEndpoints.url,
+  events: webhookEndpoints.events,
+  active: webhookEndpoints.active,
+  secretRotatedAt: webhookEndpoints.secretRotatedAt,
+  // When the previous secret stops signing deliveries; null once expired.
+  previousSecretExpiresAt: sql<
+    string | null
+  >`case when ${webhookEndpoints.previousSecretExpiresAt} > now() then ${webhookEndpoints.previousSecretExpiresAt} end`,
+  createdAt: webhookEndpoints.createdAt,
+  updatedAt: webhookEndpoints.updatedAt,
+};
+
 export function getWebhookEndpoints(db: Database, teamId: string) {
   return db
-    .select({
-      id: webhookEndpoints.id,
-      url: webhookEndpoints.url,
-      events: webhookEndpoints.events,
-      active: webhookEndpoints.active,
-      createdAt: webhookEndpoints.createdAt,
-      updatedAt: webhookEndpoints.updatedAt,
-    })
+    .select(endpointColumns)
     .from(webhookEndpoints)
     .where(eq(webhookEndpoints.teamId, teamId))
     .orderBy(desc(webhookEndpoints.createdAt));
@@ -101,14 +150,7 @@ export async function getWebhookEndpointById(
   input: { id: string; teamId: string },
 ) {
   const [endpoint] = await db
-    .select({
-      id: webhookEndpoints.id,
-      url: webhookEndpoints.url,
-      events: webhookEndpoints.events,
-      active: webhookEndpoints.active,
-      createdAt: webhookEndpoints.createdAt,
-      updatedAt: webhookEndpoints.updatedAt,
-    })
+    .select(endpointColumns)
     .from(webhookEndpoints)
     .where(
       and(
@@ -134,6 +176,92 @@ export async function disableWebhookEndpoint(
       ),
     )
     .returning({ id: webhookEndpoints.id });
+  return endpoint;
+}
+
+/** The endpoints a workspace may have registered at once. */
+export const MAX_WEBHOOK_ENDPOINTS = 20;
+
+export async function countActiveWebhookEndpoints(
+  db: Database,
+  teamId: string,
+) {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(webhookEndpoints)
+    .where(
+      and(
+        eq(webhookEndpoints.teamId, teamId),
+        eq(webhookEndpoints.active, true),
+      ),
+    );
+  return row?.count ?? 0;
+}
+
+/**
+ * Replaces the endpoint's signing secret and returns the new one, once. By
+ * default the replaced secret keeps signing deliveries (alongside the new
+ * one) for `overlapMs`, so a consumer can deploy the new secret without
+ * rejecting events; `overlapMs: 0` revokes it at once, for a leaked secret.
+ * Rotating again inside the overlap replaces the previous secret. Only an
+ * active endpoint can be rotated.
+ */
+export async function rotateWebhookSecret(
+  db: Database,
+  input: { id: string; teamId: string; overlapMs: number },
+) {
+  const secret = generateWebhookSecret();
+  const overlapMs = Math.max(0, Math.floor(input.overlapMs));
+  const [endpoint] = await db
+    .update(webhookEndpoints)
+    .set({
+      secretEncrypted: encrypt(secret),
+      previousSecretEncrypted:
+        overlapMs > 0 ? sql`${webhookEndpoints.secretEncrypted}` : null,
+      previousSecretExpiresAt:
+        overlapMs > 0
+          ? sql`now() + ${overlapMs}::integer * interval '1 millisecond'`
+          : null,
+      secretRotatedAt: sql`now()`,
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(webhookEndpoints.id, input.id),
+        eq(webhookEndpoints.teamId, input.teamId),
+        eq(webhookEndpoints.active, true),
+      ),
+    )
+    .returning({
+      id: webhookEndpoints.id,
+      secretRotatedAt: webhookEndpoints.secretRotatedAt,
+      previousSecretExpiresAt: webhookEndpoints.previousSecretExpiresAt,
+    });
+  return endpoint ? { ...endpoint, secret } : undefined;
+}
+
+/** An active endpoint of the workspace, with what delivery needs. */
+export async function getActiveWebhookEndpointForDelivery(
+  db: Executor,
+  input: { id: string; teamId: string },
+): Promise<WebhookEndpointForDelivery | undefined> {
+  const [endpoint] = await db
+    .select({
+      id: webhookEndpoints.id,
+      teamId: webhookEndpoints.teamId,
+      url: webhookEndpoints.url,
+      secretEncrypted: webhookEndpoints.secretEncrypted,
+      events: webhookEndpoints.events,
+    })
+    .from(webhookEndpoints)
+    .where(
+      and(
+        eq(webhookEndpoints.id, input.id),
+        eq(webhookEndpoints.teamId, input.teamId),
+        eq(webhookEndpoints.active, true),
+      ),
+    )
+    .limit(1);
   return endpoint;
 }
 
@@ -214,6 +342,10 @@ export async function getWebhookDelivery(
       endpointId: webhookDeliveries.endpointId,
       endpointUrl: webhookEndpoints.url,
       endpointSecretEncrypted: webhookEndpoints.secretEncrypted,
+      // Null once the overlap after a rotation has ended.
+      endpointPreviousSecretEncrypted: sql<
+        string | null
+      >`case when ${webhookEndpoints.previousSecretExpiresAt} > now() then ${webhookEndpoints.previousSecretEncrypted} end`,
       endpointActive: webhookEndpoints.active,
       event: webhookDeliveries.event,
       eventId: webhookDeliveries.eventId,
@@ -445,6 +577,7 @@ export function getRevisionWebhookDeliveries(
       event: webhookDeliveries.event,
       eventId: webhookDeliveries.eventId,
       status: webhookDeliveries.status,
+      payloadExpired: payloadExpired(),
     })
     .from(webhookDeliveries)
     .innerJoin(
@@ -505,9 +638,80 @@ export function listStalledWebhookDeliveries(
     .limit(input.limit);
 }
 
+/**
+ * A workspace endpoint's most recent deliveries, newest first, for
+ * inspection and explicit redelivery.
+ */
+export function getWebhookEndpointDeliveries(
+  db: Database,
+  input: { endpointId: string; teamId: string; limit?: number },
+) {
+  return db
+    .select({
+      id: webhookDeliveries.id,
+      endpointId: webhookDeliveries.endpointId,
+      event: webhookDeliveries.event,
+      eventId: webhookDeliveries.eventId,
+      invoiceId: webhookDeliveries.invoiceId,
+      revision: webhookDeliveries.revision,
+      status: webhookDeliveries.status,
+      attempts: webhookDeliveries.attempts,
+      lastError: webhookDeliveries.lastError,
+      retryable: webhookDeliveries.retryable,
+      deliveredAt: webhookDeliveries.deliveredAt,
+      createdAt: webhookDeliveries.createdAt,
+      updatedAt: webhookDeliveries.updatedAt,
+    })
+    .from(webhookDeliveries)
+    .where(
+      and(
+        eq(webhookDeliveries.endpointId, input.endpointId),
+        eq(webhookDeliveries.teamId, input.teamId),
+      ),
+    )
+    .orderBy(desc(webhookDeliveries.createdAt))
+    .limit(Math.min(Math.max(input.limit ?? 50, 1), 200));
+}
+
+/**
+ * A delivery locked for an explicit redelivery, scoped to the workspace, with
+ * whether its endpoint is still active.
+ */
+export async function getWebhookDeliveryForUpdate(
+  db: Executor,
+  input: { deliveryId: string; teamId: string; endpointId?: string },
+) {
+  const conditions = [
+    eq(webhookDeliveries.id, input.deliveryId),
+    eq(webhookDeliveries.teamId, input.teamId),
+  ];
+  if (input.endpointId) {
+    conditions.push(eq(webhookDeliveries.endpointId, input.endpointId));
+  }
+  const [delivery] = await db
+    .select({
+      id: webhookDeliveries.id,
+      endpointId: webhookDeliveries.endpointId,
+      endpointActive: webhookEndpoints.active,
+      event: webhookDeliveries.event,
+      eventId: webhookDeliveries.eventId,
+      status: webhookDeliveries.status,
+      payloadExpired: payloadExpired(),
+    })
+    .from(webhookDeliveries)
+    .innerJoin(
+      webhookEndpoints,
+      eq(webhookDeliveries.endpointId, webhookEndpoints.id),
+    )
+    .where(and(...conditions))
+    .limit(1)
+    .for("update", { of: webhookDeliveries });
+  return delivery;
+}
+
 export function getWebhookAttemptsByEndpoint(
   db: Database,
-  input: { endpointId: string; teamId: string },
+  input: { endpointId: string; teamId: string; deliveryId?: string },
 ) {
   return db
     .select({
@@ -530,9 +734,13 @@ export function getWebhookAttemptsByEndpoint(
       and(
         eq(webhookDeliveryAttempts.endpointId, input.endpointId),
         eq(webhookDeliveryAttempts.teamId, input.teamId),
+        input.deliveryId
+          ? eq(webhookDeliveryAttempts.deliveryId, input.deliveryId)
+          : undefined,
       ),
     )
-    .orderBy(desc(webhookDeliveryAttempts.createdAt));
+    .orderBy(desc(webhookDeliveryAttempts.createdAt))
+    .limit(200);
 }
 
 export function getInvoiceDeliveryStatus(

@@ -244,6 +244,89 @@ describe("Effect workflow runner", () => {
     expect(released).toEqual([slow.id]);
   });
 
+  test("slow webhook deliveries never hold more than half the slots", async () => {
+    // A flood of hanging webhook endpoints must leave slots for processing.
+    const webhooks = Array.from({ length: 8 }, (_, index) => ({
+      ...job,
+      id: `00000000-0000-0000-0000-0000000001${index.toString().padStart(2, "0")}`,
+      name: "deliver-webhook",
+    }));
+    const processing = { ...job, id: "00000000-0000-0000-0000-0000000002ff" };
+    const pending = [...webhooks, processing];
+    const webhookLimits: number[] = [];
+    const processed = Promise.withResolvers<void>();
+    const repository = Layer.succeed(WorkflowRepository, {
+      claim: (_workerId, limit, _leaseMs, _excluded, caps) =>
+        Effect.sync(() => {
+          const webhookLimit =
+            caps?.find(({ name }) => name === "deliver-webhook")?.limit ??
+            limit;
+          webhookLimits.push(webhookLimit);
+          const claimed: WorkflowJob[] = [];
+          let claimedWebhooks = 0;
+          for (const candidate of [...pending]) {
+            if (claimed.length >= limit) break;
+            if (candidate.name === "deliver-webhook") {
+              if (claimedWebhooks >= webhookLimit) continue;
+              claimedWebhooks += 1;
+            }
+            claimed.push(candidate);
+            pending.splice(pending.indexOf(candidate), 1);
+          }
+          return claimed;
+        }),
+      heartbeat: () => Effect.void,
+      complete: (id) =>
+        Effect.sync(() => {
+          if (id === processing.id) processed.resolve();
+        }),
+      retry: () => Effect.void,
+      fail: () => Effect.void,
+      release: () => Effect.void,
+      providerCallsSince: () => Effect.succeed(0),
+    });
+    let runningWebhooks = 0;
+    let maxRunningWebhooks = 0;
+    const handler = Layer.succeed(WorkflowHandler, {
+      handle: (claimed) =>
+        claimed.name === "deliver-webhook"
+          ? Effect.sync(() => {
+              runningWebhooks += 1;
+              maxRunningWebhooks = Math.max(
+                maxRunningWebhooks,
+                runningWebhooks,
+              );
+            }).pipe(Effect.zipRight(Effect.never))
+          : Effect.succeed({}),
+    });
+    const fourSlots = Layer.succeed(WorkflowRunnerSettings, {
+      workerId: "test-worker",
+      concurrency: 4,
+      pollMs: 5,
+      leaseMs: 60_000,
+      retryBaseMs: 100,
+      retryMaxMs: 1000,
+    });
+
+    const fiber = Effect.runFork(
+      runWorkflowSlots.pipe(
+        Effect.provide(Layer.mergeAll(repository, handler, fourSlots)),
+        Effect.provide(Logger.minimumLogLevel(LogLevel.None)),
+      ),
+    );
+    const outcome = await Promise.race([
+      processed.promise.then(() => "processed"),
+      Bun.sleep(2000).then(() => "starved"),
+    ]);
+    await Bun.sleep(50);
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(outcome).toBe("processed");
+    expect(maxRunningWebhooks).toBe(2);
+    expect(webhookLimits[0]).toBe(2);
+    expect(webhookLimits.at(-1)).toBe(0);
+  });
+
   test("logs a dying job and keeps claiming further jobs", async () => {
     const dying = { ...job, id: "00000000-0000-0000-0000-00000000000c" };
     const next = { ...job, id: "00000000-0000-0000-0000-00000000000d" };

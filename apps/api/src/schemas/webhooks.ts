@@ -19,3 +19,17 @@ export const createWebhookEndpointSchema = z.object({
 });
 
 export const webhookEndpointIdSchema = z.object({ id: z.string().uuid() });
+
+export const rotateWebhookSecretSchema = z.object({
+  /** Revoke the previous secret immediately (for a leaked secret). */
+  revokePrevious: z.boolean().optional(),
+});
+
+export const webhookDeliveryParamsSchema = z.object({
+  id: z.string().uuid(),
+  deliveryId: z.string().uuid(),
+});
+
+export const webhookAttemptsQuerySchema = z.object({
+  deliveryId: z.string().uuid().optional(),
+});

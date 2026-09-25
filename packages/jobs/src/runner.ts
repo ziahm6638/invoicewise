@@ -53,6 +53,7 @@ export class WorkflowRepository extends Context.Tag(
       limit: number,
       leaseMs: number,
       excludeNames?: readonly string[],
+      caps?: readonly { name: string; limit: number }[],
     ) => Effect.Effect<WorkflowJob[], WorkflowQueueError>;
     /** Returns a job this worker still holds to the queue (shutdown drain). */
     readonly release: (
@@ -143,10 +144,17 @@ export const WorkflowRepositoryLive = Layer.effect(
         limit: number,
         leaseMs: number,
         excludeNames?: readonly string[],
+        caps?: readonly { name: string; limit: number }[],
       ) =>
         queueAttempt(
           () =>
-            claimWorkflowJobs(db, { workerId, limit, leaseMs, excludeNames }),
+            claimWorkflowJobs(db, {
+              workerId,
+              limit,
+              leaseMs,
+              excludeNames,
+              caps,
+            }),
           "Unable to claim workflows",
         ),
       release: (id: string, workerId: string) =>
@@ -437,7 +445,17 @@ const providerBudgetExclusions = Effect.gen(function* () {
   return exhausted ? PROVIDER_BUDGETED_WORKFLOWS : ([] as readonly string[]);
 });
 
-const claimDueWorkflows = (limit: number) =>
+/**
+ * Webhook deliveries wait on customer endpoints, so at most half of the
+ * runner's slots (at least one) deliver webhooks at once: a slow or hostile
+ * endpoint, already bounded by the transport deadline, cannot starve document
+ * processing.
+ */
+export const WEBHOOK_WORKFLOW = "deliver-webhook";
+export const webhookSlots = (concurrency: number) =>
+  Math.max(1, Math.floor(concurrency / 2));
+
+const claimDueWorkflows = (limit: number, webhookLimit: number) =>
   Effect.gen(function* () {
     const repository = yield* WorkflowRepository;
     const settings = yield* WorkflowRunnerSettings;
@@ -447,6 +465,7 @@ const claimDueWorkflows = (limit: number) =>
       limit,
       settings.leaseMs,
       excludeNames,
+      [{ name: WEBHOOK_WORKFLOW, limit: webhookLimit }],
     );
   });
 
@@ -479,7 +498,10 @@ const runLoggedWorkflow = (job: WorkflowJob) =>
 /** Claims one batch of due jobs and runs it to completion (tests, verification). */
 export const runWorkflowBatch = Effect.gen(function* () {
   const settings = yield* WorkflowRunnerSettings;
-  const jobs = yield* claimDueWorkflows(settings.concurrency);
+  const jobs = yield* claimDueWorkflows(
+    settings.concurrency,
+    webhookSlots(settings.concurrency),
+  );
   yield* Effect.forEach(jobs, runLoggedWorkflow, {
     concurrency: settings.concurrency,
     discard: true,
@@ -502,13 +524,17 @@ export const runWorkflowSlots = Effect.scoped(
     const running = yield* FiberSet.make<void, never>();
     const freed = yield* Queue.sliding<void>(1);
     let busy = 0;
+    let webhooksBusy = 0;
     const idle = Effect.race(Queue.take(freed), Effect.sleep(settings.pollMs));
 
     yield* Effect.forever(
       Effect.gen(function* () {
         const free = settings.concurrency - busy;
         if (free <= 0) return yield* idle;
-        const jobs = yield* claimDueWorkflows(free).pipe(
+        const jobs = yield* claimDueWorkflows(
+          free,
+          Math.max(0, webhookSlots(settings.concurrency) - webhooksBusy),
+        ).pipe(
           Effect.catchAll((error) =>
             Effect.logError("workflow_queue_poll_failed").pipe(
               Effect.annotateLogs({
@@ -520,13 +546,16 @@ export const runWorkflowSlots = Effect.scoped(
           ),
         );
         for (const job of jobs) {
+          const webhook = job.name === WEBHOOK_WORKFLOW;
           busy += 1;
+          if (webhook) webhooksBusy += 1;
           yield* FiberSet.run(
             running,
             runLoggedWorkflow(job).pipe(
               Effect.ensuring(
                 Effect.suspend(() => {
                   busy -= 1;
+                  if (webhook) webhooksBusy -= 1;
                   return Queue.offer(freed, undefined);
                 }),
               ),

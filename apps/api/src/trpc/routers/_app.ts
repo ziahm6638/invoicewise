@@ -12,6 +12,7 @@ import { questionsRouter } from "./questions";
 import { suppliersRouter } from "./suppliers";
 import { teamRouter } from "./team";
 import { userRouter } from "./user";
+import { webhooksRouter } from "./webhooks";
 
 export const appRouter = createTRPCRouter({
   accounting: accountingRouter,
@@ -26,6 +27,7 @@ export const appRouter = createTRPCRouter({
   apiKeys: apiKeysRouter,
   questions: questionsRouter,
   suppliers: suppliersRouter,
+  webhooks: webhooksRouter,
 });
 
 // export type definition of API
