@@ -47,9 +47,11 @@ export function DeleteAccountDialog({ children }: { children: ReactNode }) {
     {},
   );
 
-  const { data: soleOwned, isLoading } = useQuery({
+  const { data: soleOwned, isFetching: isLoading } = useQuery({
     ...trpc.user.soleOwnedWorkspaces.queryOptions(),
     enabled: open,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
   });
 
   const shared = soleOwned?.filter((workspace) => workspace.shared) ?? [];
