@@ -396,6 +396,38 @@ const currentReconciliation = () =>
     where r.id = ${inbox.reconciliationId}
   )`;
 
+/**
+ * The current reconciliation as the public API shows it to an `inbox.read`
+ * credential: its status, the codes of its findings, the revision and time,
+ * never the sources' amounts, terms or references.
+ */
+const reconciliationSummary = () =>
+  sql<{
+    status: string;
+    discrepancies: string[];
+    unresolved: string[];
+    revision: number;
+    reconciledAt: string;
+  } | null>`(
+    select jsonb_build_object(
+      'status', r.status,
+      'discrepancies', coalesce((
+        select jsonb_agg(d ->> 'code') from jsonb_array_elements(
+          case when jsonb_typeof(r.result -> 'discrepancies') = 'array'
+            then r.result -> 'discrepancies' else '[]'::jsonb end) d
+      ), '[]'::jsonb),
+      'unresolved', coalesce((
+        select jsonb_agg(u ->> 'code') from jsonb_array_elements(
+          case when jsonb_typeof(r.result -> 'unresolved') = 'array'
+            then r.result -> 'unresolved' else '[]'::jsonb end) u
+      ), '[]'::jsonb),
+      'revision', r.processing_revision,
+      'reconciledAt', r.created_at
+    )
+    from ${invoiceReconciliations} r
+    where r.id = ${inbox.reconciliationId}
+  )`;
+
 const inboundEmailSource = {
   id: inboundEmails.id,
   messageId: inboundEmails.messageId,
@@ -756,6 +788,7 @@ const publicInvoiceColumns = () => ({
   accountingProvider: inbox.accountingProvider,
   accountingPostStatus: inbox.accountingPostStatus,
   accountingProviderId: inbox.accountingProviderId,
+  reconciliation: reconciliationSummary(),
 });
 
 /** Position of the last record of a page: its creation time and id. */

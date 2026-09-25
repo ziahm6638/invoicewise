@@ -132,6 +132,7 @@ seconds; most documents finish within a minute. A processed invoice carries:
 | `judgments` | Answers to the workspace's questions (below) |
 | `delivery` | The current revision's destinations: `state` (`none`, `held`, `dismissed`, `pending`, `delivered`, `failed`, `cancelled`) and counts; `held` means the [delivery rules](delivery.md#delivery-rules) withheld it for an owner or admin |
 | `accounting` | The accounting post (`provider`, `status`, `providerId`) or null |
+| `reconciliation` | The current [reconciliation](reconciliation.md) with the invoice's authorization sources, or null until reconciled: `status` (`reconciled`, `discrepancy`, `unresolved`, `unmatched`), the codes of its `discrepancies` and `unresolved` findings, the `revision` it is of and `reconciledAt`. The sources' amounts, balances and evidence are read with the `sources.read` scope from `GET /invoices/{id}` and `GET /authorization-sources/{id}/balance` |
 | `corrected`, `questionRerun` | Whether someone corrected it; a queued or failed question rerun |
 
 ## List, filter and page

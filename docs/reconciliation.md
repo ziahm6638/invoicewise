@@ -198,6 +198,11 @@ invoice.
   invoice's counted amount or why it is not counted.
   `GET /authorization-sources/:id/invoices` adds each invoice's
   `reconciliationStatus` and `consumedAmount`.
+- **`/v1` and MCP.** `GET /v1/invoices` and `GET /v1/invoices/{id}` (and the
+  MCP `get_invoice`/`list_invoices` built on them) return `reconciliation`:
+  `{ "status", "discrepancies", "unresolved", "revision", "reconciledAt" }`
+  with the findings' codes, or null. The sources' amounts and balances stay
+  behind `sources.read` on the routes above.
 - **Webhooks.** `invoice.reconciled` is sent for every recorded
   reconciliation to endpoints subscribed to it; `data` is
   `{ "invoiceId", "reconciliation" }` as REST returns it. A revision decided
@@ -255,9 +260,9 @@ bill 20 more under v2              reconciled      deliver                      
 
 ## Not yet covered
 
-- The versioned `/v1` API and the MCP tools built on it do not carry the
-  match or its reconciliation yet; read them from `GET /invoices/:id`.
-
+- The versioned `/v1` API carries the reconciliation's status and finding
+  codes only; its amounts, the match's evidence and a source's balance are
+  read from the unversioned routes with `sources.read`.
 - A credit note that credits a matched invoice but prints no source
   reference is matched (and so counted) on its own evidence only; it does not
   inherit the credited invoice's sources.

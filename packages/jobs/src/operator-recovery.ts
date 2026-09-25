@@ -234,6 +234,33 @@ async function retryFailedJob(
         },
       };
     }
+    case "reconcile-invoice": {
+      // Re-runs the reconciliation of the same match decision at the same
+      // revision; a newer reconcile job for the invoice supersedes this one.
+      const invoiceId = text(subject.invoiceId);
+      const matchId = text(subject.matchId);
+      const revision =
+        typeof subject.revision === "number" ? subject.revision : null;
+      if (!teamId || !invoiceId || !matchId || revision === null) {
+        return refused("The job names no reconciliation");
+      }
+      const restarted = await requeueFinishedWorkflowJob(db, {
+        name: "reconcile-invoice",
+        idempotencyKey: workflowKey.reconcile(
+          teamId,
+          invoiceId,
+          matchId,
+          revision,
+        ),
+        teamId,
+      });
+      if (!restarted) return refused("The reconciliation job is not finished");
+      return {
+        status: "requeued",
+        action: "reconcile",
+        detail: { invoiceId, matchId, revision, jobId: restarted.id },
+      };
+    }
     case "process-inbound-email": {
       const inboundEmailId = text(subject.inboundEmailId);
       if (!teamId || !inboundEmailId) {

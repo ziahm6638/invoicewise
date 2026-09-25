@@ -14,6 +14,7 @@ import {
   encodeCursor,
   idempotencyReference,
   isoTimestamp,
+  toInvoice,
 } from "./public-api";
 import {
   TRUSTED_CALLER_HEADERS,
@@ -93,6 +94,7 @@ const row = (overrides: Partial<PublicInvoiceRow> = {}): PublicInvoiceRow => ({
   accountingProvider: null,
   accountingPostStatus: null,
   accountingProviderId: null,
+  reconciliation: null,
   ...overrides,
 });
 
@@ -497,6 +499,48 @@ describe("public API v1", () => {
           line.includes(",rerun,run-1,") && line.endsWith(",answered,false"),
       ),
     ).toBe(true);
+  });
+});
+
+describe("reconciliation summary", () => {
+  test("is null until reconciled", () => {
+    expect(toInvoice(row()).reconciliation).toBeNull();
+  });
+
+  test("carries the status and finding codes, never the sources' amounts", () => {
+    const invoice = toInvoice(
+      row({
+        reconciliation: {
+          status: "discrepancy",
+          discrepancies: ["over_authorized_total", "rate_above_authorized"],
+          unresolved: [],
+          revision: 2,
+          reconciledAt: "2026-09-25 10:05:00.5+00",
+        },
+      }),
+    );
+    expect(invoice.reconciliation).toEqual({
+      status: "discrepancy",
+      discrepancies: ["over_authorized_total", "rate_above_authorized"],
+      unresolved: [],
+      revision: 2,
+      reconciledAt: "2026-09-25T10:05:00.500Z",
+    });
+  });
+
+  test("an unknown status is not published", () => {
+    const invoice = toInvoice(
+      row({
+        reconciliation: {
+          status: "approved",
+          discrepancies: [],
+          unresolved: [],
+          revision: 1,
+          reconciledAt: "2026-09-25T10:05:00.000Z",
+        },
+      }),
+    );
+    expect(invoice.reconciliation).toBeNull();
   });
 });
 

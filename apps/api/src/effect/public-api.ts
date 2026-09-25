@@ -221,6 +221,30 @@ export const DeliverySummary = Schema.Struct({
     "Outcome of the current revision's destinations (webhooks and accounting).",
 });
 
+export const ReconciliationSummary = Schema.Struct({
+  status: Schema.Literal(
+    "reconciled",
+    "discrepancy",
+    "unresolved",
+    "unmatched",
+  ),
+  discrepancies: Schema.Array(Schema.String).annotations({
+    description:
+      "Codes of the variances found (for example `over_authorized_total`, `rate_above_authorized`).",
+  }),
+  unresolved: Schema.Array(Schema.String).annotations({
+    description:
+      "Codes of what could not be compared (for example `currency_mismatch`); never read as a pass.",
+  }),
+  revision: Schema.Int.annotations({
+    description: "The invoice revision this reconciliation is of.",
+  }),
+  reconciledAt: Schema.String,
+}).annotations({
+  description:
+    "The current reconciliation with the invoice's authorization sources; see docs/reconciliation.md. Amounts, terms and balances are read with the `sources.read` scope from the unversioned routes.",
+});
+
 export const Invoice = Schema.Struct({
   id: Schema.String,
   revision: Schema.Int.annotations({
@@ -278,6 +302,7 @@ export const Invoice = Schema.Struct({
       providerId: Schema.NullOr(Schema.String),
     }),
   ),
+  reconciliation: Schema.NullOr(ReconciliationSummary),
 });
 export type Invoice = typeof Invoice.Type;
 
@@ -770,6 +795,27 @@ export const toJudgment = (value: unknown): Judgment => {
   };
 };
 
+const RECONCILIATION_STATUSES = new Set<string>(
+  ReconciliationSummary.fields.status.literals,
+);
+
+const toReconciliationSummary = (
+  value: PublicInvoiceRow["reconciliation"],
+): Invoice["reconciliation"] => {
+  if (!value || !RECONCILIATION_STATUSES.has(value.status)) return null;
+  const codes = (items: unknown) =>
+    Array.isArray(items)
+      ? items.filter((item): item is string => typeof item === "string")
+      : [];
+  return {
+    status: value.status as NonNullable<Invoice["reconciliation"]>["status"],
+    discrepancies: codes(value.discrepancies),
+    unresolved: codes(value.unresolved),
+    revision: value.revision,
+    reconciledAt: isoTimestamp(value.reconciledAt),
+  };
+};
+
 export const toInvoice = (row: PublicInvoiceRow): Invoice => {
   const extraction = row.extraction ? record(row.extraction) : null;
   const source = sourceOf(row);
@@ -813,6 +859,7 @@ export const toInvoice = (row: PublicInvoiceRow): Invoice => {
           providerId: row.accountingProviderId,
         }
       : null,
+    reconciliation: toReconciliationSummary(row.reconciliation),
   };
 };
 

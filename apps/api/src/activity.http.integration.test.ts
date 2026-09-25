@@ -915,6 +915,54 @@ suite("invoice activity and operator recovery over real HTTP", () => {
     expect(again.status).toBe(409);
   }, 60_000);
 
+  test("an operator re-runs a failed reconciliation under its own key", async () => {
+    provider.down = false;
+    const owner = await createUser("activity-reconcile");
+    const teamId = owner.teamId;
+    const invoiceId = await upload(owner.cookie);
+    const reconciled = await runWorker(async () => {
+      const [job] = await jobsFor(teamId, "reconcile-invoice");
+      return job?.status === "succeeded";
+    });
+    expect(reconciled).toBe(true);
+    const [reconcileJob] = await jobsFor(teamId, "reconcile-invoice");
+    await client.primaryDb
+      .update(schema.workflowJobs)
+      .set({ status: "failed", lastError: "TypeSafe unavailable: 503" })
+      .where(orm.eq(schema.workflowJobs.id, reconcileJob!.id));
+
+    const view = await trpc(owner.cookie, "inbox.activity", { id: invoiceId });
+    expect(
+      (view.data.entries as Json[]).find(
+        (entry) =>
+          entry.stage === "matching" &&
+          (entry.refs as Json).jobId === reconcileJob!.id,
+      ),
+    ).toMatchObject({
+      title: "Reconciling with authorization sources: failed",
+      status: "failed",
+    });
+
+    const body = { purpose: "incident", reason: "TypeSafe outage resolved" };
+    const retried = await operator(`/ops/jobs/${reconcileJob!.id}/retry`, {
+      method: "POST",
+      body,
+    });
+    expect(retried.status).toBe(202);
+    expect((await retried.json()) as Json).toMatchObject({
+      status: "requeued",
+      action: "reconcile",
+      detail: { invoiceId, revision: 1 },
+    });
+    const rerun = await runWorker(async () => {
+      const [job] = await jobsFor(teamId, "reconcile-invoice");
+      return job?.status === "succeeded";
+    });
+    expect(rerun).toBe(true);
+    const jobs = await jobsFor(teamId, "reconcile-invoice");
+    expect(jobs.map((job) => job.id)).toEqual([reconcileJob!.id]);
+  }, 60_000);
+
   test("an operator accounting retry that re-drives only webhooks reports what it requeued", async () => {
     provider.down = false;
     const owner = await createUser("activity-partial");

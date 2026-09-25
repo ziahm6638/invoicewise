@@ -240,6 +240,26 @@ describe("invoice activity", () => {
     });
   });
 
+  test("a reconciliation run is part of the matching stage", () => {
+    const input = sources();
+    input.jobs = [
+      job("job-5", {
+        name: "reconcile-invoice",
+        status: "succeeded",
+        attempts: 1,
+        finishedAt: "2026-09-25T10:07:00.000Z",
+      }),
+    ];
+    const activity = buildInvoiceActivity(input, { audience: "customer" });
+    expect(
+      activity.entries.find((entry) => entry.stage === "matching"),
+    ).toMatchObject({
+      title: "Reconciling with authorization sources: done",
+      status: "ok",
+      refs: { jobId: "job-5" },
+    });
+  });
+
   test("each delivery-rules decision shows its hold, reasons and resolution", () => {
     const input = sources();
     input.invoice.processingRevision = 2;

@@ -332,7 +332,8 @@
                           "judgments",
                           "questionRerun",
                           "delivery",
-                          "accounting"
+                          "accounting",
+                          "reconciliation"
                         ],
                         "properties": {
                           "id": {
@@ -900,6 +901,58 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "reconciliation": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "required": [
+                                  "status",
+                                  "discrepancies",
+                                  "unresolved",
+                                  "revision",
+                                  "reconciledAt"
+                                ],
+                                "properties": {
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "reconciled",
+                                      "discrepancy",
+                                      "unresolved",
+                                      "unmatched"
+                                    ]
+                                  },
+                                  "discrepancies": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "description": "Codes of the variances found (for example `over_authorized_total`, `rate_above_authorized`)."
+                                  },
+                                  "unresolved": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "description": "Codes of what could not be compared (for example `currency_mismatch`); never read as a pass."
+                                  },
+                                  "revision": {
+                                    "type": "integer",
+                                    "description": "The invoice revision this reconciliation is of.",
+                                    "title": "int"
+                                  },
+                                  "reconciledAt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "additionalProperties": false,
+                                "description": "The current reconciliation with the invoice's authorization sources; see docs/reconciliation.md. Amounts, terms and balances are read with the `sources.read` scope from the unversioned routes."
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "additionalProperties": false
@@ -1022,7 +1075,8 @@
                     "judgments",
                     "questionRerun",
                     "delivery",
-                    "accounting"
+                    "accounting",
+                    "reconciliation"
                   ],
                   "properties": {
                     "id": {
@@ -1576,6 +1630,58 @@
                             }
                           },
                           "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reconciliation": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "status",
+                            "discrepancies",
+                            "unresolved",
+                            "revision",
+                            "reconciledAt"
+                          ],
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "reconciled",
+                                "discrepancy",
+                                "unresolved",
+                                "unmatched"
+                              ]
+                            },
+                            "discrepancies": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "description": "Codes of the variances found (for example `over_authorized_total`, `rate_above_authorized`)."
+                            },
+                            "unresolved": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "description": "Codes of what could not be compared (for example `currency_mismatch`); never read as a pass."
+                            },
+                            "revision": {
+                              "type": "integer",
+                              "description": "The invoice revision this reconciliation is of.",
+                              "title": "int"
+                            },
+                            "reconciledAt": {
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": false,
+                          "description": "The current reconciliation with the invoice's authorization sources; see docs/reconciliation.md. Amounts, terms and balances are read with the `sources.read` scope from the unversioned routes."
                         },
                         {
                           "type": "null"

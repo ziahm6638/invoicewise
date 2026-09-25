@@ -291,6 +291,7 @@ const WORKFLOW_TITLE: Record<string, string> = {
   "update-accounting-bill": "Updating the posted bill",
   "attach-accounting-document": "Attaching the document to the posted bill",
   "match-invoice": "Matching to authorization sources",
+  "reconcile-invoice": "Reconciling with authorization sources",
 };
 
 /** A URL shown as its origin only: paths and queries can carry tokens. */
@@ -340,7 +341,7 @@ const jobEntry = (job: Job, now: number): InvoiceActivityEntry | null => {
       ? "extraction"
       : job.name === "rerun-judgments"
         ? "judgments"
-        : job.name === "match-invoice"
+        : job.name === "match-invoice" || job.name === "reconcile-invoice"
           ? "matching"
           : "accounting";
   const error = redactOptionalText(job.lastError);

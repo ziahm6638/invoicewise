@@ -51,6 +51,7 @@ const invoice: Invoice = {
     cancelled: 0,
   },
   accounting: null,
+  reconciliation: null,
 };
 
 const judgments = {

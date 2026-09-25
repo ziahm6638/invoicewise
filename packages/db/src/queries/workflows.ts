@@ -482,6 +482,7 @@ export const OPERATOR_SUBJECT_KEYS = [
   "exportId",
   "inboundEmailId",
   "deletionId",
+  "matchId",
   "revision",
 ] as const;
 
@@ -588,6 +589,7 @@ const SUBJECT_KEY_BY_WORKFLOW: Record<string, string> = {
   "post-accounting-draft": "invoiceId",
   "rerun-judgments": "invoiceId",
   "match-invoice": "invoiceId",
+  "reconcile-invoice": "invoiceId",
   "update-accounting-bill": "correctionId",
   "deliver-webhook": "deliveryId",
   "process-inbound-email": "inboundEmailId",
