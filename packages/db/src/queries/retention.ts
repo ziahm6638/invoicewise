@@ -1,5 +1,10 @@
 import type { Database, PrimaryDatabase } from "@db/client";
-import { inbox, webhookDeliveries, workflowJobs } from "@db/schema";
+import {
+  inbox,
+  inboxRedeliveries,
+  webhookDeliveries,
+  workflowJobs,
+} from "@db/schema";
 import {
   and,
   eq,
@@ -79,6 +84,35 @@ export async function clearExpiredEmailReferences(
     .set({ referenceId: null })
     .where(and(inArray(inbox.id, candidates), due))
     .returning({ id: inbox.id, teamId: inbox.teamId });
+}
+
+/**
+ * Clears the provider message reference of a re-delivered source email once
+ * the cutoff has passed. The re-delivery itself (when, file name, mailbox)
+ * stays as part of the invoice's history.
+ */
+export async function clearExpiredRedeliveryReferences(
+  db: Db,
+  params: { before: Date; limit: number },
+) {
+  const due = and(
+    isNotNull(inboxRedeliveries.referenceId),
+    lt(inboxRedeliveries.receivedAt, params.before.toISOString()),
+  );
+  const candidates = db
+    .select({ id: inboxRedeliveries.id })
+    .from(inboxRedeliveries)
+    .where(due)
+    .limit(params.limit);
+
+  return db
+    .update(inboxRedeliveries)
+    .set({ referenceId: null })
+    .where(and(inArray(inboxRedeliveries.id, candidates), due))
+    .returning({
+      id: inboxRedeliveries.id,
+      teamId: inboxRedeliveries.teamId,
+    });
 }
 
 const EMPTY_PAYLOAD = sql`'{}'::jsonb`;

@@ -157,24 +157,6 @@ const isMissingObject = (error: unknown) => {
 const text = (value: unknown) =>
   typeof value === "string" && value.trim() ? value.trim() : null;
 
-/**
- * A supplier's stable identifier within an export: its VAT number when the
- * invoice shows one, otherwise its normalised name.
- */
-export const supplierKey = (extraction: Record<string, unknown> | null) => {
-  const vat = text(extraction?.supplierVatNumber)
-    ?.replace(/\s+/g, "")
-    .toUpperCase();
-  if (vat) return `vat:${vat}`;
-  const name = text(extraction?.supplierName)
-    ?.toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
-  return name ? `name:${name}` : null;
-};
-
-export const supplierId = (key: string) => `sup_${sha256(key).slice(0, 16)}`;
-
 type Judgment = Record<string, unknown> & { questionId?: unknown };
 
 const judgmentId = (invoiceId: string, judgment: Judgment, index: number) =>
@@ -201,19 +183,19 @@ export function buildExportRecords(
   data: WorkspaceExportData,
   documents: Map<string, DocumentRecord>,
 ) {
-  const suppliers = new Map<
-    string,
-    {
-      id: string;
-      key: string;
-      names: Set<string>;
-      vatNumbers: Set<string>;
-      addresses: Set<string>;
-      invoiceIds: string[];
-      firstInvoiceAt: string;
-      lastInvoiceAt: string;
-    }
-  >();
+  const supplierInvoices = new Map<string, string[]>();
+  const redeliveries = new Map<string, Record<string, unknown>[]>();
+  for (const redelivery of data.redeliveries) {
+    const list = redeliveries.get(redelivery.inboxId) ?? [];
+    list.push({
+      id: redelivery.id,
+      receivedAt: redelivery.receivedAt,
+      fileName: redelivery.fileName,
+      mailboxId: redelivery.inboxAccountId,
+      messageReference: redelivery.referenceId,
+    });
+    redeliveries.set(redelivery.inboxId, list);
+  }
   const judgments: Record<string, unknown>[] = [];
 
   const invoices = data.invoices.map((invoice) => {
@@ -221,34 +203,10 @@ export function buildExportRecords(
       string,
       unknown
     > | null;
-    const key = supplierKey(extraction);
-    let supplier: string | null = null;
-    if (key) {
-      supplier = supplierId(key);
-      const entry = suppliers.get(key) ?? {
-        id: supplier,
-        key,
-        names: new Set<string>(),
-        vatNumbers: new Set<string>(),
-        addresses: new Set<string>(),
-        invoiceIds: [],
-        firstInvoiceAt: invoice.createdAt,
-        lastInvoiceAt: invoice.createdAt,
-      };
-      const name = text(extraction?.supplierName);
-      const vat = text(extraction?.supplierVatNumber);
-      const address = text(extraction?.supplierAddress);
-      if (name) entry.names.add(name);
-      if (vat) entry.vatNumbers.add(vat);
-      if (address) entry.addresses.add(address);
-      entry.invoiceIds.push(invoice.id);
-      if (invoice.createdAt < entry.firstInvoiceAt) {
-        entry.firstInvoiceAt = invoice.createdAt;
-      }
-      if (invoice.createdAt > entry.lastInvoiceAt) {
-        entry.lastInvoiceAt = invoice.createdAt;
-      }
-      suppliers.set(key, entry);
+    if (invoice.supplierId) {
+      const list = supplierInvoices.get(invoice.supplierId) ?? [];
+      list.push(invoice.id);
+      supplierInvoices.set(invoice.supplierId, list);
     }
 
     const invoiceJudgments = Array.isArray(invoice.judgments)
@@ -267,7 +225,9 @@ export function buildExportRecords(
       type: invoice.type,
       displayName: invoice.displayName,
       fileName: invoice.fileName,
-      supplierId: supplier,
+      supplierId: invoice.supplierId,
+      supplierResolution: invoice.supplierResolution,
+      supplierChecks: invoice.supplierChecks,
       amount: invoice.amount,
       currency: invoice.currency,
       taxAmount: invoice.taxAmount,
@@ -282,6 +242,7 @@ export function buildExportRecords(
       source: {
         mailboxId: invoice.inboxAccountId,
         messageReference: invoice.referenceId,
+        redeliveries: redeliveries.get(invoice.id) ?? [],
       },
       accounting: invoice.accountingProvider
         ? {
@@ -296,18 +257,10 @@ export function buildExportRecords(
     };
   });
 
-  const supplierRecords = [...suppliers.values()]
-    .map((entry) => ({
-      id: entry.id,
-      key: entry.key,
-      names: [...entry.names].sort(),
-      vatNumbers: [...entry.vatNumbers].sort(),
-      addresses: [...entry.addresses].sort(),
-      invoiceIds: entry.invoiceIds,
-      firstInvoiceAt: entry.firstInvoiceAt,
-      lastInvoiceAt: entry.lastInvoiceAt,
-    }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+  const supplierRecords = data.suppliers.map((supplier) => ({
+    ...supplier,
+    invoiceIds: supplierInvoices.get(supplier.id) ?? [],
+  }));
 
   const audit: Record<string, unknown>[] = [];
   for (const invoice of data.invoices) {
@@ -358,6 +311,24 @@ export function buildExportRecords(
       },
     });
   }
+  for (const event of data.supplierEvents) {
+    audit.push({
+      id: `supplier.${event.action}:${event.id}`,
+      at: event.createdAt,
+      type: `supplier.${event.action}`,
+      subject: event.inboxId
+        ? { kind: "invoice", id: event.inboxId }
+        : { kind: "supplier", id: event.supplierId },
+      detail: {
+        supplierEventId: event.id,
+        supplierId: event.supplierId,
+        targetSupplierId: event.targetSupplierId,
+        actorId: event.actorId,
+        revertsEventId: event.revertsEventId,
+        revertedAt: event.revertedAt,
+      },
+    });
+  }
   for (const request of data.exports) {
     audit.push({
       id: `export.requested:${request.id}`,
@@ -389,6 +360,7 @@ export function buildExportRecords(
     invoices,
     judgments,
     suppliers: supplierRecords,
+    supplierEvents: data.supplierEvents,
     questions: data.questions,
     audit,
   };
@@ -587,6 +559,11 @@ export async function buildDataExport(
         content: json(records.suppliers),
       },
       {
+        path: "supplier-events.json",
+        records: records.supplierEvents.length,
+        content: json(records.supplierEvents),
+      },
+      {
         path: "questions.json",
         records: records.questions.length,
         content: json(records.questions),
@@ -635,7 +612,8 @@ export async function buildDataExport(
         invoice: "InvoiceWise invoice id (UUID), stable across exports",
         document: "documents/<invoice id>/<file name>, with its SHA-256",
         supplier:
-          "sup_ + the first 16 hex of SHA-256 of the supplier key (VAT number, else normalised name)",
+          "InvoiceWise supplier id (UUID) from the workspace's supplier records, stable across exports; a merged supplier names the one it was merged into in mergedIntoId",
+        supplierEvent: "InvoiceWise supplier event id (UUID)",
         judgment: "<invoice id>:<question id>",
         auditEvent: "<event type>:<source record id>",
       },

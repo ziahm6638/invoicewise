@@ -1,6 +1,7 @@
 import type { Database } from "@invoicewise/db/client";
 import {
   clearExpiredEmailReferences,
+  clearExpiredRedeliveryReferences,
   deleteExpiredCancelledIntake,
   listExpiredDataExports,
   markDataExportExpired,
@@ -186,9 +187,15 @@ export async function runRetentionSweep(
     }),
   );
 
-  // 3. Source email references.
+  // 3. Source email references, on invoices and on their re-deliveries.
   await drain("source-email", () =>
     clearExpiredEmailReferences(deps.db, {
+      before: before(deps.policy.sourceEmailDays),
+      limit: batchSize,
+    }),
+  );
+  await drain("source-email", () =>
+    clearExpiredRedeliveryReferences(deps.db, {
       before: before(deps.policy.sourceEmailDays),
       limit: batchSize,
     }),

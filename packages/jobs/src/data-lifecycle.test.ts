@@ -8,8 +8,6 @@ import {
   exportFailureMessage,
   isDataExportObjectPath,
   removeStaleExportTempFiles,
-  supplierId,
-  supplierKey,
 } from "./data-export";
 import { nextRetentionSlot } from "./retention";
 import {
@@ -151,18 +149,11 @@ describe("export records", () => {
     }
   });
 
-  test("gives suppliers stable ids by VAT number, else normalised name", () => {
-    expect(supplierKey({ supplierVatNumber: " gb 123 4567 89 " })).toBe(
-      "vat:GB123456789",
-    );
-    expect(supplierKey({ supplierName: "ACME Ltd." })).toBe("name:acme ltd");
-    expect(supplierKey({ supplierName: "acme  LTD" })).toBe("name:acme ltd");
-    expect(supplierKey({})).toBeNull();
-    expect(supplierId("name:acme ltd")).toBe(supplierId("name:acme ltd"));
-    expect(supplierId("name:acme ltd")).toMatch(/^sup_[0-9a-f]{16}$/);
-  });
-
   test("links invoices, judgments, suppliers and audit events by id", () => {
+    const acme = "33333333-3333-4333-8333-333333333333";
+    const bolt = "44444444-4444-4444-8444-444444444444";
+    const firstId = "11111111-1111-4111-8111-111111111111";
+    const secondId = "22222222-2222-4222-8222-222222222222";
     const invoice = (id: string, extra: Record<string, unknown> = {}) => ({
       id,
       createdAt: "2026-09-01T10:00:00.000Z",
@@ -196,6 +187,9 @@ describe("export records", () => {
       accountingProviderId: null,
       accountingPostError: null,
       accountingPostedAt: null,
+      supplierId: acme,
+      supplierResolution: { status: "resolved", method: "name" },
+      supplierChecks: { version: 1 },
       ...extra,
     });
 
@@ -210,12 +204,49 @@ describe("export records", () => {
           createdAt: "2026-01-01T00:00:00.000Z",
         },
         invoices: [
-          invoice("11111111-1111-4111-8111-111111111111"),
-          invoice("22222222-2222-4222-8222-222222222222", {
+          invoice(firstId),
+          // Extracted as Acme, reassigned to Bolt by a member.
+          invoice(secondId, {
+            supplierId: bolt,
+            supplierResolution: { status: "manual", method: "manual" },
             accountingProvider: "xero",
             accountingPostStatus: "posted",
             accountingPostedAt: "2026-09-02T10:00:00.000Z",
           }),
+        ],
+        suppliers: [acme, bolt].map((id, index) => ({
+          id,
+          name: index ? "Bolt Electrical" : "Acme Ltd",
+          nameKey: index ? "bolt electrical" : "acme",
+          vatKey: null,
+          companyKey: null,
+          mergedIntoId: null,
+          createdAt: "2026-08-01T00:00:00.000Z",
+          updatedAt: "2026-08-01T00:00:00.000Z",
+        })),
+        supplierEvents: [
+          {
+            id: "55555555-5555-4555-8555-555555555555",
+            action: "assign_invoice",
+            supplierId: acme,
+            targetSupplierId: bolt,
+            inboxId: secondId,
+            actorId: null,
+            data: { previousSupplierId: acme },
+            revertsEventId: null,
+            revertedAt: null,
+            createdAt: "2026-09-03T10:00:00.000Z",
+          },
+        ],
+        redeliveries: [
+          {
+            id: "66666666-6666-4666-8666-666666666666",
+            inboxId: firstId,
+            referenceId: "msg-2_0_invoice.pdf",
+            inboxAccountId: null,
+            fileName: "invoice.pdf",
+            receivedAt: "2026-09-04T10:00:00.000Z",
+          },
         ],
         questions: [],
         members: [],
@@ -229,28 +260,41 @@ describe("export records", () => {
       new Map(),
     );
 
-    expect(records.suppliers).toHaveLength(1);
-    expect(records.suppliers[0]?.invoiceIds).toHaveLength(2);
-    expect(
-      records.invoices.every(
-        (row) => row.supplierId === records.suppliers[0]?.id,
-      ),
-    ).toBe(true);
+    // Suppliers are the workspace's own records, grouped by assignment, not
+    // by what the extraction says.
+    expect(records.suppliers.map((row) => [row.id, row.invoiceIds])).toEqual([
+      [acme, [firstId]],
+      [bolt, [secondId]],
+    ]);
+    expect(records.invoices.map((row) => row.supplierId)).toEqual([acme, bolt]);
+    expect(records.invoices[1]?.supplierResolution).toMatchObject({
+      status: "manual",
+    });
+    expect(records.invoices[0]?.source.redeliveries).toMatchObject([
+      { messageReference: "msg-2_0_invoice.pdf" },
+    ]);
+    expect(records.invoices[1]?.source.redeliveries).toEqual([]);
+    expect(records.supplierEvents).toHaveLength(1);
     expect(records.judgments.map((row) => row.id)).toEqual([
-      "11111111-1111-4111-8111-111111111111:duplicate",
-      "11111111-1111-4111-8111-111111111111:known_supplier",
-      "22222222-2222-4222-8222-222222222222:duplicate",
-      "22222222-2222-4222-8222-222222222222:known_supplier",
+      `${firstId}:duplicate`,
+      `${firstId}:known_supplier`,
+      `${secondId}:duplicate`,
+      `${secondId}:known_supplier`,
     ]);
     expect(records.invoices[0]?.judgmentIds).toEqual([
-      "11111111-1111-4111-8111-111111111111:duplicate",
-      "11111111-1111-4111-8111-111111111111:known_supplier",
+      `${firstId}:duplicate`,
+      `${firstId}:known_supplier`,
     ]);
     expect(records.audit.map((event) => event.type)).toEqual([
       "invoice.received",
       "invoice.received",
       "invoice.accounting_posted",
+      "supplier.assign_invoice",
     ]);
+    expect(records.audit.at(-1)).toMatchObject({
+      subject: { kind: "invoice", id: secondId },
+      detail: { supplierId: acme, targetSupplierId: bolt },
+    });
   });
 });
 

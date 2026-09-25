@@ -5,6 +5,9 @@ import {
   dataExports,
   inbox,
   inboxAccounts,
+  inboxRedeliveries,
+  supplierEvents,
+  suppliers,
   teams,
   userQuestions,
   users,
@@ -445,8 +448,19 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
 
   if (!team) return null;
 
+  // Only accepted (or legacy) documents: reservations and cancelled uploads
+  // never became invoices.
+  const exportedInvoice = and(
+    eq(inbox.teamId, teamId),
+    ne(inbox.status, "deleted"),
+    or(isNull(inbox.intakeState), eq(inbox.intakeState, "accepted")),
+  );
+
   const [
     invoices,
+    supplierRows,
+    supplierEventRows,
+    redeliveries,
     questions,
     members,
     mailboxes,
@@ -487,18 +501,56 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
         accountingProviderId: inbox.accountingProviderId,
         accountingPostError: inbox.accountingPostError,
         accountingPostedAt: inbox.accountingPostedAt,
+        supplierId: inbox.supplierId,
+        supplierResolution: inbox.supplierResolution,
+        supplierChecks: inbox.supplierChecks,
       })
       .from(inbox)
-      .where(
-        and(
-          eq(inbox.teamId, teamId),
-          ne(inbox.status, "deleted"),
-          // Only accepted (or legacy) documents: reservations and cancelled
-          // uploads never became invoices.
-          or(isNull(inbox.intakeState), eq(inbox.intakeState, "accepted")),
-        ),
-      )
+      .where(exportedInvoice)
       .orderBy(asc(inbox.createdAt), asc(inbox.id)),
+    db
+      .select({
+        id: suppliers.id,
+        name: suppliers.name,
+        nameKey: suppliers.nameKey,
+        vatKey: suppliers.vatKey,
+        companyKey: suppliers.companyKey,
+        mergedIntoId: suppliers.mergedIntoId,
+        createdAt: suppliers.createdAt,
+        updatedAt: suppliers.updatedAt,
+      })
+      .from(suppliers)
+      .where(eq(suppliers.teamId, teamId))
+      .orderBy(asc(suppliers.createdAt), asc(suppliers.id)),
+    db
+      .select({
+        id: supplierEvents.id,
+        action: supplierEvents.action,
+        supplierId: supplierEvents.supplierId,
+        targetSupplierId: supplierEvents.targetSupplierId,
+        inboxId: supplierEvents.inboxId,
+        actorId: supplierEvents.actorId,
+        data: supplierEvents.data,
+        revertsEventId: supplierEvents.revertsEventId,
+        revertedAt: supplierEvents.revertedAt,
+        createdAt: supplierEvents.createdAt,
+      })
+      .from(supplierEvents)
+      .where(eq(supplierEvents.teamId, teamId))
+      .orderBy(asc(supplierEvents.createdAt), asc(supplierEvents.id)),
+    db
+      .select({
+        id: inboxRedeliveries.id,
+        inboxId: inboxRedeliveries.inboxId,
+        referenceId: inboxRedeliveries.referenceId,
+        inboxAccountId: inboxRedeliveries.inboxAccountId,
+        fileName: inboxRedeliveries.fileName,
+        receivedAt: inboxRedeliveries.receivedAt,
+      })
+      .from(inboxRedeliveries)
+      .innerJoin(inbox, eq(inbox.id, inboxRedeliveries.inboxId))
+      .where(and(eq(inboxRedeliveries.teamId, teamId), exportedInvoice))
+      .orderBy(asc(inboxRedeliveries.receivedAt), asc(inboxRedeliveries.id)),
     db
       .select({
         id: userQuestions.id,
@@ -601,6 +653,9 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
   return {
     team,
     invoices,
+    suppliers: supplierRows,
+    supplierEvents: supplierEventRows,
+    redeliveries,
     questions,
     members,
     mailboxes,

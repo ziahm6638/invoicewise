@@ -52,6 +52,7 @@ suite("data lifecycle (integration)", () => {
   let policyModule: typeof import("@invoicewise/jobs/retention-policy");
   let exportRoute: typeof import("@api/storage/export-route");
   let runner: typeof import("@invoicewise/jobs/runner");
+  let supplierJobs: typeof import("@invoicewise/jobs/suppliers");
   let effect: typeof import("effect");
   let caller: (ctx: any) => Record<string, any>;
   let storageRoot: string;
@@ -81,6 +82,7 @@ suite("data lifecycle (integration)", () => {
     policyModule = await import("@invoicewise/jobs/retention-policy");
     exportRoute = await import("@api/storage/export-route");
     runner = await import("@invoicewise/jobs/runner");
+    supplierJobs = await import("@invoicewise/jobs/suppliers");
     effect = await import("effect");
     const { appRouter } = await import("@api/trpc/routers/_app");
     const { createCallerFactory } = await import("@api/trpc/init");
@@ -320,6 +322,39 @@ suite("data lifecycle (integration)", () => {
       question: "Does the invoice cite a purchase order?",
       type: "boolean",
     });
+    // Both workspaces resolve their suppliers; an admin then moves the second
+    // Acme invoice to Bolt, so its supplier differs from its extraction.
+    for (const team of [teamId, neighbourTeam]) {
+      await supplierJobs.backfillSuppliers(db, {
+        teamId: team,
+        excludeId: crypto.randomUUID(),
+      });
+    }
+    const supplierRows = await primaryDb
+      .select()
+      .from(schema.suppliers)
+      .where(orm.eq(schema.suppliers.teamId, teamId));
+    const bolt = supplierRows.find((row) => row.name === "Bolt Electrical")!;
+    const reassigned = invoices[1]!;
+    await caller(ctx(owner, teamId)).suppliers.assignInvoice({
+      inboxId: reassigned.id,
+      supplierId: bolt.id,
+    });
+    const assignedSuppliers = new Map(
+      (
+        await primaryDb
+          .select({ id: schema.inbox.id, supplierId: schema.inbox.supplierId })
+          .from(schema.inbox)
+          .where(orm.eq(schema.inbox.teamId, teamId))
+      ).map((row) => [row.id, row.supplierId]),
+    );
+    expect(assignedSuppliers.get(reassigned.id)).toBe(bolt.id);
+    await primaryDb.insert(schema.inboxRedeliveries).values({
+      teamId,
+      inboxId: invoices[0]!.id,
+      referenceId: "msg-redelivered_0_invoice.pdf",
+      fileName: "again.pdf",
+    });
 
     const request = await caller(ctx(owner, teamId)).data.requestExport();
 
@@ -428,15 +463,53 @@ suite("data lifecycle (integration)", () => {
         (entry: { invoiceId: string }) => entry.invoiceId === legacyMissing.id,
       ),
     ).toMatchObject({ status: "missing", path: null });
-    // Stable identifiers link the records together.
+    // Stable identifiers link the records together. Suppliers are the
+    // workspace's own records, and every invoice carries the supplier it is
+    // assigned to, including the reassigned one.
     const suppliers = JSON.parse(entries.get("suppliers.json")!.toString());
-    const acme = suppliers.find((supplier: { names: string[] }) =>
-      supplier.names.includes("Acme Supplies Ltd"),
+    expect(
+      suppliers.map((supplier: { id: string }) => supplier.id).sort(),
+    ).toEqual(supplierRows.map((row) => row.id).sort());
+    for (const invoice of exported) {
+      expect(invoice.supplierId).toBe(
+        assignedSuppliers.get(invoice.id) ?? null,
+      );
+    }
+    const byName = (name: string) =>
+      suppliers.find((supplier: { name: string }) => supplier.name === name);
+    expect(byName("Acme Supplies Ltd").invoiceIds).toEqual([invoices[0]!.id]);
+    expect(byName("Bolt Electrical").invoiceIds.sort()).toEqual(
+      [reassigned.id, invoices[2]!.id].sort(),
     );
-    expect(acme.invoiceIds.sort()).toEqual(
-      [invoices[0]!.id, invoices[1]!.id].sort(),
+    expect(
+      exported.find((invoice: { id: string }) => invoice.id === reassigned.id)
+        .supplierResolution,
+    ).toMatchObject({ status: "manual" });
+    const supplierEvents = JSON.parse(
+      entries.get("supplier-events.json")!.toString(),
     );
-    expect(acme.id).toBe(dataExport.supplierId(acme.key));
+    expect(supplierEvents).toMatchObject([
+      {
+        action: "assign_invoice",
+        inboxId: reassigned.id,
+        targetSupplierId: bolt.id,
+        actorId: owner.id,
+      },
+    ]);
+    expect(
+      manifest.files.find(
+        (file: { path: string }) => file.path === "supplier-events.json",
+      ),
+    ).toMatchObject({ records: 1 });
+    expect(
+      exported.find((invoice: { id: string }) => invoice.id === invoices[0]!.id)
+        .source.redeliveries,
+    ).toMatchObject([
+      {
+        fileName: "again.pdf",
+        messageReference: "msg-redelivered_0_invoice.pdf",
+      },
+    ]);
     const judgments = JSON.parse(entries.get("judgments.json")!.toString());
     expect(judgments.map((judgment: { id: string }) => judgment.id)).toContain(
       `${invoices[0]!.id}:known_supplier`,
@@ -445,8 +518,8 @@ suite("data lifecycle (integration)", () => {
       JSON.parse(entries.get("questions.json")!.toString())[0],
     ).toMatchObject({ questionKey: "po_required" });
     const audit = JSON.parse(entries.get("audit.json")!.toString());
-    expect(audit.map((event: { type: string }) => event.type)).toContain(
-      "export.requested",
+    expect(audit.map((event: { type: string }) => event.type)).toEqual(
+      expect.arrayContaining(["export.requested", "supplier.assign_invoice"]),
     );
 
     // Nothing from the neighbour, and no uploads that never became invoices.
@@ -633,6 +706,24 @@ suite("data lifecycle (integration)", () => {
       referenceId: "msg-new_0_invoice.pdf",
       createdAt: ago(10),
     });
+    // Re-delivered source emails follow the same period.
+    const [oldRedelivery, recentRedelivery] = await primaryDb
+      .insert(schema.inboxRedeliveries)
+      .values([
+        {
+          teamId,
+          inboxId: oldActive.id,
+          referenceId: "msg-old-again_0_invoice.pdf",
+          receivedAt: ago(91).toISOString(),
+        },
+        {
+          teamId: neighbourTeam,
+          inboxId: recentEmail.id,
+          referenceId: "msg-new-again_0_invoice.pdf",
+          receivedAt: ago(10).toISOString(),
+        },
+      ])
+      .returning();
     // Job payloads: finished and old are emptied; live work is never touched.
     const oldJob = crypto.randomUUID();
     const liveJob = crypto.randomUUID();
@@ -766,6 +857,17 @@ suite("data lifecycle (integration)", () => {
     expect((await inboxRow(oldEmail.id))?.referenceId).toBeNull();
     expect((await inboxRow(recentEmail.id))?.referenceId).toBe(
       "msg-new_0_invoice.pdf",
+    );
+    const redelivery = (id: string) =>
+      primaryDb.query.inboxRedeliveries.findFirst({
+        where: orm.eq(schema.inboxRedeliveries.id, id),
+      });
+    expect(await redelivery(oldRedelivery!.id)).toMatchObject({
+      inboxId: oldActive.id,
+      referenceId: null,
+    });
+    expect((await redelivery(recentRedelivery!.id))?.referenceId).toBe(
+      "msg-new-again_0_invoice.pdf",
     );
     const job = (id: string) =>
       primaryDb.query.workflowJobs.findFirst({

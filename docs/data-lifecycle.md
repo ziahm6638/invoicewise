@@ -15,9 +15,9 @@ members see the same schedule under Settings → Data, rendered from
 
 | Data | Kept | Applied by | Setting |
 | --- | --- | --- | --- |
-| Invoices, original documents, extraction, judgments, questions, integration settings | while the workspace exists | a member deleting an invoice (file at once, record as below), the owner deleting the workspace ([offboarding](offboarding.md)) | none |
+| Invoices, original documents, extraction, judgments, suppliers and their correction history, questions, integration settings | while the workspace exists | a member deleting an invoice (file at once, record as below), the owner deleting the workspace ([offboarding](offboarding.md)) | none |
 | Failed uploads and deleted invoices | 30 days after upload | hourly retention job | `RETENTION_FAILED_UPLOAD_DAYS` |
-| Source email reference | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
+| Source email reference (on the invoice and on each re-delivery) | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
 | Job and webhook payloads | 30 days after the job or delivery finished | hourly retention job | `RETENTION_JOB_PAYLOAD_DAYS` |
 | Application logs | rotated by size: 5 files of 50 MB per container; time-based 30-day expiry not yet enforced | Docker log rotation on the host | `logging` in `config/deploy.yml` |
 | Database backups | 30 days | `ops/backup` on hp-slice | `INVOICEWISE_BACKUP_RETAIN_DAYS` on the host, `RETENTION_BACKUP_DAYS` in the app |
@@ -46,8 +46,11 @@ What each row means precisely:
 - **Source email.** InvoiceWise never stores email bodies or headers. From an
   email it keeps the invoice attachment (active data) and the provider message
   reference used to recognise redelivered mail (`inbox.reference_id`, the
-  message id and attachment name). The retention job clears that reference;
-  duplicates are still recognised afterwards by the document's content hash.
+  message id and attachment name), and the same reference for each identical
+  re-delivery of a document (`inbox_redeliveries.reference_id`). The retention
+  job clears both; a re-delivery keeps its time, file name and mailbox as part
+  of the invoice's history, and duplicates are still recognised afterwards by
+  the document's content hash.
   An invoice's sender domain (`website`) is overwritten by extraction and is
   invoice data, not email content.
 - **Job and webhook payloads.** Finished workflow jobs keep their name,
@@ -156,17 +159,18 @@ named `invoicewise-export-<date>-<id>.zip`:
 | --- | --- |
 | `manifest.json` | format and version, export and workspace ids, requester, times, counts, the identifier scheme, the retention policy in force, every data file with its record count, size and SHA-256, and every document with its status, size and SHA-256 |
 | `documents/<invoice id>/<file name>` | each original exactly as received |
-| `invoices.json` | every invoice (accepted or legacy, not deleted): amounts, status, extraction, judgment ids, supplier id, source mailbox id and message reference, accounting delivery state, and its document entry |
+| `invoices.json` | every invoice (accepted or legacy, not deleted): amounts, status, extraction, judgment ids, the supplier it is assigned to (`supplierId`) with how it was resolved (`supplierResolution`) and its supplier-history checks (`supplierChecks`), source mailbox id and message reference, its re-deliveries (time, file name, mailbox, message reference until it expires), accounting delivery state, and its document entry |
 | `judgments.json` | every judgment with its invoice id |
-| `suppliers.json` | suppliers derived from the extractions, with every name, VAT number and address seen and their invoice ids |
+| `suppliers.json` | the workspace's supplier records: name, normalised name, VAT and company number keys, `mergedIntoId` for a merged supplier, times, and the ids of the invoices assigned to it |
+| `supplier-events.json` | every supplier correction (invoice reassigned, suppliers merged, change reverted) with its actor, what it replaced and whether it was reverted |
 | `questions.json` | the workspace's questions, every version |
-| `audit.json` | invoice received and posted to accounting, webhook deliveries, workflow runs and export requests, in time order |
+| `audit.json` | invoice received and posted to accounting, supplier corrections, webhook deliveries, workflow runs and export requests, in time order |
 | `workspace.json` | the workspace, its members and roles, mailboxes, accounting connections and webhook endpoints |
 
 Stable identifiers: invoices keep their InvoiceWise UUID; a document is
-identified by its invoice id and SHA-256; a supplier id is `sup_` plus the
-first 16 hex characters of the SHA-256 of its key (VAT number, else the
-normalised name), so the same supplier has the same id in every export; a
+identified by its invoice id and SHA-256; suppliers and supplier events keep
+their InvoiceWise UUID, so an invoice's `supplierId` names the same supplier
+in every export (follow `mergedIntoId` to the supplier it was merged into); a
 judgment is `<invoice id>:<question id>`; an audit event is
 `<event type>:<source record id>`.
 
@@ -177,7 +181,9 @@ listed as `withheld` and never read (both are counted as missing on the
 request) rather than silently skipped; each
 included document also records whether its hash still matches the one taken at
 intake (`intakeHashMatches`). Uploads that never became invoices, deleted
-invoices and anything from another workspace are never included. Tokens,
+invoices and anything from another workspace, including its suppliers, are
+never included. Supplier records hold no bank details; bank details appear
+only where the invoice's own extraction contains them. Tokens,
 webhook signing secrets and provider connection references are never
 exported. ZIP64 is not written, so an export above 4 GiB or 65,535 files fails
 with a message asking the owner to contact support.
@@ -231,9 +237,11 @@ outside this lifecycle.
 `bun run verify` as `verify:data-lifecycle`) builds a disposable
 multi-workspace dataset and checks: owner-only access; an export interrupted
 after its archive was built, then resumed to completion; manifest and
-object completeness byte for byte, with no data from the neighbouring
-workspace; link tampering and expiry; a retention sweep interrupted after two
-batches, then resumed, with unrelated and recent data untouched and no work
+object completeness byte for byte, with suppliers taken from the
+workspace's supplier records (including an invoice reassigned to another
+supplier) and no data from the neighbouring workspace; link tampering and expiry; a retention sweep interrupted after two
+batches, then resumed, clearing old invoice and re-delivery email references
+with unrelated and recent data untouched and no work
 queued; and a workspace deletion that takes its exports and queued export work
 with it through an interrupted-then-resumed cleanup while the neighbour's
 exports and documents survive. `packages/jobs` `bun run verify` runs an export
