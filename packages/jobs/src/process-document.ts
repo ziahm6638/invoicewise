@@ -7,7 +7,6 @@ import {
   getUserQuestions,
   lockDocumentIdentities,
   updateInboxValidation,
-  updateInboxWithProcessedData,
 } from "@invoicewise/db/queries";
 import {
   DocumentClient,
@@ -15,7 +14,7 @@ import {
   type InvoiceJudgmentQuestion,
   validateInvoice,
 } from "@invoicewise/documents";
-import { emitInvoiceProcessedWebhooks } from "./webhooks";
+import { completeAndSchedule } from "./delivery";
 
 export async function processDocumentAttachment(
   db: Database,
@@ -89,7 +88,10 @@ export async function processDocumentAttachment(
         .map(({ question }) => question),
   });
 
-  const { record, validation } = await saveProcessedDocument(db, {
+  // The result, its validation, its revision and every destination's delivery
+  // intent commit together; a null completion means another worker already
+  // completed this document.
+  const { completion, validation } = await saveProcessedDocument(db, {
     id: input.inboxId,
     teamId: input.teamId,
     amount: result.amount,
@@ -105,12 +107,9 @@ export async function processDocumentAttachment(
     extraction: result.extraction,
     judgments: result.judgments,
     processingError: null,
-    status: "pending",
   });
 
-  if (record) await emitInvoiceProcessedWebhooks(db, record);
-
-  return { record, result: { ...result, validation } };
+  return { completion, result: { ...result, validation } };
 }
 
 /**
@@ -137,14 +136,15 @@ const validateAgainstEarlierDocuments = async (
 };
 
 /**
- * Saves a processed document with its validation. The earliest-received copy
- * of an invoice is its original whatever order the copies are processed in:
- * later copies and credit notes processed before this one are validated
- * again in the same transaction, before their accounting post can read them.
+ * Saves a processed document with its validation as the next revision and
+ * schedules its deliveries, in one transaction. The earliest-received copy of
+ * an invoice is its original whatever order the copies are processed in:
+ * later copies and credit notes processed before this one are validated again
+ * in the same transaction, before their accounting post can read them.
  */
 export async function saveProcessedDocument(
   db: Database,
-  input: Omit<UpdateInboxWithProcessedDataParams, "validation"> & {
+  input: Omit<UpdateInboxWithProcessedDataParams, "validation" | "status"> & {
     teamId: string;
     extraction: InvoiceExtraction;
   },
@@ -158,11 +158,11 @@ export async function saveProcessedDocument(
       input.id,
       input.extraction,
     );
-    const record = await updateInboxWithProcessedData(executor, {
+    const completion = await completeAndSchedule(executor, {
       ...input,
       validation,
     });
-    if (record && input.extraction.invoiceNumber) {
+    if (completion && input.extraction.invoiceNumber) {
       const later = await getLaterDocumentsByNumber(executor, {
         teamId: input.teamId,
         documentId: input.id,
@@ -181,6 +181,6 @@ export async function saveProcessedDocument(
         });
       }
     }
-    return { record, validation };
+    return { completion, validation };
   });
 }

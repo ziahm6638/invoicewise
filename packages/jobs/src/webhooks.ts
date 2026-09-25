@@ -2,17 +2,15 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import type { Database } from "@invoicewise/db/client";
 import {
-  type WebhookEndpointForDelivery,
   type WebhookEvent,
   type WebhookEventName,
-  createWebhookDelivery,
+  cancelWebhookDelivery,
   getWebhookDelivery,
-  getWebhookEndpointsForEvent,
   recordWebhookAttempt,
 } from "@invoicewise/db/queries";
 import { decrypt } from "@invoicewise/encryption";
 import { Clock, Context, Effect, Schema } from "effect";
-import { enqueueWorkflow, workflowKey } from "./client";
+import { logicalEventId, scheduleWebhookEvent } from "./delivery";
 
 export type DeliveryRecord = {
   id: string;
@@ -20,8 +18,16 @@ export type DeliveryRecord = {
   endpointId: string;
   endpointUrl: string;
   endpointSecret: string;
+  /** False once the endpoint was disabled; queued work is then cancelled. */
+  endpointActive: boolean;
   event: WebhookEventName;
+  eventId: string | null;
+  revision: number | null;
   invoiceId: string | null;
+  /** True when the invoice this delivery describes was deleted. */
+  invoiceDeleted: boolean;
+  status: "queued" | "delivering" | "succeeded" | "failed" | "cancelled";
+  lastError: string | null;
   payload: WebhookEvent;
 };
 
@@ -35,22 +41,27 @@ export class WebhookDeliveryRepository extends Context.Tag(
 )<
   WebhookDeliveryRepository,
   {
+    /** Null when the delivery (or its endpoint or workspace) no longer exists. */
     readonly load: (
       deliveryId: string,
       teamId: string,
-    ) => Effect.Effect<DeliveryRecord, WebhookDeliveryError>;
+    ) => Effect.Effect<DeliveryRecord | null, WebhookDeliveryError>;
+    /**
+     * Records the attempt. The attempt that makes the delivery a terminal
+     * failure commits the `delivery.failed` notification with it.
+     */
     readonly recordAttempt: (input: {
       delivery: DeliveryRecord;
-      attempt: number;
       statusCode?: number;
       error?: string;
       durationMs: number;
       final: boolean;
       succeeded: boolean;
+      retryable: boolean;
     }) => Effect.Effect<void, WebhookDeliveryError>;
-    readonly deliveryFailed: (
+    readonly cancel: (
       delivery: DeliveryRecord,
-      error: string,
+      reason: string,
     ) => Effect.Effect<void, WebhookDeliveryError>;
   }
 >() {}
@@ -156,6 +167,13 @@ export function verifyWebhookSignature(
   );
 }
 
+/**
+ * Delivers one durable webhook intent. The run is idempotent: a delivery that
+ * already succeeded or was cancelled is not sent again (a worker that died
+ * after recording the outcome), and one that already failed stays failed until
+ * an explicit retry. Queued work for a disabled endpoint or a
+ * deleted invoice is cancelled without an HTTP call.
+ */
 export const deliverWebhook = (input: {
   deliveryId: string;
   teamId: string;
@@ -166,6 +184,38 @@ export const deliverWebhook = (input: {
     const repository = yield* WebhookDeliveryRepository;
     const transport = yield* WebhookTransport;
     const delivery = yield* repository.load(input.deliveryId, input.teamId);
+    if (!delivery) {
+      return {
+        deliveryId: input.deliveryId,
+        status: "cancelled",
+        reason: "Webhook delivery or endpoint no longer exists",
+      };
+    }
+    if (delivery.status === "succeeded" || delivery.status === "cancelled") {
+      return { deliveryId: delivery.id, status: delivery.status };
+    }
+    if (delivery.status === "failed") {
+      return yield* Effect.fail(
+        new WebhookDeliveryError({
+          reason: delivery.lastError ?? "Webhook delivery failed",
+          retryable: false,
+        }),
+      );
+    }
+    const cancelReason = !delivery.endpointActive
+      ? "Webhook endpoint is disabled"
+      : delivery.invoiceDeleted
+        ? "Invoice was deleted"
+        : null;
+    if (cancelReason) {
+      yield* repository.cancel(delivery, cancelReason);
+      return {
+        deliveryId: delivery.id,
+        status: "cancelled",
+        reason: cancelReason,
+      };
+    }
+
     const body = JSON.stringify(delivery.payload);
     const timestamp = Math.floor((yield* Clock.currentTimeMillis) / 1000);
     const startedAt = yield* Clock.currentTimeMillis;
@@ -174,6 +224,7 @@ export const deliverWebhook = (input: {
         "content-type": "application/json",
         "invoicewise-delivery": delivery.id,
         "invoicewise-event": delivery.event,
+        "invoicewise-event-id": delivery.payload.id,
         "invoicewise-signature": webhookSignature(
           delivery.endpointSecret,
           timestamp,
@@ -198,18 +249,15 @@ export const deliverWebhook = (input: {
 
     yield* repository.recordAttempt({
       delivery,
-      attempt: input.attempt,
       statusCode,
       error,
       durationMs,
       final,
       succeeded,
+      retryable,
     });
 
     if (succeeded) return { deliveryId: delivery.id, statusCode };
-    if (final && delivery.event !== "delivery.failed") {
-      yield* repository.deliveryFailed(delivery, error!);
-    }
     return yield* Effect.fail(
       new WebhookDeliveryError({ reason: error!, retryable: !final }),
     );
@@ -231,55 +279,60 @@ export const makeWebhookDeliveryRepository = (
   load: (deliveryId, teamId) =>
     deliveryAttempt(async () => {
       const delivery = await getWebhookDelivery(db, { deliveryId, teamId });
-      if (!delivery) throw new Error("Webhook delivery not found");
+      if (!delivery) return null;
       return {
         id: delivery.id,
         teamId: delivery.teamId,
         endpointId: delivery.endpointId,
         endpointUrl: delivery.endpointUrl,
         endpointSecret: decrypt(delivery.endpointSecretEncrypted),
+        endpointActive: delivery.endpointActive,
         event: delivery.event as WebhookEventName,
+        eventId: delivery.eventId,
+        revision: delivery.revision,
         invoiceId: delivery.invoiceId,
+        invoiceDeleted: delivery.invoiceStatus === "deleted",
+        status: delivery.status,
+        lastError: delivery.lastError,
         payload: delivery.payload as WebhookEvent,
       };
     }, "Unable to load webhook delivery"),
   recordAttempt: (input) =>
     deliveryAttempt(
       () =>
-        recordWebhookAttempt(db, {
-          deliveryId: input.delivery.id,
-          endpointId: input.delivery.endpointId,
-          teamId: input.delivery.teamId,
-          attempt: input.attempt,
-          statusCode: input.statusCode,
-          error: input.error,
-          durationMs: input.durationMs,
-          final: input.final,
-          succeeded: input.succeeded,
+        db.transaction(async (tx) => {
+          const executor = tx as unknown as Database;
+          const recorded = await recordWebhookAttempt(executor, {
+            deliveryId: input.delivery.id,
+            endpointId: input.delivery.endpointId,
+            teamId: input.delivery.teamId,
+            statusCode: input.statusCode,
+            error: input.error,
+            durationMs: input.durationMs,
+            final: input.final,
+            succeeded: input.succeeded,
+            retryable: input.retryable,
+          });
+          if (recorded.failed && input.delivery.event !== "delivery.failed") {
+            await publishDeliveryFailure(
+              executor,
+              input.delivery,
+              input.error ?? "Webhook delivery failed",
+              recorded.attempt,
+            );
+          }
         }),
       "Unable to record webhook attempt",
     ),
-  deliveryFailed: (delivery, error) =>
+  cancel: (delivery, reason) =>
     deliveryAttempt(
       () =>
-        emitWebhookEvent(
-          db,
-          {
-            id: crypto.randomUUID(),
-            type: "delivery.failed",
-            createdAt: new Date().toISOString(),
-            teamId: delivery.teamId,
-            invoiceId: delivery.invoiceId ?? undefined,
-            data: {
-              deliveryId: delivery.id,
-              endpointId: delivery.endpointId,
-              event: delivery.event,
-              error,
-            },
-          },
-          delivery.endpointId,
-        ),
-      "Unable to publish delivery failure",
+        cancelWebhookDelivery(db, {
+          deliveryId: delivery.id,
+          teamId: delivery.teamId,
+          reason,
+        }).then(() => undefined),
+      "Unable to cancel webhook delivery",
     ),
 });
 
@@ -304,63 +357,79 @@ export const WebhookTransportLive: Context.Tag.Service<WebhookTransport> = {
         }, "Webhook request failed"),
 };
 
-export async function enqueueWebhookDelivery(
+/**
+ * Schedules the notification to the workspace's other endpoints that a
+ * delivery failed for good. Runs in the transaction that records the failure.
+ * The event id derives from the failed delivery and its attempt count, so a
+ * replay of one failure cannot notify twice while a later failure after an
+ * explicit retry is a new event.
+ */
+export async function publishDeliveryFailure(
   db: Database,
-  event: WebhookEvent,
-  endpoint: WebhookEndpointForDelivery,
+  delivery: Pick<
+    DeliveryRecord,
+    "id" | "teamId" | "endpointId" | "event" | "invoiceId" | "revision"
+  >,
+  error: string,
+  attempts: number,
 ) {
-  const delivery = await createWebhookDelivery(db, { event, endpoint });
-  if (!delivery) throw new Error("Unable to create webhook delivery");
-  await enqueueWorkflow(db, {
-    name: "deliver-webhook",
-    teamId: event.teamId,
-    payload: { deliveryId: delivery.id, teamId: event.teamId },
-    idempotencyKey: workflowKey.webhook(event.id, endpoint.id),
-    maxAttempts: 4,
-  });
-  return delivery;
+  await scheduleWebhookEvent(
+    db,
+    {
+      id: logicalEventId(delivery.id, "delivery.failed", attempts),
+      type: "delivery.failed",
+      createdAt: new Date().toISOString(),
+      teamId: delivery.teamId,
+      invoiceId: delivery.invoiceId ?? undefined,
+      revision: delivery.revision ?? undefined,
+      data: {
+        deliveryId: delivery.id,
+        endpointId: delivery.endpointId,
+        event: delivery.event,
+        error,
+      },
+    },
+    delivery.endpointId,
+  );
 }
 
+/**
+ * Publishes a delivery failure found by reconciliation rather than the
+ * handler, in the transaction that records it.
+ */
+export async function publishDeliveryFailureById(
+  db: Database,
+  deliveryId: string,
+  teamId: string,
+) {
+  const delivery = await getWebhookDelivery(db, { deliveryId, teamId });
+  if (!delivery) return;
+  await publishDeliveryFailure(
+    db,
+    {
+      id: delivery.id,
+      teamId: delivery.teamId,
+      endpointId: delivery.endpointId,
+      event: delivery.event as WebhookEventName,
+      invoiceId: delivery.invoiceId,
+      revision: delivery.revision,
+    },
+    delivery.lastError ?? "Webhook delivery failed",
+    delivery.attempts,
+  );
+}
+
+/**
+ * Schedules one event for every subscribed endpoint: each delivery record and
+ * its job commit together, and a repeated call with the same event id is a
+ * no-op.
+ */
 export async function emitWebhookEvent(
   db: Database,
   event: WebhookEvent,
   excludeEndpointId?: string,
 ) {
-  const endpoints = await getWebhookEndpointsForEvent(db, {
-    teamId: event.teamId,
-    event: event.type,
-    excludeEndpointId,
-  });
-  await Promise.all(
-    endpoints.map((endpoint) => enqueueWebhookDelivery(db, event, endpoint)),
+  await db.transaction((tx) =>
+    scheduleWebhookEvent(tx as unknown as Database, event, excludeEndpointId),
   );
-}
-
-export async function emitInvoiceProcessedWebhooks(
-  db: Database,
-  invoice: Record<string, unknown> & {
-    id: string;
-    teamId?: string | null;
-    judgments?: unknown[] | null;
-  },
-) {
-  if (!invoice.teamId) return;
-  const common = {
-    createdAt: new Date().toISOString(),
-    teamId: invoice.teamId,
-    invoiceId: invoice.id,
-    data: invoice,
-  };
-  await emitWebhookEvent(db, {
-    ...common,
-    id: crypto.randomUUID(),
-    type: "invoice.processed",
-  });
-  if (invoice.judgments?.length) {
-    await emitWebhookEvent(db, {
-      ...common,
-      id: crypto.randomUUID(),
-      type: "invoice.judgments.attached",
-    });
-  }
 }

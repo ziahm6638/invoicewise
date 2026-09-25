@@ -10,13 +10,17 @@ import {
   deleteInbox,
   getInbox,
   getInboxById,
+  getInvoiceAccountingStatus,
+  getInvoiceDeliveryStatus,
   updateInbox,
 } from "@invoicewise/db/queries";
 import { signedUrl } from "@invoicewise/db/storage";
+import { retryInvoiceDelivery } from "@invoicewise/jobs/delivery";
 import {
   resolveTeamDocumentBinding,
   retryIntakeProcessing,
 } from "@invoicewise/jobs/intake";
+import { TRPCError } from "@trpc/server";
 
 export const inboxRouter = createTRPCRouter({
   get: workspaceProcedure
@@ -75,6 +79,56 @@ export const inboxRouter = createTRPCRouter({
     .input(retryInboxSchema)
     .mutation(async ({ ctx: { db, teamId }, input }) => {
       return retryIntakeProcessing(db, { teamId: teamId!, inboxId: input.id });
+    }),
+
+  /**
+   * Per-destination delivery outcome of the invoice's current revision:
+   * webhook deliveries and the accounting post.
+   */
+  delivery: workspaceProcedure
+    .input(getInboxByIdSchema)
+    .query(async ({ ctx: { db, teamId }, input }) => {
+      const item = await getInboxById(db, { id: input.id, teamId: teamId! });
+      if (!item) return null;
+      const [webhooks, accounting] = await Promise.all([
+        getInvoiceDeliveryStatus(db, { invoiceId: item.id, teamId: teamId! }),
+        getInvoiceAccountingStatus(db, {
+          invoiceId: item.id,
+          teamId: teamId!,
+        }),
+      ]);
+      return {
+        revision: item.processingRevision,
+        summary: item.delivery,
+        webhooks: webhooks.filter(
+          (delivery) =>
+            delivery.revision === item.processingRevision &&
+            delivery.event !== "delivery.failed",
+        ),
+        accounting,
+      };
+    }),
+
+  /**
+   * Re-drives the failed or cancelled destinations of the invoice's current
+   * revision. Destinations that were disabled or disconnected are skipped,
+   * and the accounting re-post is left to an admin (`admin_required`).
+   */
+  retryDelivery: workspaceProcedure
+    .input(retryInboxSchema)
+    .mutation(async ({ ctx: { db, teamId, teamRole }, input }) => {
+      const result = await retryInvoiceDelivery(db, {
+        invoiceId: input.id,
+        teamId: teamId!,
+        teamRole: teamRole ?? null,
+      });
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Invoice not found",
+        });
+      }
+      return result;
     }),
 
   update: workspaceProcedure

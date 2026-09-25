@@ -44,13 +44,14 @@ import {
 } from "effect";
 import { nanoid } from "nanoid";
 import { type CreateContactOptions, Resend } from "resend";
-import { enqueueAccountingPost, postAccountingDraft } from "./accounting";
+import { postAccountingDraft } from "./accounting";
 import { workflowKey } from "./client";
 import {
   DeletionCleanupError,
   revokeDeletionConnection,
   runDeletionCleanup,
 } from "./deletion";
+import { reconcileDeliveries } from "./delivery";
 import {
   acceptIntakeUpload,
   resolveWorkerIntakeBinding,
@@ -75,6 +76,7 @@ import {
   WebhookTransportLive,
   deliverWebhook,
   makeWebhookDeliveryRepository,
+  publishDeliveryFailureById,
 } from "./webhooks";
 
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
@@ -399,8 +401,23 @@ const makeProcessAttachment = (
       );
     }
 
+    // Extraction already completed (a replay, or a worker that died after
+    // the completion commit). Its deliveries were scheduled in that same
+    // transaction; resume any that lost their job instead of returning early.
+    const resumeDeliveries = () =>
+      attempt(
+        () =>
+          reconcileDeliveries(
+            db,
+            { teamId: payload.teamId, invoiceId: binding.id },
+            publishDeliveryFailureById,
+          ),
+        "Unable to resume invoice deliveries",
+      );
+
     if (binding.status !== "processing") {
-      return { inboxId: binding.id, idempotent: true };
+      const resumed = yield* resumeDeliveries();
+      return { inboxId: binding.id, idempotent: true, ...resumed };
     }
 
     const inboxItem = binding;
@@ -441,32 +458,20 @@ const makeProcessAttachment = (
           }),
         "Unable to process invoice",
       );
-      const accountingQueued = processed.record
-        ? yield* attempt(
-            () =>
-              enqueueAccountingPost(db, {
-                invoiceId: processed.record!.id,
-                teamId: payload.teamId,
-              }),
-            "Unable to queue accounting post",
-          ).pipe(
-            Effect.map((queued) => queued !== null),
-            Effect.catchAll((error) =>
-              Effect.logWarning("accounting_post_queue_failed").pipe(
-                Effect.annotateLogs({
-                  invoiceId: processed.record!.id,
-                  reason: error.reason,
-                }),
-                Effect.as(false),
-              ),
-            ),
-          )
-        : false;
+      const { completion } = processed;
+      if (!completion) {
+        // A concurrent worker completed the revision first; its transaction
+        // scheduled the deliveries.
+        const resumed = yield* resumeDeliveries();
+        return { inboxId: inboxItem.id, idempotent: true, ...resumed };
+      }
       return {
         inboxId: inboxItem.id,
+        revision: completion.revision,
         type: processed.result.type ?? null,
         judgments: processed.result.judgments?.length ?? 0,
-        accountingQueued,
+        webhooksScheduled: completion.scheduled.webhooks,
+        accountingQueued: completion.scheduled.accounting,
       };
     });
 
@@ -919,8 +924,15 @@ export const WorkflowHandlerLive = Layer.effect(
     const onboardTeam = makeOnboardTeam(db, mailer);
     const purgeDeletedData = makePurgeDeletedData(db, storage);
     const webhookRepository = makeWebhookDeliveryRepository(db);
-    const postAccountingDraftJob = (payload: PostAccountingDraftPayload) =>
-      postAccountingDraft(db, storage, payload).pipe(
+    const postAccountingDraftJob = (
+      job: WorkflowJob,
+      payload: PostAccountingDraftPayload,
+    ) =>
+      postAccountingDraft(db, storage, {
+        ...payload,
+        attempt: job.attempts,
+        maxAttempts: job.maxAttempts,
+      }).pipe(
         Effect.mapError(
           (error) =>
             new WorkflowExecutionError({
@@ -971,7 +983,7 @@ export const WorkflowHandlerLive = Layer.effect(
             case "deliver-webhook":
               return yield* deliverWebhookJob(job, request.payload);
             case "post-accounting-draft":
-              return yield* postAccountingDraftJob(request.payload);
+              return yield* postAccountingDraftJob(job, request.payload);
             case "purge-deleted-data":
               return yield* purgeDeletedData(job, request.payload);
           }

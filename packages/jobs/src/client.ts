@@ -61,7 +61,16 @@ export const workflowKey = {
   invitations: (teamId: string, identifiers: readonly string[]) =>
     `${teamId}:${[...identifiers].sort().join(",")}`,
   onboarding: (userId: string, stage = "welcome") => `${userId}:${stage}`,
-  accounting: (teamId: string, invoiceId: string) => `${teamId}:${invoiceId}`,
+  /**
+   * One accounting intent per processing revision. The SQL mirror in
+   * `listStalledAccountingPosts` (packages/db) must build the same key.
+   */
+  accounting: (teamId: string, invoiceId: string, revision: number) =>
+    `${teamId}:${invoiceId}:r${revision}`,
+  /**
+   * One delivery job per logical event and endpoint. The SQL mirror in
+   * `listStalledWebhookDeliveries` (packages/db) must build the same key.
+   */
   webhook: (eventId: string, endpointId: string) => `${eventId}:${endpointId}`,
   /** A cleanup run deferred until the deletion's quiesce time. */
   deletionResume: (deletionId: string, resumeAt: string) =>

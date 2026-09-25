@@ -14,10 +14,10 @@ import {
   completeAccountingConnection,
   createAccountingConnectSession,
   disconnectAccountingConnection,
-  enqueueAccountingPost,
   postAccountingDraft,
   retryAccountingPost,
 } from "./accounting";
+import { scheduleAccountingPost } from "./delivery";
 import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
 
@@ -303,29 +303,31 @@ async function main() {
         judgments: [],
       });
     };
-    // Saves a copy as the processing job does (validated against every other
-    // copy) and queues its accounting post.
+    // Completes a copy as the processing job does: validated against every
+    // other copy, with its accounting post scheduled in the same transaction.
     const processCopy = async (
       id: string,
       invoiceNumber: string,
       supplier: Partial<ReturnType<typeof extractionOf>> = {},
     ) => {
-      await saveProcessedDocument(database.db, {
+      await database.db
+        .update(inbox)
+        .set({ status: "processing" })
+        .where(eq(inbox.id, id));
+      const { completion } = await saveProcessedDocument(database.db, {
         id,
         teamId: teamId!,
         displayName: "Acme Supplies Ltd",
         type: "invoice",
-        status: "pending",
         extraction: {
           ...extractionOf(invoiceNumber),
           ...supplier,
         } as unknown as InvoiceExtraction,
         judgments: [],
       });
-      await enqueueAccountingPost(database.db, {
-        invoiceId: id,
-        teamId: teamId!,
-      });
+      if (!completion?.scheduled.accounting) {
+        throw new Error(`Accounting post for ${invoiceNumber} was not queued`);
+      }
     };
     const callsFor = (invoiceNumber: string) =>
       billAttempts.get(invoiceNumber) ?? 0;
@@ -349,10 +351,15 @@ async function main() {
 
     const postedInvoice = await createInvoice("POST-ONCE");
     if (!postedInvoice) throw new Error("Unable to persist posted invoice");
-    const postedJob = await enqueueAccountingPost(database.db, {
-      invoiceId: postedInvoice.id,
-      teamId,
-    });
+    const schedule = (invoiceId: string) =>
+      scheduleAccountingPost(database.db, {
+        invoiceId,
+        teamId: teamId!,
+        revision: 0,
+        status: null,
+        providerId: null,
+      });
+    const postedJob = await schedule(postedInvoice.id);
     if (!postedJob) throw new Error("Accounting post was not queued");
     await runBatch();
     const postedStatus = await getInvoiceAccountingStatus(database.db, {
@@ -372,10 +379,7 @@ async function main() {
 
     const retryInvoice = await createInvoice("FAIL-RETRY");
     if (!retryInvoice) throw new Error("Unable to persist retry invoice");
-    const retryJob = await enqueueAccountingPost(database.db, {
-      invoiceId: retryInvoice.id,
-      teamId,
-    });
+    const retryJob = await schedule(retryInvoice.id);
     if (!retryJob) throw new Error("Retry accounting post was not queued");
     await runBatch();
     const failedStatus = await getInvoiceAccountingStatus(database.db, {
@@ -383,7 +387,7 @@ async function main() {
       teamId,
     });
     const queued = await getWorkflowJob(database.db, {
-      id: retryJob.job.id,
+      id: retryJob.id,
       teamId,
     });
     if (!queued) throw new Error("Unable to load retry workflow");
@@ -392,7 +396,7 @@ async function main() {
     );
     await runBatch();
     const retriedJob = await getWorkflowJob(database.db, {
-      id: retryJob.job.id,
+      id: retryJob.id,
       teamId,
     });
     const retriedStatus = await getInvoiceAccountingStatus(database.db, {
@@ -407,10 +411,7 @@ async function main() {
       grossAmount: 150,
     });
     if (!blockedInvoice) throw new Error("Unable to persist blocked invoice");
-    const blockedJob = await enqueueAccountingPost(database.db, {
-      invoiceId: blockedInvoice.id,
-      teamId,
-    });
+    const blockedJob = await schedule(blockedInvoice.id);
     if (!blockedJob) throw new Error("Blocked accounting post was not queued");
     await runBatch();
     const blockedStatus = await getInvoiceAccountingStatus(database.db, {
@@ -418,7 +419,7 @@ async function main() {
       teamId,
     });
     const blockedRun = await getWorkflowJob(database.db, {
-      id: blockedJob.job.id,
+      id: blockedJob.id,
       teamId,
     });
     const blockedCalls = callsFor("BLOCKED-TOTAL");
@@ -542,7 +543,10 @@ async function main() {
       postedStatus?.status !== "posted" ||
       duplicate.status !== "already_posted" ||
       !duplicateRefused ||
-      failedStatus?.status !== "failed" ||
+      // A failed attempt with retries left keeps the intent queued; only the
+      // final attempt is a terminal failure.
+      failedStatus?.status !== "queued" ||
+      failedStatus.lastError !== "Forced provider timeout" ||
       retriedJob?.status !== "succeeded" ||
       retriedJob.attempts !== 2 ||
       retriedStatus?.status !== "posted" ||
@@ -620,6 +624,7 @@ async function main() {
             differentSupplier,
           },
           retry: {
+            afterFirstAttempt: failedStatus.status,
             failedWith: failedStatus.lastError,
             attempts: retriedJob.attempts,
             finalStatus: retriedStatus.status,

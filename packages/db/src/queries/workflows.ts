@@ -332,6 +332,42 @@ export async function restartFailedWorkflowJob(
   return job;
 }
 
+/**
+ * Re-runs a finished job under its original idempotency key, so the
+ * durable delivery record and its job stay linked. Used by explicit delivery
+ * retries; a queued or running job is left alone.
+ */
+export async function requeueFinishedWorkflowJob(
+  db: Pick<Database, "update">,
+  params: { name: string; idempotencyKey: string; teamId: string },
+) {
+  const now = new Date().toISOString();
+  const [job] = await db
+    .update(workflowJobs)
+    .set({
+      status: "queued",
+      attempts: 0,
+      runAt: now,
+      lockedBy: null,
+      lockedAt: null,
+      heartbeatAt: null,
+      leaseExpiresAt: null,
+      finishedAt: null,
+      lastError: null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(workflowJobs.name, params.name),
+        eq(workflowJobs.idempotencyKey, params.idempotencyKey),
+        eq(workflowJobs.teamId, params.teamId),
+        inArray(workflowJobs.status, ["failed", "succeeded"]),
+      ),
+    )
+    .returning();
+  return job;
+}
+
 export function listWorkflowJobs(db: Database, limit = 50) {
   return db
     .select()

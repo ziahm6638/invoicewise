@@ -7,6 +7,8 @@ import {
   retryWorkflowJob,
 } from "@invoicewise/db/queries";
 import { Config, Context, Effect, Either, Layer, Schema } from "effect";
+import { reconcileDeliveries } from "./delivery";
+import { publishDeliveryFailureById } from "./webhooks";
 import {
   WorkflowDatabase,
   type WorkflowExecutionError,
@@ -125,6 +127,41 @@ export const WorkflowRepositoryLive = Layer.effect(
           () => failWorkflowJob(db, { id, workerId, error }),
           "Unable to fail workflow",
         ),
+    };
+  }),
+);
+
+/**
+ * Periodic safety net for the processing-to-delivery handoff: settles
+ * delivery intents whose job vanished or failed without the handler recording
+ * an outcome (for example a lease that expired after the final attempt).
+ */
+export class DeliveryReconciler extends Context.Tag(
+  "invoicewise/DeliveryReconciler",
+)<
+  DeliveryReconciler,
+  {
+    readonly intervalMs: number;
+    readonly run: Effect.Effect<
+      { rescheduled: number; failed: number },
+      WorkflowQueueError
+    >;
+  }
+>() {}
+
+export const DeliveryReconcilerLive = Layer.effect(
+  DeliveryReconciler,
+  Effect.gen(function* () {
+    const { db } = yield* WorkflowDatabase;
+    const intervalMs = yield* Config.integer("WORKFLOW_RECONCILE_MS").pipe(
+      Config.withDefault(60_000),
+    );
+    return {
+      intervalMs: Math.max(1000, intervalMs),
+      run: queueAttempt(
+        () => reconcileDeliveries(db, {}, publishDeliveryFailureById),
+        "Unable to reconcile deliveries",
+      ),
     };
   }),
 );
@@ -271,8 +308,38 @@ export const runWorkflowBatch = Effect.gen(function* () {
   return jobs.length;
 });
 
+const reconcileForever = Effect.gen(function* () {
+  const reconciler = yield* DeliveryReconciler;
+  yield* Effect.forever(
+    reconciler.run.pipe(
+      Effect.tap(({ rescheduled, failed }) =>
+        rescheduled + failed > 0
+          ? Effect.logWarning("delivery_reconciled").pipe(
+              Effect.annotateLogs({
+                event: "delivery_reconciled",
+                rescheduled,
+                failed,
+              }),
+            )
+          : Effect.void,
+      ),
+      Effect.catchAll((error) =>
+        Effect.logError("delivery_reconcile_failed").pipe(
+          Effect.annotateLogs({
+            event: "delivery_reconcile_failed",
+            error: error.reason,
+          }),
+        ),
+      ),
+      Effect.zipRight(Effect.sleep(reconciler.intervalMs)),
+    ),
+  );
+});
+
 export const runWorkflows = Effect.gen(function* () {
   const settings = yield* WorkflowRunnerSettings;
+  // Supervised by this fiber: it stops when the runner stops.
+  yield* Effect.fork(reconcileForever);
   yield* Effect.logInfo("workflow_runner_started").pipe(
     Effect.annotateLogs({
       event: "workflow_runner_started",
@@ -303,4 +370,5 @@ export const WorkflowRuntimeLive = Layer.mergeAll(
   WorkflowRepositoryLive,
   WorkflowHandlerLive,
   WorkflowRunnerSettingsLive,
+  DeliveryReconcilerLive,
 ).pipe(Layer.provide(WorkflowInfrastructureLive));

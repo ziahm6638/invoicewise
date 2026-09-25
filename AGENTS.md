@@ -53,7 +53,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Framework:** Next.js 15 (dashboard, website), Hono + Effect (API)
 - **Database:** Postgres 17 with pgvector, accessed with Drizzle; local services from `docker-compose.yml`
 - **Auth:** Better Auth (users, sessions, memberships, invitations, TOTP second factor, DB-backed rate limits) in the primary database; production boot policy in `apps/api/src/auth-policy.ts`, flows in `docs/development.md#account-security`
-- **Background jobs:** Postgres-backed Effect workflow queue (`packages/jobs`)
+- **Background jobs:** Postgres-backed Effect workflow queue (`packages/jobs`); processing completion and every destination's delivery intent commit in one transaction (`packages/jobs/src/delivery.ts`), see `docs/delivery.md#processing-to-delivery-handoff`
 - **Storage:** private local filesystem or S3-compatible (MinIO locally, R2 in production)
 - **Email:** transactional mail via Purelymail SMTP (nodemailer); **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)
 - **Extraction:** TypeSafe (text-only, selects among options, never generates): code mines candidates from laid-out text (PDF text layer, else tesseract OCR), TypeSafe picks; see `docs/document-intake.md#extraction`. Text PDF, scanned PDF, PNG and JPEG share one pipeline and record shape; HEIC is refused. The input matrix and limits are in `docs/document-intake.md#supported-inputs`
