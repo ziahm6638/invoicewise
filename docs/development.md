@@ -415,8 +415,10 @@ disposable local stack:
   documented forward recovery;
 - the existing verifiers: `apps/api` delivery, `packages/jobs` workflows,
   accounting and handoff fault injection, the local and MinIO-backed storage
-  adapters, and the #32/#34 security and intake HTTP regression suites
-  (including the concurrency, content-hash and request-body bound checks);
+  adapters, the #32/#34 security and intake HTTP regression suites
+  (including the concurrency, content-hash and request-body bound checks), and
+  the data lifecycle export and retention suite
+  ([data lifecycle](data-lifecycle.md#proof));
 - real production builds for the dashboard and website, and executable
   `bun build --packages=external` artifacts for the API and the workflow worker
   that are started and probed (health, database health, OpenAPI, a real queued

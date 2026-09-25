@@ -283,7 +283,11 @@ describe("exportFailureMessage", () => {
     ).toBe(temporary);
     // Retries exhausted: the owner must request a new export.
     expect(
-      exportFailureMessage({ userMessage: temporary, retryable: true, final: true }),
+      exportFailureMessage({
+        userMessage: temporary,
+        retryable: true,
+        final: true,
+      }),
     ).toBe("The export could not be prepared. Request a new export.");
   });
 
