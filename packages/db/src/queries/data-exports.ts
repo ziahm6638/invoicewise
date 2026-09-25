@@ -7,6 +7,7 @@ import {
   inbox,
   inboxAccounts,
   inboxRedeliveries,
+  invoiceCorrections,
   supplierEvents,
   suppliers,
   teams,
@@ -461,6 +462,7 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     invoices,
     supplierRows,
     supplierEventRows,
+    corrections,
     redeliveries,
     questions,
     members,
@@ -493,6 +495,7 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
         description: inbox.description,
         website: inbox.website,
         extraction: inbox.extraction,
+        extractionOriginal: inbox.extractionOriginal,
         judgments: inbox.judgments,
         processingError: inbox.processingError,
         intakeState: inbox.intakeState,
@@ -540,6 +543,28 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
       .from(supplierEvents)
       .where(eq(supplierEvents.teamId, teamId))
       .orderBy(asc(supplierEvents.createdAt), asc(supplierEvents.id)),
+    db
+      .select({
+        id: invoiceCorrections.id,
+        invoiceId: invoiceCorrections.invoiceId,
+        version: invoiceCorrections.version,
+        baseRevision: invoiceCorrections.baseRevision,
+        revision: invoiceCorrections.revision,
+        actorId: invoiceCorrections.actorId,
+        reason: invoiceCorrections.reason,
+        changes: invoiceCorrections.changes,
+        accountingOutcome: invoiceCorrections.accountingOutcome,
+        provider: invoiceCorrections.provider,
+        providerId: invoiceCorrections.providerId,
+        updateStatus: invoiceCorrections.updateStatus,
+        updateError: invoiceCorrections.updateError,
+        updatedAt: invoiceCorrections.updatedAt,
+        createdAt: invoiceCorrections.createdAt,
+      })
+      .from(invoiceCorrections)
+      .innerJoin(inbox, eq(inbox.id, invoiceCorrections.invoiceId))
+      .where(and(eq(invoiceCorrections.teamId, teamId), exportedInvoice))
+      .orderBy(asc(invoiceCorrections.createdAt), asc(invoiceCorrections.id)),
     db
       .select({
         id: inboxRedeliveries.id,
@@ -675,6 +700,7 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     invoices,
     suppliers: supplierRows,
     supplierEvents: supplierEventRows,
+    corrections,
     redeliveries,
     questions,
     members,
