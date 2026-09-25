@@ -591,11 +591,14 @@ async function verifyExportAndRetention(
     );
 
   for (const invoice of accepted) {
+    // A record without a stored original (the synthetic duplicate-candidate
+    // copies) has no document to export.
+    if (!invoice.filePath?.length) continue;
     const document = manifest.documents?.find(
       (entry: { invoiceId: string }) => entry.invoiceId === invoice.id,
     );
     const original = await storage
-      .download({ bucket: "vault", path: invoice.filePath! })
+      .download({ bucket: "vault", path: invoice.filePath })
       .then(async (blob) => Buffer.from(await blob.arrayBuffer()))
       .catch(() => null);
     if (!document || document.status !== (original ? "included" : "missing")) {
