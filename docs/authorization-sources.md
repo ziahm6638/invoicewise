@@ -5,8 +5,8 @@ orders** and **contracts**. A workspace creates them in the dashboard
 (**Authorizations**), imports them from a CSV file, or has another system send
 them through the REST API. InvoiceWise records what was authorized and keeps
 every change; it is not a procurement system and does not raise or approve
-orders. Matching invoices against sources is a separate step built on this
-record.
+orders. Invoices are [matched to these sources](authorization-matching.md)
+with the version in effect on the invoice date.
 
 The rules are plain code in `packages/documents/src/authorization-source.ts`
 (validation, CSV parsing) and `packages/jobs/src/authorization-sources.ts`
@@ -159,6 +159,7 @@ curl -X POST "$INVOICEWISE_API_URL/authorization-sources" \
 | `GET /authorization-sources/imports` | `sources.read`, admin | recent imports and batches with their outcome |
 | `POST /authorization-sources/:id/documents` | `sources.write`, admin | multipart field `file`: attach a document |
 | `GET /authorization-sources/:id/documents/:documentId` | `sources.read` | the retained document |
+| `GET /authorization-sources/:id/invoices` | `sources.read` and `inbox.read` | the invoices currently [matched](authorization-matching.md) to the source, with the version compared and the amount allocated to it |
 
 A batch answers `200` with `status` `applied` (or `validated` for a dry run),
 a `summary` (`created`, `amended`, `unchanged`) and one result per source

@@ -1,5 +1,6 @@
 import { type SQL, relations, sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   customType,
@@ -2487,6 +2488,12 @@ export const inbox = pgTable(
     // The received message this document was an attachment of, when it came
     // in through the workspace's dedicated address.
     inboundEmailId: uuid("inbound_email_id"),
+    // The invoice's current decision about which authorization sources it
+    // bills; earlier decisions stay in `invoice_source_matches`.
+    sourceMatchId: uuid("source_match_id").references(
+      (): AnyPgColumn => invoiceSourceMatches.id,
+      { onDelete: "set null" },
+    ),
   },
   (table) => [
     index("inbox_attachment_id_idx").using(
@@ -3047,6 +3054,139 @@ export const authorizationSourceImports = pgTable(
       foreignColumns: [users.id],
       name: "authorization_source_imports_actor_id_fkey",
     }).onDelete("set null"),
+  ],
+);
+
+// Every decision about which authorization sources an invoice bills: an
+// automatic one (an exact reference, or TypeSafe choosing among the
+// workspace's candidates) or a person's confirmation, correction or unlink.
+// Decisions are never edited (a trigger refuses it); the invoice points at
+// its current one, so overrides, earlier decisions and their reasons are
+// kept. See docs/authorization-matching.md.
+export const invoiceSourceMatches = pgTable(
+  "invoice_source_matches",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    inboxId: uuid("inbox_id").notNull(),
+    // 1, 2, ... per invoice.
+    sequence: integer("sequence").notNull(),
+    status: text("status").notNull(),
+    origin: text("origin").notNull(),
+    action: text("action").notNull(),
+    method: text("method"),
+    // The whole decision: candidates with their evidence, links, allocations,
+    // the semantic answer and the lookup time.
+    result: jsonb("result").$type<Record<string, unknown>>().notNull(),
+    reason: text("reason"),
+    // The processing revision whose extraction was matched.
+    processingRevision: integer("processing_revision"),
+    rulesVersion: integer("rules_version").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    actorId: uuid("actor_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("invoice_source_matches_inbox_sequence_key").on(
+      table.inboxId,
+      table.sequence,
+    ),
+    index("invoice_source_matches_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "invoice_source_matches_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.inboxId],
+      foreignColumns: [inbox.id],
+      name: "invoice_source_matches_inbox_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.actorId],
+      foreignColumns: [users.id],
+      name: "invoice_source_matches_actor_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+// A source (and the version compared) that one decision links the invoice to.
+export const invoiceSourceLinks = pgTable(
+  "invoice_source_links",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    matchId: uuid("match_id").notNull(),
+    inboxId: uuid("inbox_id").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    versionId: uuid("version_id").notNull(),
+  },
+  (table) => [
+    uniqueIndex("invoice_source_links_match_source_key").on(
+      table.matchId,
+      table.sourceId,
+    ),
+    index("invoice_source_links_team_source_idx").on(
+      table.teamId,
+      table.sourceId,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "invoice_source_links_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.matchId],
+      foreignColumns: [invoiceSourceMatches.id],
+      name: "invoice_source_links_match_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.inboxId],
+      foreignColumns: [inbox.id],
+      name: "invoice_source_links_inbox_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.sourceId],
+      foreignColumns: [authorizationSources.id],
+      name: "invoice_source_links_source_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.versionId],
+      foreignColumns: [authorizationSourceVersions.id],
+      name: "invoice_source_links_version_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// Part of the invoice billed against a linked source: one of its lines (or
+// the whole invoice when null), optionally against one authorized line. The
+// amount is signed (a credit note is negative) in the invoice's currency.
+export const invoiceSourceAllocations = pgTable(
+  "invoice_source_allocations",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    linkId: uuid("link_id").notNull(),
+    sourceLineReference: text("source_line_reference"),
+    invoiceLineIndex: integer("invoice_line_index"),
+    amount: numeric("amount", { precision: 16, scale: 2 }),
+    currency: text("currency"),
+    basis: text("basis").notNull(),
+  },
+  (table) => [
+    index("invoice_source_allocations_link_id_idx").on(table.linkId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "invoice_source_allocations_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.linkId],
+      foreignColumns: [invoiceSourceLinks.id],
+      name: "invoice_source_allocations_link_id_fkey",
+    }).onDelete("cascade"),
   ],
 );
 

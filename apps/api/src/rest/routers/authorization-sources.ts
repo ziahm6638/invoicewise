@@ -21,6 +21,7 @@ import {
   getEffectiveAuthorizationSourceVersion,
   listAuthorizationSourceImports,
   listAuthorizationSources,
+  listSourceInvoiceMatches,
 } from "@invoicewise/db/queries";
 import {
   AUTHORIZATION_SOURCE_LIMITS,
@@ -194,6 +195,32 @@ app.get("/:id", withRequiredScope("sources.read"), async (c) => {
     ? c.json(presentAuthorizationSource(source))
     : c.json(NOT_FOUND, 404);
 });
+
+/**
+ * The invoices currently matched to the source, with what each allocates to
+ * it. Invoice data, so the credential needs `inbox.read` as well.
+ */
+app.get(
+  "/:id/invoices",
+  withRequiredScope("sources.read"),
+  withRequiredScope("inbox.read"),
+  async (c) => {
+    const parsed = authorizationSourceIdSchema.safeParse(c.req.param());
+    if (!parsed.success) return c.json(NOT_FOUND, 404);
+    const teamId = c.get("teamId");
+    const source = await getAuthorizationSourceHead(c.get("db"), {
+      teamId,
+      sourceId: parsed.data.id,
+    });
+    if (!source) return c.json(NOT_FOUND, 404);
+    return c.json({
+      data: await listSourceInvoiceMatches(c.get("db"), {
+        teamId,
+        sourceId: source.id,
+      }),
+    });
+  },
+);
 
 app.get(
   "/:id/versions/:version",

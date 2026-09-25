@@ -10,6 +10,7 @@ import { inboxRouter } from "./inbox";
 import { inboxAccountsRouter } from "./inbox-accounts";
 import { oauthApplicationsRouter } from "./oauth-applications";
 import { questionsRouter } from "./questions";
+import { sourceMatchesRouter } from "./source-matches";
 import { suppliersRouter } from "./suppliers";
 import { teamRouter } from "./team";
 import { userRouter } from "./user";
@@ -28,6 +29,7 @@ export const appRouter = createTRPCRouter({
   user: userRouter,
   apiKeys: apiKeysRouter,
   questions: questionsRouter,
+  sourceMatches: sourceMatchesRouter,
   suppliers: suppliersRouter,
   webhooks: webhooksRouter,
 });

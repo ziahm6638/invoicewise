@@ -36,6 +36,13 @@ totals with their currencies, duplicate and credit-note identity, and
 `accounting.ready` with its blockers. See
 [Validation](document-intake.md#validation).
 
+Invoice reads and MCP `get_invoice`/`list_invoices` also carry `sourceMatch`:
+the current decision about which jobs, purchase orders and contracts the
+invoice bills, with confidence, allocations and the evidence for every
+candidate, or null before matching. It is decided after processing, so the
+`invoice.processed` payload does not include it; subscribe to
+`invoice.matched`. See [matching](authorization-matching.md).
+
 `POST /invoices/:id/delivery/retry` (scope `inbox.write`) is the recovery
 action for failed or cancelled destinations; see
 [Processing-to-delivery handoff](#processing-to-delivery-handoff).
@@ -116,10 +123,12 @@ curl --fail --silent \
 
 ### Events and payloads
 
-Events are `invoice.processed`, `invoice.judgments.attached` and
-`delivery.failed`, plus `webhook.test`, which is sent only when requested and
-regardless of the endpoint's subscriptions. Every body is a versioned
-envelope:
+Events are `invoice.processed`, `invoice.judgments.attached`,
+`invoice.matched` and `delivery.failed`, plus `webhook.test`, which is sent
+only when requested and regardless of the endpoint's subscriptions.
+`invoice.matched` is sent for every new [match
+decision](authorization-matching.md), automatic or a person's; its `data` is
+`{ "invoiceId", "match" }`. Every body is a versioned envelope:
 
 ```json
 {
@@ -179,8 +188,9 @@ Delivery is at least once. A worker that dies after your endpoint answered but
 before InvoiceWise recorded the answer sends the same request again, and an
 explicit redelivery re-sends an event you may already have processed, so
 deduplicate on `invoicewise-event-id` (the body's `id`). The ID is derived
-from the invoice, its processing `revision` and the event type: it is the same
-on every endpoint, every retry and every redelivery.
+from the invoice, its processing `revision` and the event type (for
+`invoice.matched`, from the invoice and the decision): it is the same on every
+endpoint, every retry and every redelivery.
 
 Only a `2xx` answer is a success. A non-`2xx` response (including a redirect,
 which is never followed), a timeout or a network error is retried: four

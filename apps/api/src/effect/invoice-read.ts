@@ -58,6 +58,15 @@ export const InvoiceItem = Schema.Struct({
    * `version`; bank details appear only masked. Null until processed.
    */
   supplierChecks: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  /**
+   * The current decision about which authorization sources (jobs, purchase
+   * orders, contracts) the invoice bills: `status` (`matched`, `unmatched`,
+   * `ambiguous`, `insufficient_evidence`), `method`, `confidence`,
+   * `needsConfirmation`, the linked sources and versions (`links`), the
+   * `allocations`, every `candidates` source considered with its evidence,
+   * and who decided (`origin`, `action`, `reason`). Null until matched.
+   */
+  sourceMatch: Schema.optional(Schema.NullOr(Schema.Unknown)),
   /** Why extraction failed, when it did; null while processing or once processed. */
   processingError: Schema.optional(Schema.NullOr(Schema.String)),
   /**

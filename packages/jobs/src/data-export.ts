@@ -10,6 +10,7 @@ import {
   completeDataExport,
   documentBindingIssue,
   getAuthorizationSourcesForExport,
+  getSourceMatchesForExport,
   getWorkspaceExportData,
   recordDataExportObject,
   recordDataExportProgress,
@@ -409,6 +410,36 @@ export async function removeStaleExportTempFiles(
 }
 
 /**
+ * Every decision about which authorization sources an exported invoice bills,
+ * oldest first per invoice, with its links and allocations and whether it is
+ * the invoice's current decision.
+ */
+async function exportSourceMatches(
+  deps: DataExportDeps,
+  teamId: string,
+  invoiceIds: ReadonlySet<string>,
+) {
+  const data = await getSourceMatchesForExport(deps.db, teamId);
+  return data.matches
+    .filter((match) => invoiceIds.has(match.inboxId))
+    .map(({ teamId: _team, fingerprint: _fingerprint, inboxId, ...match }) => ({
+      ...match,
+      invoiceId: inboxId,
+      current: data.currentIds.has(match.id),
+      links: data.links
+        .filter((link) => link.matchId === match.id)
+        .map((link) => ({
+          id: link.id,
+          sourceId: link.sourceId,
+          versionId: link.versionId,
+          allocations: data.allocations
+            .filter((allocation) => allocation.linkId === link.id)
+            .map(({ teamId: _t, linkId: _l, ...allocation }) => allocation),
+        })),
+    }));
+}
+
+/**
  * Authorization sources with every version and their retained documents,
  * which are added to the archive under `authorization-sources/`. A document
  * whose stored path is not the source's own is listed as withheld, never read.
@@ -664,6 +695,11 @@ export async function buildDataExport(
       writer,
     );
     const records = buildExportRecords(data, documents);
+    const sourceMatches = await exportSourceMatches(
+      deps,
+      params.teamId,
+      new Set(records.invoices.map((invoice) => String(invoice.id))),
+    );
     const dataFiles: { path: string; records: number; content: string }[] = [
       { path: "workspace.json", records: 1, content: json(records.workspace) },
       {
@@ -690,6 +726,11 @@ export async function buildDataExport(
         path: "authorization-sources.json",
         records: sources.records.length,
         content: json(sources.records),
+      },
+      {
+        path: "source-matches.json",
+        records: sourceMatches.length,
+        content: json(sourceMatches),
       },
       {
         path: "questions.json",
@@ -761,6 +802,8 @@ export async function buildDataExport(
         authorizationSource:
           "InvoiceWise authorization source id (UUID) with every immutable version (id and number); its retained documents are authorization-sources/<source id>/<document id>-<file name>, with their SHA-256",
         judgment: "<invoice id>:<question id>",
+        sourceMatch:
+          "InvoiceWise match decision id (UUID), numbered per invoice by sequence; its links name authorization source and version ids",
         inboundEmail:
           "InvoiceWise received-message id (UUID); invoiceIds name the invoices its attachments became",
         auditEvent: "<event type>:<source record id>",

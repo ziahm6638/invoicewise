@@ -24,6 +24,7 @@ import {
 export const WEBHOOK_EVENTS = [
   "invoice.processed",
   "invoice.judgments.attached",
+  "invoice.matched",
   "delivery.failed",
 ] as const;
 

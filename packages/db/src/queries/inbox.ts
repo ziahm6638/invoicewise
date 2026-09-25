@@ -6,6 +6,7 @@ import {
   inboxAccounts,
   inboxEmbeddings,
   inboxRedeliveries,
+  invoiceSourceMatches,
   suppliers,
   transactionAttachments,
   transactionEmbeddings,
@@ -173,6 +174,29 @@ export type GetInboxParams = {
  * Provenance of a document received on the workspace's dedicated address:
  * the message it was attached to. Null for uploads and synced mailboxes.
  */
+/**
+ * The invoice's current authorization-source decision as reads present it:
+ * the stored result (candidates with evidence, links, allocations) with the
+ * decision's identity, who-made-it kind, reason and time. Null until matched.
+ */
+const currentSourceMatch = () =>
+  sql<Record<string, unknown> | null>`(
+    select m.result || jsonb_build_object(
+      'id', m.id,
+      'sequence', m.sequence,
+      'status', m.status,
+      'origin', m.origin,
+      'action', m.action,
+      'method', m.method,
+      'reason', m.reason,
+      'processingRevision', m.processing_revision,
+      'rulesVersion', m.rules_version,
+      'decidedAt', m.created_at
+    )
+    from ${invoiceSourceMatches} m
+    where m.id = ${inbox.sourceMatchId}
+  )`;
+
 const inboundEmailSource = {
   id: inboundEmails.id,
   messageId: inboundEmails.messageId,
@@ -263,6 +287,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       validation: inbox.validation,
       supplierId: inbox.supplierId,
       supplierChecks: inbox.supplierChecks,
+      sourceMatch: currentSourceMatch(),
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
@@ -351,6 +376,7 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       validation: inbox.validation,
       supplierId: inbox.supplierId,
       supplierChecks: inbox.supplierChecks,
+      sourceMatch: currentSourceMatch(),
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),

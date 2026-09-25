@@ -10,3 +10,5 @@ export { InvoiceProcessingError } from "./processors/invoice/invoice-processor";
 export * from "./validation";
 export * from "./supplier";
 export * from "./authorization-source";
+export * from "./source-matching";
+export * from "./typesafe/source-match";

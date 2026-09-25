@@ -49,6 +49,7 @@ import {
   typeLabel,
 } from "./shared";
 import { SourceForm } from "./source-form";
+import { SourceInvoices } from "./source-invoices";
 
 type Version = RouterOutputs["authorizationSources"]["version"];
 
@@ -465,6 +466,8 @@ export function SourceDetail({ id }: { id: string }) {
           )}
         </div>
       </section>
+
+      <SourceInvoices id={id} />
 
       <section className="space-y-2">
         <div className="flex items-center justify-between">

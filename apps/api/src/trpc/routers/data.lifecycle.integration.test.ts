@@ -446,6 +446,12 @@ suite("data lifecycle (integration)", () => {
         authorizedTotal: "1",
       },
     });
+    // The first invoice is linked to the purchase order by its owner.
+    const linked = await caller(ctx(owner, teamId)).sourceMatches.link({
+      inboxId: invoices[0]!.id,
+      reason: "Export test",
+      sources: [{ sourceId: purchaseOrder.sourceId }],
+    });
     const received = await seedInboundEmail(teamId, {
       status: "processed",
       subject: "Invoice from Acme",
@@ -661,6 +667,24 @@ suite("data lifecycle (integration)", () => {
     });
     expect(entries.get(sourceDocument.path)?.equals(signedCopy)).toBe(true);
     expect(manifest.counts.authorizationSources).toBe(1);
+    const matches = JSON.parse(entries.get("source-matches.json")!.toString());
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({
+      id: linked.id,
+      invoiceId: invoices[0]!.id,
+      sequence: 1,
+      status: "matched",
+      origin: "manual",
+      action: "correct",
+      reason: "Export test",
+      current: true,
+      links: [
+        {
+          sourceId: purchaseOrder.sourceId,
+          allocations: [{ invoiceLineIndex: null, amount: "120.00" }],
+        },
+      ],
+    });
     const judgments = JSON.parse(entries.get("judgments.json")!.toString());
     expect(judgments.map((judgment: { id: string }) => judgment.id)).toContain(
       `${invoices[0]!.id}:known_supplier`,

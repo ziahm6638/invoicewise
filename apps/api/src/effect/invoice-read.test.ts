@@ -71,6 +71,30 @@ const invoice = {
       evidence: [],
     },
   },
+  sourceMatch: {
+    id: "3f1c9a52-4b1e-4c55-9f0b-6b1d2f8e7a10",
+    sequence: 1,
+    status: "matched",
+    origin: "automatic",
+    action: "automatic",
+    method: "reference",
+    confidence: 1,
+    needsConfirmation: false,
+    links: [
+      {
+        sourceId: "b8e2a6f1-0c3d-4e5f-8a9b-1c2d3e4f5a6b",
+        versionId: "c9f3b7a2-1d4e-4f6a-9b0c-2d3e4f5a6b7c",
+        version: 1,
+        type: "purchase_order",
+        reference: "PO-55120",
+        title: "Timber",
+      },
+    ],
+    allocations: [],
+    candidates: [],
+    reason: null,
+    decidedAt: "2026-09-21T10:00:00.000Z",
+  },
   processingError: null,
   processingRevision: 1,
   delivery: {
@@ -209,6 +233,7 @@ describe("Effect invoice read HTTP slice", () => {
           validation: invoice.validation,
           supplierId: invoice.supplierId,
           supplierChecks: invoice.supplierChecks,
+          sourceMatch: invoice.sourceMatch,
           processingError: null,
           inboundEmail: invoice.inboundEmail,
           transaction: null,
@@ -305,6 +330,7 @@ describe("Effect invoice read HTTP slice", () => {
     ).json()) as Record<string, unknown>;
     expect(detail.validation).toEqual(invoice.validation);
     expect(detail.supplierChecks).toEqual(invoice.supplierChecks);
+    expect(detail.sourceMatch).toEqual(invoice.sourceMatch);
 
     const [header, row] = (
       await (await request("/invoices/export.csv")).text()

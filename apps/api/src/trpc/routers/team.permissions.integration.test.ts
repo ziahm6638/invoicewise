@@ -541,6 +541,101 @@ suite("workspace permissions (integration)", () => {
       ).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
+    test("only an admin decides an invoice's source match; members read it and cannot replace an admin's decision", async () => {
+      const member = caller(ctx(ids.memberA, ids.teamA));
+      const admin = caller(ctx(ids.adminA, ids.teamA));
+      const otherOwner = caller(ctx(ids.ownerB, ids.teamB));
+      const created = await admin.authorizationSources.create({
+        source: {
+          type: "purchase_order",
+          reference: "PO-MATCH-PERM",
+          currency: "GBP",
+          authorizedTotal: "120",
+        },
+      });
+      const sourceId = created.sourceId!;
+      const [invoice] = await primaryDb
+        .insert(schema.inbox)
+        .values({
+          teamId: ids.teamA,
+          displayName: "Match check",
+          fileName: "match-check.pdf",
+          contentType: "application/pdf",
+          status: "pending",
+          intakeState: "accepted",
+          extraction: {
+            documentType: "invoice",
+            supplierName: "Harbour Lane Plumbing Ltd",
+            invoiceNumber: "HLP-9",
+            invoiceDate: "2026-09-01",
+            currency: "GBP",
+            netAmount: 100,
+            grossAmount: 120,
+            lineItems: [],
+          },
+        })
+        .returning({ id: schema.inbox.id });
+      const inboxId = invoice!.id;
+
+      // A member reads, but cannot confirm, link or unlink.
+      const read = await member.sourceMatches.forInvoice({ inboxId });
+      expect(read).toMatchObject({ current: null, canDecide: false });
+      await expect(
+        member.sourceMatches.link({ inboxId, sources: [{ sourceId }] }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        member.sourceMatches.unlink({ inboxId, reason: "No" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        member.sourceMatches.confirm({ inboxId }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      // Another workspace can neither read nor link it, nor use its source.
+      expect(await otherOwner.sourceMatches.forInvoice({ inboxId })).toBeNull();
+      await expect(
+        otherOwner.sourceMatches.link({ inboxId, sources: [{ sourceId }] }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        otherOwner.sourceMatches.forSource({ id: sourceId }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      // The admin links it; members see the decision and the source's invoice.
+      const linked = await admin.sourceMatches.link({
+        inboxId,
+        sources: [{ sourceId }],
+      });
+      expect(linked).toMatchObject({
+        status: "matched",
+        origin: "manual",
+        action: "correct",
+      });
+      const after = await member.sourceMatches.forInvoice({ inboxId });
+      expect(after?.current?.id).toBe(linked.id);
+      expect(
+        (await member.sourceMatches.forSource({ id: sourceId })).map(
+          (row: { invoiceId: string }) => row.invoiceId,
+        ),
+      ).toEqual([inboxId]);
+      // A member may not replace the admin's decision by rematching; an admin may.
+      await expect(
+        member.sourceMatches.rematch({ inboxId }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        admin.sourceMatches.rematch({ inboxId }),
+      ).resolves.toMatchObject({ jobId: expect.any(String) });
+      // A stale decision cannot be overwritten, and unlinking needs a reason.
+      await expect(
+        admin.sourceMatches.unlink({
+          inboxId,
+          expectedMatchId: crypto.randomUUID(),
+          reason: "Stale",
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      await expect(
+        admin.sourceMatches.unlink({ inboxId, reason: " " }),
+      ).rejects.toThrow();
+    });
+
     test("an admin manages members but can never grant owner", async () => {
       const admin = caller(ctx(ids.adminA, ids.teamA));
 
