@@ -15,7 +15,7 @@ members see the same schedule under Settings → Data, rendered from
 
 | Data | Kept | Applied by | Setting |
 | --- | --- | --- | --- |
-| Invoices, original documents, extraction, judgments, suppliers and their correction history, questions, integration settings | while the workspace exists | a member deleting an invoice (file at once, record as below), the owner deleting the workspace ([offboarding](offboarding.md)) | none |
+| Invoices, original documents, extraction, judgments, suppliers and their correction history, authorization sources with every version, their documents and import records, questions, integration settings | while the workspace exists | a member deleting an invoice (file at once, record as below), the owner deleting the workspace ([offboarding](offboarding.md)) | none |
 | Failed uploads and deleted invoices, and the MIME source of a received message that failed | 30 days after upload or receipt | hourly retention job | `RETENTION_FAILED_UPLOAD_DAYS` |
 | Source email reference (on the invoice and on each re-delivery) and the headers kept for each received message | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
 | Job and webhook payloads | 30 days after the job or delivery finished | hourly retention job | `RETENTION_JOB_PAYLOAD_DAYS` |
@@ -177,6 +177,8 @@ named `invoicewise-export-<date>-<id>.zip`:
 | `judgments.json` | every judgment with its invoice id |
 | `suppliers.json` | the workspace's supplier records: name, normalised name, VAT and company number keys, `mergedIntoId` for a merged supplier, times, and the ids of the invoices assigned to it |
 | `supplier-events.json` | every supplier correction (invoice reassigned, suppliers merged, change reverted) with its actor, what it replaced and whether it was reverted |
+| `authorization-sources.json` | every job, purchase order and contract with every immutable version (terms, supplier as given and as linked, effective date, change reason, origin, who recorded it) and its retained documents, each with its archive path, status and SHA-256 |
+| `authorization-sources/<source id>/<document id>-<file name>` | each retained authorization-source document exactly as attached |
 | `questions.json` | the workspace's questions, every version |
 | `inbound-emails.json` | every message received at the workspace address: receipt time, recipient address, header and envelope sender and subject (until they expire), outcome and note, delivery count, attachment outcomes and the ids of the invoices it became (`invoiceIds`); never the MIME source |
 | `audit.json` | invoice received and posted to accounting, supplier corrections, webhook deliveries, workflow runs and export requests, in time order |
@@ -185,7 +187,9 @@ named `invoicewise-export-<date>-<id>.zip`:
 Stable identifiers: invoices keep their InvoiceWise UUID; a document is
 identified by its invoice id and SHA-256; suppliers and supplier events keep
 their InvoiceWise UUID, so an invoice's `supplierId` names the same supplier
-in every export (follow `mergedIntoId` to the supplier it was merged into); a
+in every export (follow `mergedIntoId` to the supplier it was merged into);
+authorization sources and their versions keep their UUIDs (and version
+numbers), and a source's `supplierId` is the supplier record it was linked to; a
 judgment is `<invoice id>:<question id>`; a received message keeps its
 InvoiceWise UUID; an audit event is
 `<event type>:<source record id>`.
@@ -194,7 +198,8 @@ Completeness checks built in: every accepted document is listed in the
 manifest; a document whose object is missing from storage is listed as
 `missing`, and one whose stored path fails the workspace ownership check is
 listed as `withheld` and never read (both are counted as missing on the
-request) rather than silently skipped; each
+request) rather than silently skipped, and authorization-source documents are
+listed the same way in `authorization-sources.json`; each
 included document also records whether its hash still matches the one taken at
 intake (`intakeHashMatches`). Uploads that never became invoices, deleted
 invoices and anything from another workspace, including its suppliers, are
