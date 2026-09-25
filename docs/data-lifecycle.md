@@ -53,7 +53,7 @@ What each row means precisely:
   and the same reference for each identical re-delivery of a document
   (`inbox_redeliveries.reference_id`). For a message received at the workspace
   address it also keeps, on its `inbound_emails` row, the envelope and header
-  sender, subject, Date header, Message-ID and the receiving hop's
+  sender, subject, Date header, Message-ID and Cloudflare's
   Authentication-Results, shown beside the message in Settings → Email. The
   retention job clears the references and, once a message has settled, those
   header fields (and any MIME source still held); a message still being
