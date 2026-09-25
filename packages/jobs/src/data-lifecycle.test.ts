@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildExportRecords,
+  exportFailureMessage,
   isDataExportObjectPath,
   removeStaleExportTempFiles,
   supplierId,
@@ -266,4 +267,33 @@ test("removes only stale build files", async () => {
 
   const removed = await removeStaleExportTempFiles(dir, 6 * 3_600_000);
   expect(removed).toEqual(["stale.zip"]);
+});
+
+describe("exportFailureMessage", () => {
+  const temporary =
+    "A temporary storage problem stopped the export. It will be retried.";
+
+  test("promises a retry only while one is still coming", () => {
+    expect(
+      exportFailureMessage({
+        userMessage: temporary,
+        retryable: true,
+        final: false,
+      }),
+    ).toBe(temporary);
+    // Retries exhausted: the owner must request a new export.
+    expect(
+      exportFailureMessage({ userMessage: temporary, retryable: true, final: true }),
+    ).toBe("The export could not be prepared. Request a new export.");
+  });
+
+  test("keeps a permanent failure's own message", () => {
+    expect(
+      exportFailureMessage({
+        userMessage: "The workspace no longer exists.",
+        retryable: false,
+        final: true,
+      }),
+    ).toBe("The workspace no longer exists.");
+  });
 });

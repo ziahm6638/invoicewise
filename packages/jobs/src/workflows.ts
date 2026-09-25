@@ -47,7 +47,11 @@ import { nanoid } from "nanoid";
 import { type CreateContactOptions, Resend } from "resend";
 import { postAccountingDraft } from "./accounting";
 import { workflowKey } from "./client";
-import { DataExportError, buildDataExport } from "./data-export";
+import {
+  DataExportError,
+  buildDataExport,
+  exportFailureMessage,
+} from "./data-export";
 import {
   DeletionCleanupError,
   revokeDeletionConnection,
@@ -949,20 +953,23 @@ const makeBuildDataExport = (
       // The request shows the owner why the build stopped, and is marked
       // failed once the job gives up; the retention job then removes any
       // archive the failed build stored.
-      Effect.tapError((error) =>
-        attempt(
+      Effect.tapError((error) => {
+        const final = !error.retryable || job.attempts >= job.maxAttempts;
+        return attempt(
           () =>
             recordDataExportFailure(db, {
               id: payload.exportId,
               teamId: payload.teamId,
-              error:
-                error.userMessage ??
-                "The export could not be prepared. Try again shortly.",
-              final: !error.retryable || job.attempts >= job.maxAttempts,
+              error: exportFailureMessage({
+                userMessage: error.userMessage,
+                retryable: error.retryable,
+                final,
+              }),
+              final,
             }),
           "Unable to record export failure",
-        ).pipe(Effect.ignore),
-      ),
+        ).pipe(Effect.ignore);
+      }),
       Effect.tapError((error) =>
         Effect.logError("data_export_failed").pipe(
           Effect.annotateLogs({

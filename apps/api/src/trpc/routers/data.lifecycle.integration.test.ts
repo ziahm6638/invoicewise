@@ -353,9 +353,11 @@ suite("data lifecycle (integration)", () => {
     expect(await readdir(exportTempDir)).toEqual([]);
     row = await queries.getDataExport(db, { id: request.id, teamId });
     expect(row).toMatchObject({ status: "ready", attempts: 2 });
-    expect(Date.parse(row!.expiresAt!) - Date.parse(row!.completedAt!)).toBe(
-      24 * 3_600_000,
-    );
+    // Expiry and completion come from two clock reads a few ms apart.
+    const linkLifetime =
+      Date.parse(row!.expiresAt!) - Date.parse(row!.completedAt!);
+    expect(linkLifetime).toBeLessThanOrEqual(24 * 3_600_000);
+    expect(linkLifetime).toBeGreaterThan(24 * 3_600_000 - 5_000);
 
     // The owner downloads through a short-lived link.
     const { url } = await caller(ctx(owner, teamId)).data.exportDownloadUrl({

@@ -32,6 +32,23 @@ export class DataExportError extends Error {
   }
 }
 
+/**
+ * What the owner sees when a build stops. A retryable message promises a
+ * retry, so once the job gives up it is replaced by a terminal one.
+ */
+export function exportFailureMessage(params: {
+  userMessage?: string;
+  retryable: boolean;
+  final: boolean;
+}) {
+  if (params.final && params.retryable) {
+    return "The export could not be prepared. Request a new export.";
+  }
+  return (
+    params.userMessage ?? "The export could not be prepared. Try again shortly."
+  );
+}
+
 export type DataExportStorage = {
   download: (input: {
     bucket: string;
