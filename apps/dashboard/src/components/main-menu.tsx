@@ -1,12 +1,24 @@
 "use client";
 
 import { cn } from "@invoicewise/ui/cn";
-import { FileText, ListChecks, Send, Settings } from "lucide-react";
+import {
+  ClipboardCheck,
+  FileText,
+  ListChecks,
+  Send,
+  Settings,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const items = [
   { path: "/invoices", name: "Invoices", icon: FileText, disabled: false },
+  {
+    path: "/authorizations",
+    name: "Authorizations",
+    icon: ClipboardCheck,
+    disabled: false,
+  },
   {
     path: "/questions",
     name: "Questions",
@@ -32,6 +44,8 @@ export function MainMenu({ onSelect, isExpanded = false }: Props) {
           const Icon = item.icon;
           const isActive =
             pathname === item.path ||
+            (item.path === "/authorizations" &&
+              pathname.startsWith("/authorizations/")) ||
             (item.path === "/invoices" && pathname === "/inbox") ||
             (item.path === "/settings" &&
               pathname.startsWith("/settings") &&

@@ -17,6 +17,8 @@ expected to reach the same decision for the same actor.
 | Grant the `owner` role | yes | no | no |
 | Manage custom questions | yes | yes | no |
 | Correct supplier identity (reassign an invoice, merge suppliers, undo) | yes | yes | no |
+| Read authorization sources (jobs, purchase orders, contracts), their versions and documents | yes | yes | yes |
+| Manage authorization sources: create, import, amend, close, cancel, link a supplier, attach documents ([authorization sources](authorization-sources.md)) | yes | yes | no |
 | Manage integrations: API keys, OAuth apps, accounting, mailboxes, webhooks (endpoints, secret rotation, test events, per-endpoint redelivery), replacing the workspace's receiving address | yes | yes | no |
 | Manage billing and subscription | yes | no | no |
 | Export all workspace data ([data lifecycle](data-lifecycle.md)) | yes | no | no |
@@ -51,7 +53,7 @@ database on every request (`apps/api/src/trpc/middleware/team-permission.ts`).
 `adminProcedure` and `ownerProcedure` in `apps/api/src/trpc/init.ts` gate the
 privileged routers: team settings, members, invitations, questions, API keys,
 OAuth applications, accounting and mailbox connections, and supplier
-corrections (admin) and billing (owner). `workspaceProcedure` additionally requires an active workspace, so a
+corrections and authorization-source writes (admin) and billing (owner). `workspaceProcedure` additionally requires an active workspace, so a
 session with none cannot reach workspace-scoped handlers.
 
 **Stale active workspace.** A browser session whose active-workspace pointer
@@ -69,9 +71,10 @@ and OAuth tokens stay bound to their workspace and are refused instead.
 membership from the primary database on every request, so deletion and
 demotion take effect on the next call. Effective scopes are intersected with
 what the caller's current role allows. `withRequiredTeamRole` guards the
-privileged routes (team settings, accounting, webhooks), and `withRequiredTeam`
-returns `403` for inbox, invoice, webhook and accounting routes when the caller
-has no active workspace.
+privileged routes (team settings, accounting, webhooks, authorization-source
+writes), and `withRequiredTeam` returns `403` for inbox, invoice, webhook,
+accounting and authorization-source routes when the caller has no active
+workspace.
 
 **API keys and OAuth grants.** Granting API access is the "manage
 integrations" capability: creating a key, consenting to an OAuth application
@@ -87,7 +90,10 @@ The scope vocabulary is authoritative and lives in
 `packages/db/src/utils/scopes.ts`. Aliases (`apis.all`, `apis.read`) are
 expanded first, then intersected with the role: owners and admins may hold any
 known scope, members keep invoice use (`inbox.read`, `inbox.write`) plus
-`teams.read`/`users.read`, and any unknown scope is dropped for every role.
+`sources.read`, `teams.read` and `users.read`, and any unknown scope is dropped
+for every role. Keys store their expanded scopes, so a key created before a
+scope existed (for example `sources.read`/`sources.write`) does not gain it;
+edit the key to grant it.
 Consent decisions compare normalized sets rather than counts: an application
 that registered `apis.all` covers a request for `inbox.read`, duplicates and
 overlaps collapse, and a request containing anything the role cannot hold — or

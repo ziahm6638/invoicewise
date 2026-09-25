@@ -1,6 +1,7 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { protectedMiddleware, withRequiredTeam } from "../middleware";
 import { accountingRouter } from "./accounting";
+import { authorizationSourcesRouter } from "./authorization-sources";
 import { inboxRouter } from "./inbox";
 import { invoicesRouter } from "./invoices";
 import oauthRouter from "./oauth";
@@ -17,7 +18,13 @@ routers.route("/oauth", oauthRouter);
 routers.use(...protectedMiddleware);
 
 // Workspace resources need an active workspace
-for (const path of ["/inbox", "/invoices", "/webhooks", "/accounting"]) {
+for (const path of [
+  "/inbox",
+  "/invoices",
+  "/webhooks",
+  "/accounting",
+  "/authorization-sources",
+]) {
   routers.use(`${path}/*`, withRequiredTeam);
 }
 
@@ -28,5 +35,6 @@ routers.route("/inbox", inboxRouter);
 routers.route("/invoices", invoicesRouter);
 routers.route("/webhooks", webhooksRouter);
 routers.route("/accounting", accountingRouter);
+routers.route("/authorization-sources", authorizationSourcesRouter);
 
 export { routers };

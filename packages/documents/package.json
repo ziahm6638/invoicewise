@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./authorization-source": "./src/authorization-source.ts",
     "./embed": "./src/embed/embed.ts",
     "./utils": "./src/utils.ts"
   },

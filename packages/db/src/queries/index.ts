@@ -3,6 +3,7 @@ export * from "./activities";
 export * from "./accounting-connections";
 export * from "./api-keys";
 export * from "./apps";
+export * from "./authorization-sources";
 export * from "./bank-accounts";
 export * from "./bank-connections";
 export * from "./connector-state";

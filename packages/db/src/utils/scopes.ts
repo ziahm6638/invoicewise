@@ -8,6 +8,8 @@
 export const RESOURCE_SCOPES = [
   "inbox.read",
   "inbox.write",
+  "sources.read",
+  "sources.write",
   "teams.read",
   "teams.write",
   "users.read",
