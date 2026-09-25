@@ -160,6 +160,8 @@ export async function recordAccountingConnectionHealth(
     provider: AccountingProvider;
     status: "ok" | "reconnect" | "unavailable";
     error: string | null;
+    /** Recorded only on a connection made before companies were recorded. */
+    organisationId?: string | null;
     organisationName?: string | null;
   },
 ) {
@@ -170,6 +172,11 @@ export async function recordAccountingConnectionHealth(
       healthStatus: input.status,
       healthError: input.error,
       healthCheckedAt: now,
+      ...(input.organisationId
+        ? {
+            organisationId: sql`coalesce(${accountingConnections.organisationId}, ${input.organisationId})`,
+          }
+        : {}),
       ...(input.organisationName
         ? { organisationName: input.organisationName }
         : {}),

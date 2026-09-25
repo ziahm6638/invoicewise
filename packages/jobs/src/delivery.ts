@@ -736,7 +736,9 @@ export function providerAccountingReadiness(
 /**
  * Why a posted record cannot be changed through the active connection
  * because it was created in another company of the same provider (whose
- * record IDs may name a different record here), or null when it can.
+ * record IDs may name a different record here), or null when it can. A
+ * company not recorded on either side (made before companies were recorded)
+ * is unknown, not different.
  */
 export function otherAccountingCompanyReason(
   record: { provider: string | null; organisationId: string | null },
@@ -744,6 +746,8 @@ export function otherAccountingCompanyReason(
 ) {
   if (
     record.provider !== connection.provider ||
+    record.organisationId === null ||
+    connection.organisationId === null ||
     record.organisationId === connection.organisationId
   ) {
     return null;

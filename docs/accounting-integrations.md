@@ -173,7 +173,11 @@ company it was posted to (`inbox.accounting_organisation_id`); a bill update
 or attachment retry for an invoice posted to another company than the
 connected one is refused (QuickBooks IDs restart in every company, so the
 same ID names another record there), and the record must be changed in that
-company by hand. **Check** runs a
+company by hand. A company not recorded (a connection or post made before
+companies were recorded) is treated as unknown and not refused; a health
+check records the company on such a connection. Deleting the replaced Nango
+connection is best effort: a failure is logged and the reconnect still
+succeeds. **Check** runs a
 live health check (the Nango connection exists and the company answers):
 `ok`, `reconnect` (authorisation gone, refused or a different company) or
 `unavailable` (Nango or QuickBooks down or throttling), stored with its time

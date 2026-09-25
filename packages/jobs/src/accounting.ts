@@ -306,6 +306,8 @@ export async function completeAccountingConnection(
   });
   // A reconnect replaces the Nango connection: the one it replaced no
   // longer serves the workspace, so its credentials are deleted.
+  // Best effort: the new connection is stored, so a failure here must not
+  // report the connect as failed.
   if (active && active.connectionId !== input.connectionId) {
     await revokeAccountingConnection(
       {
@@ -314,6 +316,18 @@ export async function completeAccountingConnection(
         integrationId: active.integrationId,
       },
       env,
+    ).catch((error) =>
+      Effect.runPromise(
+        Effect.logWarning(
+          "The replaced accounting connection could not be deleted in Nango",
+        ).pipe(
+          Effect.annotateLogs({
+            teamId: input.teamId,
+            provider: active.provider,
+            reason: failureMessage(error),
+          }),
+        ),
+      ),
     );
   }
   return connection;
@@ -380,14 +394,15 @@ export async function checkAccountingConnection(
   const record = (
     status: "ok" | "reconnect" | "unavailable",
     error: string | null,
-    organisationName?: string | null,
+    organisation?: { id: string; name: string | null },
   ) =>
     recordAccountingConnectionHealth(db, {
       teamId: input.teamId,
       provider: connection.provider,
       status,
       error,
-      organisationName,
+      organisationId: organisation?.id,
+      organisationName: organisation?.name,
     });
   try {
     const config = getNangoConfig(connection.provider, env);
@@ -406,7 +421,7 @@ export async function checkAccountingConnection(
         `The connection now reaches ${organisation.name ?? organisation.id}, not the company it was bound to; reconnect ${PROVIDER_NAME[connection.provider]}`,
       );
     }
-    return record("ok", null, organisation.name);
+    return record("ok", null, organisation);
   } catch (error) {
     const failure = accountingFailure(connection.provider, error);
     return record(

@@ -16,7 +16,13 @@ import {
   getInvoiceAccountingStatus,
   getLatestBillUpdate,
 } from "@invoicewise/db/queries";
-import { inbox, teams, users, workflowJobs } from "@invoicewise/db/schema";
+import {
+  accountingConnections,
+  inbox,
+  teams,
+  users,
+  workflowJobs,
+} from "@invoicewise/db/schema";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
 import type { InvoiceExtraction } from "@invoicewise/documents";
 import { and, eq, sql } from "drizzle-orm";
@@ -629,8 +635,35 @@ async function main() {
       "a queued update or upload for another company writes nothing",
     );
 
+    // --- A record posted before companies were recorded is not refused:
+    // its company is unknown, not different.
+    await db
+      .update(inbox)
+      .set({
+        accountingOrganisationId: null,
+        accountingAttachmentStatus: "failed",
+      })
+      .where(eq(inbox.id, refusedUpload.id));
+    const legacyRetry = await retryAccountingPost(db, {
+      invoiceId: refusedUpload.id,
+      teamId,
+    });
+    await drain();
+    const legacyStatus = await statusOf(refusedUpload.id);
+    assert(
+      legacyRetry?.status === "attachment_queued" &&
+        legacyStatus?.attachmentStatus === "attached" &&
+        attachedTo("Bill", legacyStatus.providerId) === 1,
+      "an attachment retry for a record without a recorded company proceeds",
+    );
+
     // --- Health: ok, unreachable while Nango's refresh fails, reconnect
     // when the connection is gone.
+    // A connection made before companies were recorded learns its company.
+    await db
+      .update(accountingConnections)
+      .set({ organisationId: null })
+      .where(eq(accountingConnections.teamId, teamId));
     const healthy = await checkAccountingConnection(db, { teamId });
     connectionFailures.push(424);
     const unreachable = await checkAccountingConnection(db, { teamId });
@@ -638,6 +671,7 @@ async function main() {
     const gone = await checkAccountingConnection(db, { teamId });
     assert(
       healthy?.healthStatus === "ok" &&
+        healthy.organisationId === REALM &&
         unreachable?.healthStatus === "unavailable" &&
         gone?.healthStatus === "reconnect" &&
         gone.healthError?.includes("reconnect QuickBooks"),
