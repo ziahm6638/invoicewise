@@ -213,8 +213,8 @@ Every webhook request goes through one transport (`packages/jobs/src/egress.ts`)
 - **Checked on every connection.** Each attempt resolves the name again,
   requires every address to be public and connects only to those validated
   addresses (IPv4 first; the next is tried only when a connection cannot be
-  opened, before any request bytes are sent), so a DNS answer that changes after registration (rebinding) is
-  refused before any connection. TLS still verifies the certificate against
+  opened, before any request bytes are sent), so a DNS answer that changes
+  after registration (rebinding) is refused before any connection. TLS still verifies the certificate against
   the hostname. Requests are written on that socket directly, so proxy
   environment variables, redirects and connection pools cannot send them
   elsewhere.

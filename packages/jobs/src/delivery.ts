@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import type { Database } from "@invoicewise/db/client";
 import {
   type TeamRole,
+  type UpdateInboxWithProcessedDataParams,
   WEBHOOK_PAYLOAD_VERSION,
   WEBHOOK_TEST_EVENT,
-  type UpdateInboxWithProcessedDataParams,
   type WebhookEndpointForDelivery,
   type WebhookEvent,
   completeInboxProcessing,

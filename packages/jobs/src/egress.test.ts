@@ -316,7 +316,7 @@ describe("guarded transport", () => {
     );
     const redirecting = await listen((socket) =>
       socket.end(
-        `HTTP/1.1 307 Temporary Redirect\r\nlocation: http://169.254.169.254/latest/meta-data\r\n\r\n`,
+        "HTTP/1.1 307 Temporary Redirect\r\nlocation: http://169.254.169.254/latest/meta-data\r\n\r\n",
       ),
     );
     const result = await guardedPost(
