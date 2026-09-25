@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { DeliveryResults } from "./delivery-results";
+import { EarlierAnswers } from "./earlier-answers";
 import { InboxStatus } from "./inbox-status";
 import { JudgmentResults } from "./judgment-results";
 import { SupplierHistory } from "./supplier-history";
@@ -430,6 +431,7 @@ export function InboxDetails() {
                 <section className="mt-7">
                   <h3 className="text-sm font-semibold">Checks</h3>
                   <JudgmentResults judgments={data.judgments} />
+                  <EarlierAnswers invoiceId={data.id} />
                 </section>
 
                 <DeliveryResults invoiceId={data.id} />

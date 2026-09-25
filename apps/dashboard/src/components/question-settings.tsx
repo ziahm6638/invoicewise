@@ -25,6 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@invoicewise/ui/card";
+import { Input } from "@invoicewise/ui/input";
 import { Label } from "@invoicewise/ui/label";
 import {
   Select,
@@ -42,11 +43,49 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { useState } from "react";
+import { QuestionPreview } from "./question-preview";
 import { QuestionSummary } from "./question-summary";
 
 type Question = RouterOutputs["questions"]["list"][number];
 type QuestionInput = RouterInputs["questions"]["create"];
 type QuestionType = QuestionInput["type"];
+type NumberUnit = "currency" | "percent" | "days" | "count" | "other";
+
+const UNIT_LABELS: Record<NumberUnit, string> = {
+  currency: "Money (invoice currency)",
+  percent: "Percentage",
+  days: "Days",
+  count: "Count",
+  other: "Other unit",
+};
+
+const parseBound = (value: string) => {
+  if (value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+};
+
+/** Mirrors the server's range rules so mistakes show before saving. */
+function rangeError(unit: NumberUnit, min: number | null, max: number | null) {
+  if (Number.isNaN(min) || Number.isNaN(max)) return "Enter numbers only.";
+  if (min !== null && max !== null && min > max) {
+    return "The maximum must not be below the minimum.";
+  }
+  const bounds = [min, max].filter((value): value is number => value !== null);
+  if (
+    (unit === "days" || unit === "count") &&
+    bounds.some((value) => !Number.isInteger(value) || value < 0)
+  ) {
+    return "Days and counts are whole numbers of zero or more.";
+  }
+  if (
+    unit === "percent" &&
+    bounds.some((value) => value < -100 || value > 1000)
+  ) {
+    return "A percentage range must lie between -100 and 1000.";
+  }
+  return null;
+}
 
 const parseOptions = (value: string) =>
   [...new Set(value.split(/[\n,]/).map((option) => option.trim()))].filter(
@@ -68,18 +107,52 @@ function QuestionForm({
   const [context, setContext] = useState(initial?.context ?? "");
   const [type, setType] = useState<QuestionType>(initial?.type ?? "boolean");
   const [options, setOptions] = useState(initial?.options?.join("\n") ?? "");
+  const [unit, setUnit] = useState<NumberUnit>(
+    initial?.numberFormat?.unit ?? "currency",
+  );
+  const [unitLabel, setUnitLabel] = useState(
+    initial?.numberFormat?.unitLabel ?? "",
+  );
+  const [min, setMin] = useState(initial?.numberFormat?.min?.toString() ?? "");
+  const [max, setMax] = useState(initial?.numberFormat?.max?.toString() ?? "");
+  const [previewing, setPreviewing] = useState(false);
   const parsedOptions = parseOptions(options);
+  const numberError =
+    type === "number"
+      ? (rangeError(unit, parseBound(min), parseBound(max)) ??
+        (unit === "other" && !unitLabel.trim()
+          ? "Name the unit, for example kg or hours."
+          : null))
+      : null;
   const questionError =
     question.length > 0 && question.trim().length < 3
       ? "Write at least three characters."
       : null;
+  const hasOptions = type === "choice" || type === "score";
   const optionsError =
-    type !== "boolean" && options.length > 0 && parsedOptions.length < 2
+    hasOptions && options.length > 0 && parsedOptions.length < 2
       ? "Add at least two unique options."
       : null;
   const canSave =
     question.trim().length >= 3 &&
-    (type === "boolean" || parsedOptions.length >= 2);
+    (!hasOptions || parsedOptions.length >= 2) &&
+    !numberError;
+  const current = {
+    question: question.trim(),
+    context: context.trim() || null,
+    type,
+    enabled: initial?.enabled ?? true,
+    options: hasOptions ? parsedOptions : null,
+    numberFormat:
+      type === "number"
+        ? {
+            unit,
+            unitLabel: unit === "other" ? unitLabel.trim() : null,
+            min: parseBound(min),
+            max: parseBound(max),
+          }
+        : null,
+  } as QuestionInput;
 
   return (
     <form
@@ -87,13 +160,7 @@ function QuestionForm({
       onSubmit={(event) => {
         event.preventDefault();
         if (!canSave) return;
-        onSave({
-          question: question.trim(),
-          context: context.trim() || null,
-          type,
-          enabled: initial?.enabled ?? true,
-          options: type === "boolean" ? null : parsedOptions,
-        } as QuestionInput);
+        onSave(current);
       }}
     >
       <div className="space-y-2">
@@ -129,10 +196,65 @@ function QuestionForm({
               <SelectItem value="boolean">Yes or no</SelectItem>
               <SelectItem value="choice">Choose one option</SelectItem>
               <SelectItem value="score">Score / probability</SelectItem>
+              <SelectItem value="number">Number</SelectItem>
             </SelectContent>
           </Select>
         </div>
-        {type !== "boolean" && (
+        {type === "number" && (
+          <div className="space-y-2">
+            <Label htmlFor={`unit-${initial?.questionKey ?? "new"}`}>
+              Unit
+            </Label>
+            <Select
+              value={unit}
+              onValueChange={(value: NumberUnit) => setUnit(value)}
+            >
+              <SelectTrigger id={`unit-${initial?.questionKey ?? "new"}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(UNIT_LABELS) as NumberUnit[]).map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {UNIT_LABELS[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="grid grid-cols-3 gap-2">
+              {unit === "other" && (
+                <Input
+                  aria-label="Unit name"
+                  placeholder="kg"
+                  value={unitLabel}
+                  maxLength={20}
+                  onChange={(event) => setUnitLabel(event.target.value)}
+                />
+              )}
+              <Input
+                aria-label="Minimum"
+                placeholder="Min"
+                inputMode="decimal"
+                value={min}
+                onChange={(event) => setMin(event.target.value)}
+              />
+              <Input
+                aria-label="Maximum"
+                placeholder="Max"
+                inputMode="decimal"
+                value={max}
+                onChange={(event) => setMax(event.target.value)}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The answer is a value printed on the invoice within this range, or
+              Unknown when none is.
+            </p>
+            {numberError && (
+              <p className="text-xs text-destructive">{numberError}</p>
+            )}
+          </div>
+        )}
+        {hasOptions && (
           <div className="space-y-2">
             <Label htmlFor={`options-${initial?.questionKey ?? "new"}`}>
               {type === "choice" ? "Choices" : "Score levels"}
@@ -171,7 +293,23 @@ function QuestionForm({
         />
       </div>
 
+      {previewing && canSave && (
+        <QuestionPreview
+          questionKey={initial?.questionKey}
+          draft={current}
+          canRerun={false}
+        />
+      )}
+
       <div className="flex justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!canSave}
+          onClick={() => setPreviewing((value) => !value)}
+        >
+          {previewing ? "Hide preview" : "Preview draft"}
+        </Button>
         <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
@@ -188,6 +326,7 @@ export function QuestionSettings() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [tryingKey, setTryingKey] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const permissions = useTeamPermissions();
   // Questions are workspace configuration: owner/admin only, server-enforced.
@@ -237,8 +376,9 @@ export function QuestionSettings() {
           <CardTitle>What should InvoiceWise check?</CardTitle>
           <CardDescription>
             These questions are answered whenever an invoice is processed.
-            Changes create a new version, so older answers keep their original
-            wording.
+            Changes create a new version: answers already given keep the
+            wording, options and version they were made with until you rerun the
+            question on chosen invoices.
           </CardDescription>
         </div>
         {canManage && (
@@ -279,14 +419,35 @@ export function QuestionSettings() {
                       context: question.context,
                       type: question.type,
                       options:
-                        question.type === "boolean"
-                          ? null
-                          : (question.options ?? []),
+                        question.type === "choice" || question.type === "score"
+                          ? (question.options ?? [])
+                          : null,
+                      numberFormat:
+                        question.type === "number"
+                          ? question.numberFormat
+                          : null,
                       enabled,
                     } as RouterInputs["questions"]["update"])
                   }
                 />
                 <QuestionSummary question={question} />
+                {canManage && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setTryingKey((key) =>
+                        key === question.questionKey
+                          ? null
+                          : question.questionKey,
+                      )
+                    }
+                  >
+                    {tryingKey === question.questionKey
+                      ? "Close"
+                      : "Try on invoices"}
+                  </Button>
+                )}
                 {canManage && !question.isDefault && (
                   <div className="flex items-center gap-1">
                     <Button
@@ -332,6 +493,12 @@ export function QuestionSettings() {
                   </div>
                 )}
               </div>
+              {tryingKey === question.questionKey && (
+                <QuestionPreview
+                  questionKey={question.questionKey}
+                  canRerun={question.enabled}
+                />
+              )}
               {editingKey === question.questionKey && (
                 <QuestionForm
                   initial={question}

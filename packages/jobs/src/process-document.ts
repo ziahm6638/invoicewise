@@ -4,11 +4,13 @@ import {
   getLaterDocumentsByNumber,
   getUserQuestions,
   lockDocumentIdentities,
+  saveDocumentText,
 } from "@invoicewise/db/queries";
 import {
   DocumentClient,
   type InvoiceExtraction,
   type InvoiceJudgmentQuestion,
+  type RetainedSourceText,
 } from "@invoicewise/documents";
 import { completeAndSchedule } from "./delivery";
 import {
@@ -18,6 +20,65 @@ import {
   resolveDocumentSupplier,
   validateAgainstEarlierDocuments,
 } from "./suppliers";
+
+type WorkspaceQuestion = Awaited<ReturnType<typeof getUserQuestions>>[number];
+
+/** A stored question revision as TypeSafe judgments ask it. */
+export function toJudgmentQuestion(
+  question: Pick<
+    WorkspaceQuestion,
+    | "id"
+    | "questionKey"
+    | "version"
+    | "label"
+    | "question"
+    | "context"
+    | "type"
+    | "options"
+    | "numberFormat"
+  >,
+): InvoiceJudgmentQuestion {
+  const common = {
+    id: question.questionKey,
+    versionId: question.id,
+    version: question.version,
+    label: question.label,
+    question: question.question,
+    context: question.context,
+  };
+  switch (question.type) {
+    case "choice":
+      return { ...common, type: "choice", options: question.options ?? [] };
+    case "score":
+      return { ...common, type: "score", levels: question.options ?? [] };
+    case "number":
+      return {
+        ...common,
+        type: "number",
+        format: question.numberFormat ?? { unit: "other" },
+      };
+    default:
+      return { ...common, type: "boolean" };
+  }
+}
+
+/**
+ * The workspace's enabled questions, as a processing run asks them: its
+ * default checks and its own custom questions.
+ */
+export async function loadJudgmentQuestions(db: Database, teamId: string) {
+  const enabled = (await getUserQuestions(db, teamId)).filter(
+    (question) => question.enabled,
+  );
+  return {
+    defaultQuestions: enabled
+      .filter((question) => question.isDefault)
+      .map(toJudgmentQuestion),
+    customQuestions: enabled
+      .filter((question) => !question.isDefault)
+      .map(toJudgmentQuestion),
+  };
+}
 
 export async function processDocumentAttachment(
   db: Database,
@@ -30,46 +91,7 @@ export async function processDocumentAttachment(
     judgmentQuestions?: readonly InvoiceJudgmentQuestion[];
   },
 ) {
-  const workspaceQuestions = await getUserQuestions(db, input.teamId);
-  const configuredQuestions = workspaceQuestions.map((question) => {
-    const common = {
-      id: question.questionKey,
-      versionId: question.id,
-      label: question.label,
-      question: question.question,
-      context: question.context,
-    };
-    if (question.type === "choice") {
-      return {
-        isDefault: question.isDefault,
-        enabled: question.enabled,
-        question: {
-          ...common,
-          type: "choice",
-          options: question.options ?? [],
-        } satisfies InvoiceJudgmentQuestion,
-      };
-    }
-    if (question.type === "score") {
-      return {
-        isDefault: question.isDefault,
-        enabled: question.enabled,
-        question: {
-          ...common,
-          type: "score",
-          levels: question.options ?? [],
-        } satisfies InvoiceJudgmentQuestion,
-      };
-    }
-    return {
-      isDefault: question.isDefault,
-      enabled: question.enabled,
-      question: {
-        ...common,
-        type: "boolean",
-      } satisfies InvoiceJudgmentQuestion,
-    };
-  });
+  const questions = await loadJudgmentQuestions(db, input.teamId);
   const result = await new DocumentClient().getInvoice({
     documentUrl: input.documentUrl,
     mimetype: input.mimetype,
@@ -82,14 +104,8 @@ export async function processDocumentAttachment(
         documentId: input.inboxId,
         extraction,
       }),
-    defaultJudgmentQuestions: configuredQuestions
-      .filter((question) => question.isDefault && question.enabled)
-      .map(({ question }) => question),
-    judgmentQuestions:
-      input.judgmentQuestions ??
-      configuredQuestions
-        .filter((question) => !question.isDefault && question.enabled)
-        .map(({ question }) => question),
+    defaultJudgmentQuestions: questions.defaultQuestions,
+    judgmentQuestions: input.judgmentQuestions ?? questions.customQuestions,
   });
 
   // The result, its validation, its revision and every destination's delivery
@@ -111,6 +127,7 @@ export async function processDocumentAttachment(
     type: result.type,
     extraction: result.extraction,
     judgments: result.judgments,
+    sourceText: result.sourceText,
     processingError: null,
   });
 
@@ -139,8 +156,11 @@ export async function saveProcessedDocument(
   input: Omit<UpdateInboxWithProcessedDataParams, "validation" | "status"> & {
     teamId: string;
     extraction: InvoiceExtraction;
+    /** The text the run read, kept as the invoice's source evidence. */
+    sourceText?: RetainedSourceText;
   },
 ) {
+  const { sourceText, ...processed } = input;
   return db.transaction(async (tx) => {
     const executor = tx as unknown as Database;
     await lockDocumentIdentities(executor, input.teamId);
@@ -156,9 +176,17 @@ export async function saveProcessedDocument(
       supplierId: supplier.supplierId,
     });
     const completion = await completeAndSchedule(executor, {
-      ...input,
+      ...processed,
       validation,
     });
+    if (completion && sourceText) {
+      await saveDocumentText(executor, {
+        inboxId: input.id,
+        teamId: input.teamId,
+        revision: completion.revision,
+        ...sourceText,
+      });
+    }
     const supplierChecks = completion
       ? await recordSupplierChecks(executor, {
           teamId: input.teamId,

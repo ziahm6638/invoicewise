@@ -158,3 +158,73 @@ describe("settings question wording", () => {
     expect(html).toContain("Is this over our £500 approval threshold?");
   });
 });
+
+describe("answer states", () => {
+  const base = {
+    questionId: "payment_days",
+    label: "Payment terms",
+    question: "How many days does the invoice allow for payment?",
+    source: "custom",
+    type: "number",
+    questionVersion: 3,
+    evaluator: { model: "jev-1.13.0", version: "questions-2" },
+    format: { unit: "days", min: 0, max: 365 },
+  };
+
+  test("zero is shown as an answer with the row it was read from", () => {
+    const html = renderToStaticMarkup(
+      <JudgmentResults
+        judgments={[
+          {
+            ...base,
+            status: "answered",
+            answer: 0,
+            confidence: 0.9,
+            certainty: "confident",
+            evidence: { line: 4, text: "Deposit days: 0", printed: "0" },
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain("0 days");
+    expect(html).toContain("Deposit days: 0");
+    expect(html).toContain("Question v3 · jev-1.13.0");
+  });
+
+  test("unknown, uncertain and incomplete answers are never shown as No or 0", () => {
+    const html = renderToStaticMarkup(
+      <JudgmentResults
+        judgments={[
+          {
+            ...base,
+            status: "unknown",
+            reason: "The invoice does not state this value.",
+          },
+          {
+            ...customCheck,
+            questionId: "leaning",
+            probability: 0.45,
+            answer: false,
+            certainty: "low_confidence",
+          },
+          {
+            ...customCheck,
+            questionId: "cut",
+            probability: 0.99,
+            certainty: "incomplete_input",
+            limits: [
+              "Only the first 16,000 characters of the document's 20,000 were read.",
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain("Unknown");
+    expect(html).toContain("The invoice does not state this value.");
+    expect(html).toContain("Unsure, leaning no");
+    expect(html).toContain("Low confidence");
+    expect(html).toContain("Answered from incomplete input");
+    expect(html).toContain("Only the first 16,000 characters");
+    expect(html).not.toContain(">0 days<");
+  });
+});

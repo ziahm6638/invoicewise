@@ -236,9 +236,11 @@ Every input persists the same fields on its `inbox` record:
 - on success: `extraction` (the typed `InvoiceExtraction`, including
   `textSource`, `pageSources` and per-value `evidence`), `validation` (the
   deterministic checks; see [Validation](#validation)), `judgments` (one per
-  configured question, answered, `not_applicable` with a reason, or
-  `failed`), the derived amount, currency, date and tax columns, status
-  `pending`, and a null `processing_error`;
+  configured question, `answered`, `unknown`, `not_applicable` with a reason,
+  or `failed`; see [Questions](#questions)), the derived amount, currency,
+  date and tax columns, status `pending`, and a null `processing_error`; and
+  the document's laid-out text in `document_texts`, kept as source evidence
+  for question previews and reruns;
 - on failure: status `pending`, the reason in `processing_error`, and no
   extraction, validation or judgments. Permanent reasons (unreadable, not an invoice, over
   a limit, unsupported) fail at once; transient ones (provider or parser
@@ -566,6 +568,117 @@ results stay as recorded. A manual assignment survives
 reprocessing. The dashboard shows all of this in the invoice's **Supplier
 history**; REST and MCP return `supplierId` and `supplierChecks`.
 
+## Questions
+
+Every processed invoice answers the workspace's enabled questions: the four
+built-in checks (`likely_duplicate`, `vat_calculation_correct`,
+`known_supplier`, `bank_details_consistent`; they can be disabled, never
+edited or deleted) and up to 20 enabled custom questions. All of them are
+asked in one TypeSafe call per invoice. TypeSafe is the only evaluator, and
+it selects among defined answers; it never writes one.
+
+### Answer types
+
+| Type | Configured with | Answer |
+| --- | --- | --- |
+| `boolean` | question, optional context | `answer` (true/false) and `probability` of yes (0-1) |
+| `choice` (enum) | 2-10 unique options (case-insensitive) | the chosen option, a probability per option and `confidence`. A no-match outcome is always offered: "none of these, or the invoice does not say" is recorded as `unknown`, never forced onto an option |
+| `score` | 2-10 ordered levels | `answer`, a position from 0 to the number of levels minus 1 (clamped), `position` scaled to 0-1, a probability per level and `confidence` |
+| `number` | a unit (`currency` in the invoice's currency, `percent`, `days`, `count`, or `other` with a unit name of up to 20 characters) and an optional min/max | a value printed on the invoice: code finds every printed number within the unit and range (whole numbers for days and counts; parts of dates, sort codes and references are not numbers), TypeSafe chooses one or "not stated", and code copies the printed value with the row it came from (`evidence`) |
+
+Units and ranges are checked when the question is saved: min never exceeds
+max, days and counts take whole bounds of zero or more, a percentage range
+stays within -100..1000, and every bound is finite and within ±10¹². Question
+text, context and options refuse control characters.
+
+### Status and certainty
+
+- `answered` carries `certainty`: `confident`, `low_confidence` (a yes/no
+  probability between 0.3 and 0.7, or a choice/score/number confidence below
+  0.5) or `incomplete_input` (something the question could need was cut; see
+  below). The dashboard shows an uncertain yes/no as "Unsure, leaning no",
+  never a plain No.
+- `unknown` means the evaluator found no answer on the invoice: no option
+  fits, no number in range is printed, or TypeSafe chose "not stated". It is
+  never recorded as false or zero; a printed zero is an `answered` 0.
+- `not_applicable` means a built-in check's premise does not hold (no history
+  to compare, amounts missing).
+- `failed` means evaluation itself did not complete (TypeSafe unavailable, a
+  malformed answer), with the reason.
+
+### What a question can read
+
+The state given to TypeSafe has a fixed shape built only from the invoice's
+own workspace: `currentInvoice` (the extraction), `invoiceText` (the
+document's laid-out text), `currentInvoiceValidation`, and
+`previousInvoices` (the supplier-scoped history described under
+[Supplier identity and history](#supplier-identity-and-history)). The
+document text lets a question answer from details the extraction schema does
+not capture (payment terms, site addresses, job references).
+
+Invoice text and question wording are untrusted data. Nothing in them is
+executed or followed by code; TypeSafe only selects among the question's own
+options, levels, printed numbers or yes/no, so text cannot widen an answer.
+Stored answers and evidence rows are plain text rendered escaped.
+
+Every input is bounded, and a bound that cut something is reported on the
+answer in `input` and `limits` (and its certainty becomes
+`incomplete_input`) instead of returning a confident answer from part of the
+evidence:
+
+| Bound | Value |
+| --- | --- |
+| Document text given to a question | first 16,000 characters (`input.documentText`: `complete`, `truncated` or `unavailable`) |
+| Document text retained per invoice | 64,000 characters |
+| Printed numbers offered to a number question | 40 |
+| Evidence row kept on an answer | 200 characters |
+| Enabled custom questions per workspace | 20 |
+| Invoices per preview / per rerun | 5 / 25 |
+| One preview, all invoices | 45 seconds; each TypeSafe call 30 seconds |
+| TypeSafe calls per UTC day (processing, previews and reruns together) | `TYPESAFE_DAILY_CALL_LIMIT` ([operations](operations.md#capacity-and-spend-ceilings)) |
+
+### Revisions and provenance
+
+Editing, disabling or deleting a question writes a new `user_questions`
+revision; earlier revisions are never changed. Every stored answer records
+the revision it answered (`questionId`, `questionVersionId`,
+`questionVersion`) with that revision's `label`, `question`, `context` and
+`options` or number `format`, plus `evaluator` (`model`: the TypeSafe model
+version that answered, null when no call was needed; `version`: how questions
+are put to it, `QUESTION_EVALUATOR_VERSION`), `answeredAt` and
+`historyIds`. Answers are displayed from what they stored, so an edited or
+deleted question never relabels a past answer as a new question. An invoice
+keeps its answers until it is reprocessed or a question is deliberately
+rerun on it.
+
+### Preview and rerun
+
+Owners and admins can try a question on invoices already processed (Settings
+→ Questions → **Try on invoices**, or **Preview draft** while editing; tRPC
+`questions.preview` and `questions.rerun`):
+
+- **Preview** answers a saved question, one of its past revisions, or an
+  unsaved draft on up to 5 selected invoices, showing each current answer
+  beside the previewed one with its certainty, limits or failure. It stores
+  nothing and sends nothing; its calls are metered as `question-preview` in
+  `provider_usage`.
+- **Rerun** answers the question's latest, enabled revision on up to 25
+  selected invoices in the `rerun-question` job (one run per question at a
+  time; held back with document processing when the daily call budget is
+  spent). Each new answer (tagged with `runId`) replaces that question's
+  answer on the invoice; the answer it replaced is kept in
+  `question_answers` and shown under **Earlier answers** on the invoice. An
+  invoice deleted, being processed, or reprocessed since the run read it is
+  skipped. A failed evaluation leaves the current answer as it was and is
+  counted on the run (`question_runs`: answered, unknown, failed, skipped).
+  A retried or resumed run does not ask again for an invoice it already
+  answered. What a rerun sends is in
+  [delivery](delivery.md#question-reruns).
+
+Both read the invoice's stored extraction, validation, supplier-scoped
+history and retained text; an invoice processed before text was retained is
+answered from its extraction with `input.documentText: "unavailable"`.
+
 ## Reads, signatures and deletion
 
 - `inbox.getById`, REST `/inbox/{id}/presigned-url`, the dashboard
@@ -655,6 +768,19 @@ separate host, that origin must be reachable with CORS or the preview should use
   evidence beyond the latest 50, cite only their own supplier and workspace,
   stay unchanged by later invoices; merges and reassignments are audited and
   undone; an identical re-delivery is recorded without a second job.
+- `packages/documents/src/typesafe/questions.test.ts` — number candidates
+  (ranges, units, dates and references excluded, capped), zero versus
+  unknown, choice no-match, score bounds, certainty thresholds, and truncated
+  or missing document text reported as incomplete input.
+- `packages/jobs/src/verify-questions.ts` — end to end against Postgres in
+  `bun run verify`: a question's options change after two invoices were
+  answered; the old answers keep their revision, options and evaluator; a
+  preview stores and sends nothing and never reads another workspace's
+  invoice; a rerun records revision 2's answers, keeps the replaced ones,
+  emits one `invoice.judgments.attached` per invoice and endpoint and no
+  accounting post or `invoice.processed`, and replays add nothing.
+- `apps/api/src/schemas/questions.test.ts` — option, unit and range
+  validation at configuration time and bounded selections.
 - `packages/documents/src/validation.test.ts` — rounding and tolerances,
   tax basis, zero and missing tax, currency pairs and mismatches, credit
   notes printed either way, duplicate identity, credit links, required

@@ -15,7 +15,8 @@ members see the same schedule under Settings → Data, rendered from
 
 | Data | Kept | Applied by | Setting |
 | --- | --- | --- | --- |
-| Invoices, original documents, extraction, judgments, suppliers and their correction history, authorization sources with every version, their documents and import records, questions, integration settings | while the workspace exists | a member deleting an invoice (file at once, record as below), the owner deleting the workspace ([offboarding](offboarding.md)) | none |
+| Invoices, original documents, extraction, judgments, suppliers and their correction history, authorization sources with every version, their documents and import records, questions, question reruns and the answers they replaced, integration settings | while the workspace exists | a member deleting an invoice (file at once, record as below), the owner deleting the workspace ([offboarding](offboarding.md)) | none |
+| An invoice's laid-out document text (`document_texts`), kept as source evidence for question previews and reruns | while the invoice exists | deleting the invoice removes it at once, with the file; deleting the workspace | none |
 | Failed uploads and deleted invoices, and the MIME source of a received message that failed | 30 days after upload or receipt | hourly retention job | `RETENTION_FAILED_UPLOAD_DAYS` |
 | Source email reference (on the invoice and on each re-delivery) and the headers kept for each received message | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
 | Job and webhook payloads | 30 days after the job or delivery finished | hourly retention job | `RETENTION_JOB_PAYLOAD_DAYS` |
@@ -179,7 +180,9 @@ named `invoicewise-export-<date>-<id>.zip`:
 | `supplier-events.json` | every supplier correction (invoice reassigned, suppliers merged, change reverted) with its actor, what it replaced and whether it was reverted |
 | `authorization-sources.json` | every job, purchase order and contract with every immutable version (terms, supplier as given and as linked, effective date, change reason, origin, who recorded it) and its retained documents, each with its archive path, status and SHA-256 |
 | `authorization-sources/<source id>/<document id>-<file name>` | each retained authorization-source document exactly as attached |
-| `questions.json` | the workspace's questions, every version |
+| `questions.json` | the workspace's questions, every version, with a number question's unit and range |
+| `question-runs.json` | every question rerun: the revision, the invoices chosen, who asked, status and counts |
+| `question-answers.json` | every answer a rerun recorded on an exported invoice, with the answer it replaced |
 | `inbound-emails.json` | every message received at the workspace address: receipt time, recipient address, header and envelope sender and subject (until they expire), outcome and note, delivery count, attachment outcomes and the ids of the invoices it became (`invoiceIds`); never the MIME source |
 | `audit.json` | invoice received and posted to accounting, supplier corrections, webhook deliveries, workflow runs and export requests, in time order |
 | `workspace.json` | the workspace, its members and roles, mailboxes, accounting connections and webhook endpoints |
@@ -201,7 +204,8 @@ listed as `withheld` and never read (both are counted as missing on the
 request) rather than silently skipped, and authorization-source documents are
 listed the same way in `authorization-sources.json`; each
 included document also records whether its hash still matches the one taken at
-intake (`intakeHashMatches`). Uploads that never became invoices, deleted
+intake (`intakeHashMatches`). The retained document text is not exported:
+it is read from the original, which is. Uploads that never became invoices, deleted
 invoices and anything from another workspace, including its suppliers, are
 never included. Supplier records hold no bank details; bank details appear
 only where the invoice's own extraction contains them. Tokens,
@@ -220,7 +224,7 @@ data until it has.
 | Processor | What it receives or holds | On workspace deletion |
 | --- | --- | --- |
 | hp-slice (self-hosted: Postgres, Redis, document storage, logs, backups) | all workspace rows, originals and export archives under `/mnt/ssd/invoicewise/storage`, cache entries, container logs, nightly dumps | rows at once; originals and archives by the cleanup purge; cache entries expire by TTL; logs rotate (above); dumps age out after the backup period |
-| TypeSafe (api.typesafe.ai) | laid-out invoice text, extraction candidates and judgment questions for each invoice processed; never the file itself | nothing is sent to remove; retention there is TypeSafe's own. A customer who needs it removed must be referred to TypeSafe |
+| TypeSafe (api.typesafe.ai) | laid-out invoice text, extraction candidates and judgment questions for each invoice processed, previewed or rerun; never the file itself | nothing is sent to remove; retention there is TypeSafe's own. A customer who needs it removed must be referred to TypeSafe |
 | Nango (self-hosted accessory) | Xero/QuickBooks connection records and encrypted provider tokens, in the `nango` database | automatic: the connection is deleted through Nango. Copies remain in Nango dumps until they age out |
 | Xero / QuickBooks | draft or open bills posted for the workspace's invoices | bills stay in the customer's own ledger; InvoiceWise never deletes them. Deleting the Nango connection stops access; the customer can also disconnect InvoiceWise in the provider's app settings |
 | Google (Gmail) | the OAuth grant used to read the connected mailbox | automatic: the grant is revoked at Google. The mail stays in the customer's mailbox |
