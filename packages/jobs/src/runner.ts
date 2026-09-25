@@ -11,6 +11,7 @@ import {
 } from "@invoicewise/db/queries";
 import { observeTypeSafeCalls } from "@invoicewise/documents";
 import {
+  Cause,
   Config,
   Context,
   Effect,
@@ -429,6 +430,18 @@ const runLoggedWorkflow = (job: WorkflowJob) =>
           error: error.reason,
         }),
       ),
+    ),
+    Effect.catchAllCause((cause) =>
+      Cause.isInterruptedOnly(cause)
+        ? Effect.failCause(cause)
+        : Effect.logError("workflow_run_defect").pipe(
+            Effect.annotateLogs({
+              event: "workflow_run_defect",
+              workflowId: job.id,
+              workflow: job.name,
+              error: Cause.pretty(cause),
+            }),
+          ),
     ),
   );
 

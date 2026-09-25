@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { WorkflowJob } from "@invoicewise/db/queries";
-import { Effect, Fiber, Layer, LogLevel, Logger } from "effect";
+import {
+  Effect,
+  Fiber,
+  HashMap,
+  Layer,
+  LogLevel,
+  Logger,
+  Option,
+} from "effect";
 import {
   WorkflowRepository,
   WorkflowRunnerSettings,
@@ -234,5 +242,77 @@ describe("Effect workflow runner", () => {
     expect(completed).toEqual([fast.id]);
     // Shutdown still hands the unfinished job back to the queue.
     expect(released).toEqual([slow.id]);
+  });
+
+  test("logs a dying job and keeps claiming further jobs", async () => {
+    const dying = { ...job, id: "00000000-0000-0000-0000-00000000000c" };
+    const next = { ...job, id: "00000000-0000-0000-0000-00000000000d" };
+    const due = [[dying], [next]];
+    const completed: string[] = [];
+    const defects: unknown[] = [];
+    const nextDone = Promise.withResolvers<void>();
+    const repository = Layer.succeed(WorkflowRepository, {
+      claim: (_workerId, limit) =>
+        Effect.sync(() => (due.shift() ?? []).slice(0, limit)),
+      heartbeat: () => Effect.void,
+      complete: (id) =>
+        Effect.sync(() => {
+          completed.push(id);
+          if (id === next.id) nextDone.resolve();
+        }),
+      retry: () => Effect.void,
+      fail: () => Effect.void,
+      release: () => Effect.void,
+      providerCallsSince: () => Effect.succeed(0),
+    });
+    const handler = Layer.succeed(WorkflowHandler, {
+      handle: (claimed) =>
+        claimed.id === dying.id
+          ? Effect.sync(() => {
+              throw new Error("handler bug");
+            })
+          : Effect.succeed({}),
+    });
+    const oneSlot = Layer.succeed(WorkflowRunnerSettings, {
+      workerId: "test-worker",
+      concurrency: 1,
+      pollMs: 5,
+      leaseMs: 60_000,
+      retryBaseMs: 100,
+      retryMaxMs: 1000,
+    });
+    const capture = Logger.replace(
+      Logger.defaultLogger,
+      Logger.make(({ annotations }) => {
+        if (
+          HashMap.get(annotations, "event").pipe(Option.getOrUndefined) ===
+          "workflow_run_defect"
+        ) {
+          defects.push(Object.fromEntries(annotations));
+        }
+      }),
+    );
+
+    const fiber = Effect.runFork(
+      runWorkflowSlots.pipe(
+        Effect.provide(Layer.mergeAll(repository, handler, oneSlot, capture)),
+      ),
+    );
+    const outcome = await Promise.race([
+      nextDone.promise.then(() => "next finished"),
+      Bun.sleep(2000).then(() => "runner stalled"),
+    ]);
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(outcome).toBe("next finished");
+    expect(completed).toEqual([next.id]);
+    expect(defects).toEqual([
+      expect.objectContaining({
+        event: "workflow_run_defect",
+        workflowId: dying.id,
+        workflow: dying.name,
+        error: expect.stringContaining("handler bug"),
+      }),
+    ]);
   });
 });
