@@ -216,6 +216,7 @@ export type InvoiceActivityEntry = {
     | "receipt"
     | "extraction"
     | "judgments"
+    | "matching"
     | "correction"
     | "delivery"
     | "accounting"
@@ -254,6 +255,7 @@ const WORKFLOW_TITLE: Record<string, string> = {
   "rerun-judgments": "Answering questions again",
   "post-accounting-draft": "Posting the draft bill",
   "update-accounting-bill": "Updating the posted bill",
+  "match-invoice": "Matching to authorization sources",
 };
 
 /** A URL shown as its origin only: paths and queries can carry tokens. */
@@ -303,7 +305,9 @@ const jobEntry = (job: Job, now: number): InvoiceActivityEntry | null => {
       ? "extraction"
       : job.name === "rerun-judgments"
         ? "judgments"
-        : "accounting";
+        : job.name === "match-invoice"
+          ? "matching"
+          : "accounting";
   const error = redactOptionalText(job.lastError);
   const refs: InvoiceActivityEntry["refs"] = {
     jobId: job.id,

@@ -580,6 +580,7 @@ const SUBJECT_KEY_BY_WORKFLOW: Record<string, string> = {
   "process-attachment": "inboxId",
   "post-accounting-draft": "invoiceId",
   "rerun-judgments": "invoiceId",
+  "match-invoice": "invoiceId",
   "update-accounting-bill": "correctionId",
   "deliver-webhook": "deliveryId",
   "process-inbound-email": "inboundEmailId",

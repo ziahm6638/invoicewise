@@ -54,7 +54,8 @@ action for failed or cancelled destinations; see
 `GET /invoices/:id/activity` (scope `inbox.read`), tRPC `inbox.activity` and
 the **Activity** section of the invoice page trace one invoice from receipt to
 every destination, oldest first. Each entry has a time, stage (`receipt`,
-`extraction`, `judgments`, `correction`, `delivery`, `accounting`, `action`),
+`extraction`, `judgments`, `matching`, `correction`, `delivery`, `accounting`,
+`action`),
 a title, a status (`ok`, `pending`, `failed`, `refused`, `info`), the reason in
 plain words when it failed or is waiting, who acted, and `refs`: the
 correlation identifiers that tie it to the rest of the system (the received

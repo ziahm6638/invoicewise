@@ -217,6 +217,28 @@ describe("invoice activity", () => {
     });
   });
 
+  test("a failed invoice match reads as a matching failure with its reason", () => {
+    const input = sources();
+    input.jobs = [
+      job("job-4", {
+        name: "match-invoice",
+        status: "failed",
+        attempts: 3,
+        lastError: "TypeSafe unavailable: 503",
+        finishedAt: "2026-09-25T10:06:00.000Z",
+      }),
+    ];
+    const activity = buildInvoiceActivity(input, { audience: "customer" });
+    expect(
+      activity.entries.find((entry) => entry.stage === "matching"),
+    ).toMatchObject({
+      title: "Matching to authorization sources: failed",
+      status: "failed",
+      reason: expect.stringContaining("TypeSafe unavailable: 503"),
+      refs: { jobId: "job-4", attempts: 3 },
+    });
+  });
+
   test("every action has a category and a label", () => {
     for (const [action, spec] of Object.entries(AUDIT_ACTIONS)) {
       expect(action).toMatch(/^[a-z_]+\.[a-z_]+$/);

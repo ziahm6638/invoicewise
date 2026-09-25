@@ -3,6 +3,7 @@ import {
   type OperatorJob,
   cancelWorkflowJobAsOperator,
   getInboundEmailForProcessing,
+  getInvoiceForMatching,
   hasNewerWorkflowJob,
   reopenFailedInboundEmail,
   requeueFinishedWorkflowJob,
@@ -17,6 +18,7 @@ import {
 } from "./delivery";
 import { requestQuestionRerun } from "./exceptions";
 import { retryIntakeProcessing } from "./intake";
+import { matchWorkflowKey } from "./source-matching";
 
 /**
  * Operator recovery actions on queue jobs (docs/operations.md#recovery).
@@ -173,6 +175,36 @@ async function retryFailedJob(
           accounting: result.accounting,
           billUpdate: result.billUpdate,
           webhooksRequeued: result.webhooks.requeued,
+        },
+      };
+    }
+    case "match-invoice": {
+      const invoiceId = text(subject.invoiceId);
+      if (!teamId || !invoiceId) return refused("The job names no invoice");
+      const invoice = await getInvoiceForMatching(db, {
+        teamId,
+        inboxId: invoiceId,
+      });
+      if (!invoice) return refused("The invoice was deleted");
+      const restarted = await requeueFinishedWorkflowJob(db, {
+        name: "match-invoice",
+        idempotencyKey: matchWorkflowKey.processing(
+          teamId,
+          invoiceId,
+          invoice.processingRevision,
+        ),
+        teamId,
+      });
+      if (!restarted) {
+        return refused("The invoice's current revision has no finished match");
+      }
+      return {
+        status: "requeued",
+        action: "rematch",
+        detail: {
+          invoiceId,
+          revision: invoice.processingRevision,
+          jobId: restarted.id,
         },
       };
     }

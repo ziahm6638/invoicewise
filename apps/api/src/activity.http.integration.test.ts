@@ -827,6 +827,56 @@ suite("invoice activity and operator recovery over real HTTP", () => {
     expect(plan).not.toContain('"Index Name":"workflow_jobs_team_id_idx"');
   }, 60_000);
 
+  test("an operator re-runs a failed invoice match and the customer sees it", async () => {
+    provider.down = false;
+    const owner = await createUser("activity-match");
+    const teamId = owner.teamId;
+    const invoiceId = await upload(owner.cookie);
+    const matched = await runWorker(async () => {
+      const [job] = await jobsFor(teamId, "match-invoice");
+      return job?.status === "succeeded";
+    });
+    expect(matched).toBe(true);
+    const [matchJob] = await jobsFor(teamId, "match-invoice");
+    await client.primaryDb
+      .update(schema.workflowJobs)
+      .set({ status: "failed", lastError: "TypeSafe unavailable: 503" })
+      .where(orm.eq(schema.workflowJobs.id, matchJob!.id));
+
+    const view = await trpc(owner.cookie, "inbox.activity", { id: invoiceId });
+    expect(
+      (view.data.entries as Json[]).find((entry) => entry.stage === "matching"),
+    ).toMatchObject({
+      title: "Matching to authorization sources: failed",
+      status: "failed",
+      reason: expect.stringContaining("TypeSafe unavailable: 503"),
+      refs: { jobId: matchJob!.id },
+    });
+
+    const body = { purpose: "incident", reason: "TypeSafe outage resolved" };
+    const retried = await operator(`/ops/jobs/${matchJob!.id}/retry`, {
+      method: "POST",
+      body,
+    });
+    expect(retried.status).toBe(202);
+    expect((await retried.json()) as Json).toMatchObject({
+      status: "requeued",
+      action: "rematch",
+    });
+    const rematched = await runWorker(async () => {
+      const [job] = await jobsFor(teamId, "match-invoice");
+      return job?.status === "succeeded";
+    });
+    expect(rematched).toBe(true);
+    const jobs = await jobsFor(teamId, "match-invoice");
+    expect(jobs.map((job) => job.id)).toEqual([matchJob!.id]);
+    const again = await operator(`/ops/jobs/${matchJob!.id}/retry`, {
+      method: "POST",
+      body,
+    });
+    expect(again.status).toBe(409);
+  }, 60_000);
+
   test("an operator cancels a queued job and the customer recovers it", async () => {
     const owner = await createUser("activity-cancel");
     const teamId = owner.teamId;

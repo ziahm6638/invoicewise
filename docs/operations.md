@@ -141,6 +141,7 @@ idempotency key still holds:
 | `rerun-judgments` | Rerun the questions for the same revision; refused once the invoice has moved on |
 | `deliver-webhook` | Redeliver the same delivery and logical event ID |
 | `post-accounting-draft`, `update-accounting-bill` | Retry the invoice's failed destinations, including the accounting post or bill update, on the operator's authority |
+| `match-invoice` | Match the invoice's current revision again under its own key; a person's confirm, link or unlink is kept, and a job of an older revision is refused |
 | `process-inbound-email` | Re-open the failed message from its kept MIME source and process it again |
 | `purge-deleted-data` | Resume that deletion request |
 | others | Refused with the recovering action: the owner requests a new export, an admin resends an invitation or syncs a mailbox, retention runs hourly by itself |
