@@ -244,7 +244,37 @@ export async function getLatestBillUpdate(
     )
     .orderBy(desc(invoiceCorrections.version))
     .limit(1);
-  return row?.updateStatus ? row : undefined;
+  return row?.updateStatus && row.updateStatus !== "superseded"
+    ? row
+    : undefined;
+}
+
+/**
+ * Records the unsent bill updates of an earlier reading as superseded by a
+ * re-extraction, so they no longer decide the delivery state and are never
+ * sent. The history keeps them, and the bill keeps its provider ID.
+ */
+export async function supersedeBillUpdates(
+  db: Executor,
+  params: { invoiceId: string; teamId: string },
+) {
+  await db
+    .update(invoiceCorrections)
+    .set({
+      updateStatus: "superseded",
+      updateError: "Replaced by a re-extraction",
+      updateRetryable: null,
+    })
+    .where(
+      and(
+        eq(invoiceCorrections.invoiceId, params.invoiceId),
+        eq(invoiceCorrections.teamId, params.teamId),
+        or(
+          eq(invoiceCorrections.updateStatus, "failed"),
+          eq(invoiceCorrections.updateStatus, "cancelled"),
+        ),
+      ),
+    );
 }
 
 export async function getBillUpdate(

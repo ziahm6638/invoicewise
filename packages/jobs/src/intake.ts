@@ -21,6 +21,7 @@ import {
   getInboxByFilePath,
   getInboxIntakeBinding,
   getInboxIntakeBindingForUpdate,
+  getPendingBillUpdate,
   isStoredPathSharedByLiveDocument,
   listPendingObjectRemovals,
   listStaleReservedIntake,
@@ -623,6 +624,17 @@ export async function retryIntakeProcessing(
       throw new InvoiceActionError(
         "conflict",
         "This invoice changed since you opened it. Reload it to see the current state before reading it again.",
+      );
+    }
+    if (
+      await getPendingBillUpdate(executor as unknown as Database, {
+        invoiceId: binding.id,
+        teamId: params.teamId,
+      })
+    ) {
+      throw new InvoiceActionError(
+        "conflict",
+        "An update of this bill is still being sent to accounting. Read the invoice again once that has finished.",
       );
     }
 

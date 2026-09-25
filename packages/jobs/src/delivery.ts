@@ -29,6 +29,7 @@ import {
   requeueBillUpdate,
   requeueFinishedWorkflowJob,
   requeueWebhookDelivery,
+  supersedeBillUpdates,
 } from "@invoicewise/db/queries";
 import { workflowKey } from "./client";
 
@@ -226,6 +227,10 @@ export async function completeAndSchedule(
 ) {
   const invoice = await completeInboxProcessing(executor, params);
   if (!invoice) return null;
+  await supersedeBillUpdates(executor, {
+    invoiceId: invoice.id,
+    teamId: params.teamId,
+  });
   const scheduled = await scheduleInvoiceDeliveries(executor, invoice);
   return { invoice, revision: invoice.processingRevision, scheduled };
 }

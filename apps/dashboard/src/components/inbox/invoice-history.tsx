@@ -68,6 +68,11 @@ const billOutcome = (
         text: `Updating the bill in ${provider}${correction.updateError ? ` (last attempt: ${correction.updateError})` : ""}`,
         tone: "pending",
       };
+    case "superseded":
+      return {
+        text: `Bill update not sent: a re-extraction replaced this correction; the bill in ${provider} was left as it was`,
+        tone: "muted",
+      };
     case "cancelled":
       return {
         text: `Bill update cancelled: ${correction.updateError ?? "the connection was removed"}`,

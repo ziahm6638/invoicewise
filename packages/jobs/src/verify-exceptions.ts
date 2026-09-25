@@ -1049,6 +1049,54 @@ async function main() {
       },
     );
 
+    // A re-extraction starts a new reading: the cancelled update of the
+    // replaced correction is recorded as superseded, stops deciding the
+    // delivery state and is never sent, and the bill keeps its provider ID.
+    await retryIntakeProcessing(database.primaryDb, {
+      teamId,
+      inboxId: invalid,
+      expectedRevision: cancelledUpdate.processingRevision,
+    });
+    await saveProcessedDocument(db, {
+      id: invalid,
+      teamId,
+      displayName: "Acme Supplies Ltd",
+      type: "invoice",
+      extraction: extractionOf("EXC-TOTAL", 150),
+      judgments: [],
+    });
+    await drain(db, workspace);
+    const readAgain = await read(invalid);
+    const callsBeforeReextractRetry = providerCalls.length;
+    const reextractRetry = await retryInvoiceDelivery(db, {
+      invoiceId: invalid,
+      teamId,
+      teamRole: "admin",
+    });
+    await drain(db, workspace);
+    const [supersededEntry] = await listInvoiceCorrections(db, {
+      invoiceId: invalid,
+      teamId,
+    });
+    check(
+      "a re-extraction supersedes the earlier reading's unsent bill update",
+      readAgain.processingRevision > cancelledUpdate.processingRevision &&
+        supersededEntry?.id === cancelledEntry?.id &&
+        supersededEntry?.updateStatus === "superseded" &&
+        readAgain.delivery?.state !== "failed" &&
+        !(await listed("delivery_failed")).includes(invalid) &&
+        reextractRetry?.billUpdate === "not_needed" &&
+        providerCalls.length === callsBeforeReextractRetry &&
+        readAgain.accountingProviderId === providerId &&
+        bills.size === billsBefore,
+      {
+        revision: readAgain.processingRevision,
+        update: supersededEntry?.updateStatus,
+        delivery: readAgain.delivery,
+        reextractRetry,
+      },
+    );
+
     // Pagination through an exception filter visits every match once.
     const pages: string[] = [];
     let cursor: string | undefined;

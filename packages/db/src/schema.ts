@@ -2985,8 +2985,10 @@ export const invoiceCorrections = pgTable(
     }).notNull(),
     provider: accountingProviderEnum("provider"),
     providerId: text("provider_id"),
+    // superseded: a re-extraction replaced the corrected reading before the
+    // update was sent, so it is never sent.
     updateStatus: text("update_status", {
-      enum: ["queued", "updated", "failed", "cancelled"],
+      enum: ["queued", "updated", "failed", "cancelled", "superseded"],
     }),
     updateError: text("update_error"),
     updateRetryable: boolean("update_retryable"),
