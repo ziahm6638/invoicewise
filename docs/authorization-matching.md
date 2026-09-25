@@ -172,7 +172,8 @@ supplier can, and its conflicting evidence is kept on the decision.
 - **Webhooks.** `invoice.matched` is sent for every new decision, automatic or
   manual, to endpoints subscribed to it (existing endpoints keep the events
   they chose); see [webhooks](delivery.md#webhooks).
-  `data` is `{ "invoiceId", "match" }` with `match` as returned by REST.
+  `data` is `{ "invoiceId", "match" }` with `match` the full decision as
+  returned by REST.
 
 ## Lifecycle
 
