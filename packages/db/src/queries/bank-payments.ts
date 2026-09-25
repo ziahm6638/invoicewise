@@ -33,6 +33,28 @@ import {
  * attribute a provider callback to a workspace through its own customer.
  */
 
+// --- Money ----------------------------------------------------------------------
+
+/**
+ * Money is stored as integer minor units (pence); these queries speak decimal
+ * strings with two places, as the rest of the payment code does. A value with
+ * more than two decimal places is refused rather than rounded silently.
+ */
+export function decimalToMinor(value: string | number): number {
+  const text = typeof value === "number" ? String(value) : value.trim();
+  const match = /^(-)?(\d+)(?:\.(\d{1,2})0*)?$/.exec(text);
+  if (!match) throw new Error(`not a two-place decimal amount: ${text}`);
+  const [, sign, whole, fraction = ""] = match;
+  const minor = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+  if (!Number.isSafeInteger(minor))
+    throw new Error(`amount too large: ${text}`);
+  return sign && minor !== 0 ? -minor : minor;
+}
+
+/** A minor-units column as a two-place decimal string. */
+const minorText = (column: unknown) =>
+  sql<string>`(${column}::numeric / 100)::numeric(20, 2)::text`;
+
 // --- Settings -------------------------------------------------------------------
 
 export async function getBankPaymentSettings(db: Database, teamId: string) {
@@ -412,11 +434,12 @@ export async function upsertBankFeedTransactions(
   const rows = await db
     .insert(bankFeedTransactions)
     .values(
-      params.transactions.map((row) => ({
+      params.transactions.map(({ amount, ...row }) => ({
         teamId: params.teamId,
         connectionId: params.connectionId,
         accountId: params.accountId,
         ...row,
+        amountMinor: decimalToMinor(amount),
       })),
     )
     .onConflictDoUpdate({
@@ -429,7 +452,7 @@ export async function upsertBankFeedTransactions(
         duplicated: sql`excluded.duplicated`,
         mode: sql`excluded.mode`,
         madeOn: sql`excluded.made_on`,
-        amount: sql`excluded.amount`,
+        amountMinor: sql`excluded.amount_minor`,
         description: sql`excluded.description`,
         counterparty: sql`excluded.counterparty`,
         reference: sql`excluded.reference`,
@@ -552,7 +575,7 @@ export async function listBankFeedTransactions(
       duplicated: bankFeedTransactions.duplicated,
       mode: bankFeedTransactions.mode,
       madeOn: bankFeedTransactions.madeOn,
-      amount: bankFeedTransactions.amount,
+      amount: minorText(bankFeedTransactions.amountMinor),
       currency: bankFeedTransactions.currency,
       description: bankFeedTransactions.description,
       counterparty: bankFeedTransactions.counterparty,
@@ -565,7 +588,7 @@ export async function listBankFeedTransactions(
       counted: sql<
         { inboxId: string; kind: string; amount: string }[]
       >`coalesce((
-        select jsonb_agg(jsonb_build_object('inboxId', a.inbox_id, 'kind', a.kind, 'amount', a.amount::text))
+        select jsonb_agg(jsonb_build_object('inboxId', a.inbox_id, 'kind', a.kind, 'amount', (a.amount_minor::numeric / 100)::numeric(20, 2)::text))
         from ${invoicePaymentAllocations} a
         join ${inbox} i on i.payment_match_id = a.match_id
         where a.transaction_id = ${bankFeedTransactions.id}
@@ -705,18 +728,18 @@ export async function listPaymentCandidateTransactions(
       duplicated: bankFeedTransactions.duplicated,
       mode: bankFeedTransactions.mode,
       madeOn: bankFeedTransactions.madeOn,
-      amount: bankFeedTransactions.amount,
+      amount: minorText(bankFeedTransactions.amountMinor),
       currency: bankFeedTransactions.currency,
       description: bankFeedTransactions.description,
       counterparty: bankFeedTransactions.counterparty,
       reference: bankFeedTransactions.reference,
-      countedElsewhere: sql<string>`coalesce((
-        select sum(a.amount) from ${invoicePaymentAllocations} a
+      countedElsewhere: sql<string>`(coalesce((
+        select sum(a.amount_minor) from ${invoicePaymentAllocations} a
         join ${inbox} i on i.payment_match_id = a.match_id
         where a.transaction_id = ${bankFeedTransactions.id}
           and a.inbox_id <> ${params.excludeInboxId}
           and i.team_id = ${params.teamId}
-      ), 0)::text`,
+      ), 0)::numeric / 100)::numeric(20, 2)::text`,
     })
     .from(bankFeedTransactions)
     .innerJoin(
@@ -815,18 +838,24 @@ export async function recordPaymentMatch(
     })
     .from(invoicePaymentMatches)
     .where(eq(invoicePaymentMatches.inboxId, params.inboxId));
-  const { allocations, ...values } = params;
+  const { allocations, dueAmount, paidAmount, ...values } = params;
   const [match] = await db
     .insert(invoicePaymentMatches)
-    .values({ ...values, sequence: (last?.sequence ?? 0) + 1 })
+    .values({
+      ...values,
+      dueMinor: dueAmount === null ? null : decimalToMinor(dueAmount),
+      paidMinor: decimalToMinor(paidAmount),
+      sequence: (last?.sequence ?? 0) + 1,
+    })
     .returning();
   if (allocations.length) {
     await db.insert(invoicePaymentAllocations).values(
-      allocations.map((allocation) => ({
+      allocations.map(({ amount, ...allocation }) => ({
         teamId: params.teamId,
         matchId: match!.id,
         inboxId: params.inboxId,
         ...allocation,
+        amountMinor: decimalToMinor(amount),
       })),
     );
   }
@@ -947,7 +976,7 @@ export async function getBankFeedForExport(db: Database, teamId: string) {
         duplicated: bankFeedTransactions.duplicated,
         mode: bankFeedTransactions.mode,
         madeOn: bankFeedTransactions.madeOn,
-        amount: bankFeedTransactions.amount,
+        amount: minorText(bankFeedTransactions.amountMinor),
         currency: bankFeedTransactions.currency,
         description: bankFeedTransactions.description,
         counterparty: bankFeedTransactions.counterparty,

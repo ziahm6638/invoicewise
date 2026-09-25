@@ -56,9 +56,9 @@ import {
   matchWorkspacePayments,
   recordInvoicePayments,
 } from "./payment-matching";
-import type { PaymentMatchResult } from "./payment-rules";
+import { type PaymentMatchResult, fromMinor } from "./payment-rules";
 import { saveProcessedDocument } from "./process-document";
-import { createSaltEdgeClient } from "./salt-edge";
+import { SALT_EDGE_DEFAULT_BASE_URL, createSaltEdgeClient } from "./salt-edge";
 import { WorkflowRequest } from "./schema";
 import { required } from "./verify-support";
 
@@ -158,7 +158,7 @@ async function main() {
   const userIds: string[] = [];
   const fake = createFakeSaltEdge({ ...APP, pageSize: 3 });
   const client = createSaltEdgeClient(
-    { ...APP, baseUrl: "https://www.saltedge.com/api/v6", privateKey: null },
+    { ...APP, baseUrl: SALT_EDGE_DEFAULT_BASE_URL, privateKey: null },
     fake.fetcher,
   );
   let clock = Date.parse("2026-09-24T08:00:00Z");
@@ -212,7 +212,7 @@ async function main() {
       status: current.status,
       paymentStatus: current.paymentStatus,
       action: current.action,
-      paid: current.paidAmount,
+      paid: fromMinor(current.paidMinor),
       remaining: current.result.remaining,
       allocations: current.result.allocations.map(
         (row) => `${row.kind} ${row.amount} ${row.currency}`,

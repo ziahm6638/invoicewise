@@ -271,6 +271,11 @@ export const PROVIDER_HOSTS: {
       "QuickBooks (reach it through the Nango proxy in packages/jobs/src/nango.ts)",
     adapters: /^$/,
   },
+  {
+    host: /(www\.)?saltedge\.com\/api/,
+    label: "Salt Edge (only its adapter packages/jobs/src/salt-edge.ts)",
+    adapters: /^packages\/jobs\/src\/salt-edge\.ts$/,
+  },
 ];
 
 export function checkProviderHosts(files: { path: string; text: string }[]) {

@@ -322,6 +322,70 @@ export const TRPC_AUDIT: Record<string, AuditSpec | null> = {
     }),
   },
 
+  // Bank payments (optional; docs/bank-payments.md). The payment decision
+  // itself is kept in the invoice's payment history.
+  "bankPayments.setEnabled": {
+    action: "bank_payments.settings_update",
+    target: () => ({ type: "bank_payments", id: null }),
+    detail: (input) => ({ enabled: field(input, "enabled") === true }),
+  },
+  "bankPayments.connect": {
+    action: "bank.connect_start",
+    target: () => ({ type: "bank_connection", id: null }),
+    detail: (input) => ({
+      consentPeriodDays: num(field(input, "consentPeriodDays")),
+    }),
+    result: (result) => ({
+      targetId: str(field(asObject(result), "connectionId")),
+    }),
+  },
+  "bankPayments.complete": {
+    action: "bank.connect",
+    target: byId("bank_connection", "connectionId"),
+  },
+  "bankPayments.reconnect": {
+    action: "bank.reconnect",
+    target: byId("bank_connection", "connectionId"),
+    detail: (input) => ({
+      consentPeriodDays: num(field(input, "consentPeriodDays")),
+    }),
+  },
+  "bankPayments.disconnect": {
+    action: "bank.disconnect",
+    target: byId("bank_connection", "connectionId"),
+  },
+  "bankPayments.sync": {
+    action: "bank.sync",
+    target: byId("bank_connection", "connectionId"),
+  },
+  "bankPayments.confirm": {
+    action: "payment_match.confirm",
+    target: byId("invoice", "inboxId"),
+    detail: (input) => ({
+      expectedMatchId: str(field(input, "expectedMatchId")),
+    }),
+  },
+  "bankPayments.record": {
+    action: "payment_match.record",
+    target: byId("invoice", "inboxId"),
+    detail: (input) => {
+      const payments = field(input, "payments");
+      return {
+        expectedMatchId: str(field(input, "expectedMatchId")),
+        transactionIds: Array.isArray(payments)
+          ? payments.map((row) => str(field(asObject(row), "transactionId")))
+          : [],
+      };
+    },
+  },
+  "bankPayments.unlink": {
+    action: "payment_match.unlink",
+    target: byId("invoice", "inboxId"),
+    detail: (input) => ({
+      expectedMatchId: str(field(input, "expectedMatchId")),
+    }),
+  },
+
   // Integrations
   "webhooks.create": {
     action: "webhook.create",

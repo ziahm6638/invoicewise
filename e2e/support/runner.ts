@@ -48,7 +48,12 @@ import {
 } from "../../scripts/verify/lib";
 import { type Journey, createJourneyContext } from "./journey";
 import type { SharedServices } from "./services";
-import { NANGO_SECRET, XERO_INTEGRATION, startStubs } from "./stubs";
+import {
+  NANGO_SECRET,
+  SALT_EDGE_APP,
+  XERO_INTEGRATION,
+  startStubs,
+} from "./stubs";
 
 export type RunnerOptions = {
   services: SharedServices;
@@ -184,6 +189,11 @@ export async function runE2E(options: RunnerOptions): Promise<number> {
       NANGO_BASE_URL: stubs.nangoUrl,
       NANGO_SECRET_KEY: NANGO_SECRET,
       NANGO_XERO_INTEGRATION_ID: XERO_INTEGRATION,
+      // Optional bank payments, against the loopback Salt Edge.
+      BANK_PAYMENTS_ENABLED: "true",
+      SALT_EDGE_BASE_URL: stubs.saltEdgeUrl,
+      SALT_EDGE_APP_ID: SALT_EDGE_APP.appId,
+      SALT_EDGE_SECRET: SALT_EDGE_APP.secret,
       WORKFLOW_POLL_MS: "100",
       ...overrides,
     });

@@ -3455,7 +3455,8 @@ export const bankFeedTransactions = pgTable(
     duplicated: boolean("duplicated").default(false).notNull(),
     mode: text("mode").default("normal").notNull(),
     madeOn: date("made_on").notNull(),
-    amount: numeric("amount", { precision: 18, scale: 4 }).notNull(),
+    // Integer minor units (pence), signed as the bank shows it.
+    amountMinor: bigint("amount_minor", { mode: "number" }).notNull(),
     currency: text("currency").notNull(),
     description: text("description").notNull(),
     counterparty: text("counterparty"),
@@ -3531,8 +3532,9 @@ export const invoicePaymentMatches = pgTable(
     origin: text("origin").notNull(),
     action: text("action").notNull(),
     currency: text("currency"),
-    dueAmount: numeric("due_amount", { precision: 16, scale: 2 }),
-    paidAmount: numeric("paid_amount", { precision: 16, scale: 2 }).notNull(),
+    // Integer minor units (pence) in `currency`.
+    dueMinor: bigint("due_minor", { mode: "number" }),
+    paidMinor: bigint("paid_minor", { mode: "number" }).notNull(),
     result: jsonb("result").$type<Record<string, unknown>>().notNull(),
     reason: text("reason"),
     processingRevision: integer("processing_revision"),
@@ -3582,7 +3584,8 @@ export const invoicePaymentAllocations = pgTable(
     kind: text("kind").notNull(),
     transactionId: uuid("transaction_id"),
     creditInboxId: uuid("credit_inbox_id"),
-    amount: numeric("amount", { precision: 16, scale: 2 }).notNull(),
+    // Integer minor units (pence), positive.
+    amountMinor: bigint("amount_minor", { mode: "number" }).notNull(),
     currency: text("currency").notNull(),
   },
   (table) => [

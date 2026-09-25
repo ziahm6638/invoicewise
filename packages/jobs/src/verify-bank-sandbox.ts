@@ -47,7 +47,7 @@ import {
   confirmPaymentMatch,
   matchWorkspacePayments,
 } from "./payment-matching";
-import type { PaymentMatchResult } from "./payment-rules";
+import { type PaymentMatchResult, fromMinor } from "./payment-rules";
 import { saveProcessedDocument } from "./process-document";
 import { bankPaymentsAvailability, createSaltEdgeClient } from "./salt-edge";
 import { required } from "./verify-support";
@@ -344,7 +344,7 @@ async function main(step: string | undefined) {
         status: "posted",
         mode: "normal",
         madeOn,
-        amount: String(-Number(original!.amount)),
+        amountMinor: -original!.amountMinor,
         currency: original!.currency,
         description: `REVERSAL ${original!.description}`,
         counterparty: original!.counterparty,
@@ -353,7 +353,7 @@ async function main(step: string | undefined) {
       });
       print("reversing entry", {
         madeOn,
-        amount: -Number(original!.amount),
+        amount: fromMinor(-original!.amountMinor),
         description: `REVERSAL ${original!.description}`,
       });
       print("sync", await sync());
@@ -479,7 +479,7 @@ async function showDecisions(
         status: invoicePaymentMatches.status,
         paymentStatus: invoicePaymentMatches.paymentStatus,
         action: invoicePaymentMatches.action,
-        paid: invoicePaymentMatches.paidAmount,
+        paidMinor: invoicePaymentMatches.paidMinor,
         result: invoicePaymentMatches.result,
       })
       .from(invoicePaymentMatches)
@@ -492,7 +492,7 @@ async function showDecisions(
         status: row.status,
         paymentStatus: row.paymentStatus,
         action: row.action,
-        paid: row.paid,
+        paid: fromMinor(row.paidMinor),
         message: (row.result as { message?: string }).message,
       })),
     );

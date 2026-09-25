@@ -291,6 +291,17 @@ export function assertSyntheticEnvironment(env: Record<string, string>) {
     assertLoopbackUrl(key, value);
   }
 
+  // Bank payments default to the real Salt Edge API; when a run switches
+  // them on, the bank data provider must be a loopback stand-in too.
+  if (env.BANK_PAYMENTS_ENABLED?.trim() === "true" || env.SALT_EDGE_BASE_URL) {
+    if (!env.SALT_EDGE_BASE_URL) {
+      throw new Error(
+        "SALT_EDGE_BASE_URL must be a closed loopback URL when bank payments are enabled",
+      );
+    }
+    assertLoopbackUrl("SALT_EDGE_BASE_URL", env.SALT_EDGE_BASE_URL);
+  }
+
   const smtpHost = env.SMTP_HOST ?? "";
   if (!isLoopbackHostname(smtpHost)) {
     throw new Error(

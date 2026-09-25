@@ -141,6 +141,15 @@
       "journey": "e2e/journeys/accounting-delivery.journey.ts"
     },
     {
+      "id": "settings-bank-payments",
+      "name": "Bank payments (optional)",
+      "route": "/settings/bank-payments",
+      "reach": "Settings > Bank payments (owner/admin); off until turned on per workspace and only offered where the deployment enables it",
+      "elements": ["Use bank payments switch", "consent period and read-only consent checkbox", "Connect a bank button", "connections with consent, sync status and failures", "Sync now, Reconnect and Disconnect buttons", "recent transactions"],
+      "actions": ["turn bank payments on or off", "connect a bank through Salt Edge with explicit consent", "sync, reconnect (renew consent) or disconnect a bank", "see an invoice's payment status and evidence in its details"],
+      "journey": "e2e/journeys/bank-payments.journey.ts"
+    },
+    {
       "id": "settings-webhooks",
       "name": "Webhooks",
       "route": "/settings/webhooks",

@@ -732,8 +732,8 @@ const significantWords = (value: string | null | undefined) =>
         !/^\d{1,2}$/.test(word),
     );
 
-const amountOf = (row: Pick<BankFeedTransactionRow, "amount">) =>
-  Math.round(Number(row.amount) * 100);
+const amountOf = (row: Pick<BankFeedTransactionRow, "amountMinor">) =>
+  row.amountMinor;
 
 const dayDiff = (from: string, to: string) =>
   Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
@@ -749,7 +749,7 @@ const dayDiff = (from: string, to: string) =>
 export const reversalScore = (
   entry: Pick<
     BankFeedTransactionRow,
-    | "amount"
+    | "amountMinor"
     | "currency"
     | "madeOn"
     | "description"
@@ -758,7 +758,7 @@ export const reversalScore = (
   >,
   original: Pick<
     BankFeedTransactionRow,
-    | "amount"
+    | "amountMinor"
     | "currency"
     | "madeOn"
     | "description"

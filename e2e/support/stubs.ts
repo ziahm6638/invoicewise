@@ -7,12 +7,20 @@
  * - Nango + Xero: a Nango API that binds a connection to the workspace that
  *   opened the connect session, in front of the stateful Xero fake the
  *   accounting verifiers use. Nothing reaches Xero or QuickBooks.
+ * - Salt Edge (optional bank payments): the verifier's in-memory Salt Edge
+ *   (`createFakeSaltEdge`) behind a loopback server, plus a loopback "bank
+ *   sign-in" page the connect URL opens. No bank and no Salt Edge app is
+ *   reached.
  * - Polar and anything else with a base URL: the release verifier's provider
  *   trap (a recording loopback server). No money moves.
  *
  * Every request is recorded so the evidence shows exactly what left the app.
  */
 
+import {
+  type FakeSaltEdge,
+  createFakeSaltEdge,
+} from "../../packages/jobs/src/fake-salt-edge";
 import { startTypeSafeStub } from "../../packages/jobs/src/verify-support";
 import { createXeroFake } from "../../packages/jobs/src/xero-fake";
 
@@ -28,6 +36,20 @@ export const XERO_INTEGRATION = "xero-invoicewise-e2e";
 export const XERO_ORGANISATION = {
   id: "7d0c0a3e-0000-4000-8000-0000000e2e01",
   name: "E2E Demo Trading Ltd",
+};
+
+export const SALT_EDGE_APP = {
+  appId: "e2e-salt-edge-app",
+  secret: "e2e-salt-edge-secret",
+};
+
+/** A transaction as the bank reports it (money out is negative). */
+export type BankTransaction = {
+  made_on: string;
+  amount: number;
+  currency_code: string;
+  description: string;
+  status?: "posted" | "pending";
 };
 
 export type Stubs = Awaited<ReturnType<typeof startStubs>>;
@@ -176,6 +198,79 @@ export async function startStubs() {
 
   nangoOrigin = `http://127.0.0.1:${nango.port}`;
 
+  // Salt Edge + the bank's sign-in page.
+  // The fake (below) is created once the server has a port for its connect
+  // URLs; the server only calls it after that.
+  /** workspace id -> transactions its next bank sign-in's account holds. */
+  const bankSeeds = new Map<string, BankTransaction[]>();
+  /** workspace id -> its connections' Salt Edge ids and account ids. */
+  const bankConnections = new Map<
+    string,
+    { connectionId: string; accountId: string }[]
+  >();
+  const teamOfCustomer = (customerId: string) =>
+    saltEdge.customers
+      .get(customerId)
+      ?.identifier.split("-")
+      .slice(-5)
+      .join("-");
+  const saltEdgeServer = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request): Promise<Response> {
+      record("saltedge", request);
+      const url = new URL(request.url);
+      const session = url.searchParams.get("session");
+      if (
+        request.method === "GET" &&
+        session &&
+        (url.pathname === "/connect" || url.pathname.startsWith("/reconnect/"))
+      ) {
+        // The customer signs in at the bank and gives consent.
+        const customerId =
+          url.searchParams.get("customer") ??
+          saltEdge.connections.get(url.pathname.split("/")[2] ?? "")
+            ?.customer_id ??
+          "";
+        const finished = saltEdge.finishSession(session);
+        if (!finished) return new Response("Unknown session", { status: 404 });
+        const teamId = teamOfCustomer(customerId) ?? "";
+        const accountId = saltEdge.accountOf(finished.connectionId);
+        if (url.pathname === "/connect" && accountId) {
+          for (const row of bankSeeds.get(teamId) ?? []) {
+            saltEdge.addTransaction(accountId, {
+              status: "posted",
+              ...row,
+            });
+          }
+          bankSeeds.delete(teamId);
+          bankConnections.set(teamId, [
+            ...(bankConnections.get(teamId) ?? []),
+            { connectionId: finished.connectionId, accountId },
+          ]);
+        }
+        return Response.redirect(finished.returnTo, 302);
+      }
+      if (url.pathname.startsWith("/api/v6/")) {
+        return saltEdge.fetcher(url.toString(), {
+          method: request.method,
+          headers: request.headers,
+          body:
+            request.method === "GET" || request.method === "DELETE"
+              ? undefined
+              : await request.text(),
+        });
+      }
+      return new Response("Not found", { status: 404 });
+    },
+  });
+  const saltEdgeOrigin = `http://127.0.0.1:${saltEdgeServer.port}`;
+  const saltEdge: FakeSaltEdge = createFakeSaltEdge({
+    ...SALT_EDGE_APP,
+    pageSize: 2,
+    connectBaseUrl: saltEdgeOrigin,
+  });
+
   return {
     requests,
     typeSafeUrl: `http://127.0.0.1:${typeSafe.port}`,
@@ -183,10 +278,27 @@ export async function startStubs() {
     xero,
     /** The Nango connection a workspace's connect session produced. */
     nangoConnectionFor: (teamId: string) => sessions.get(teamId),
+    saltEdgeUrl: `${saltEdgeOrigin}/api/v6`,
+    saltEdge,
+    /** What the account of the workspace's next bank sign-in holds. */
+    seedBank: (teamId: string, rows: BankTransaction[]) =>
+      bankSeeds.set(teamId, rows),
+    /** The workspace's connections at the fake bank, oldest first. */
+    bankConnectionsOf: (teamId: string) => bankConnections.get(teamId) ?? [],
+    /** A new entry on the workspace's latest account (a reversal, say). */
+    addBankTransaction(teamId: string, row: BankTransaction) {
+      const latest = (bankConnections.get(teamId) ?? []).at(-1);
+      if (!latest) throw new Error("the workspace has no bank connection");
+      return saltEdge.addTransaction(latest.accountId, {
+        status: "posted",
+        ...row,
+      });
+    },
     stop() {
       typeSafe.stop(true);
       typeSafeStub.stop(true);
       nango.stop(true);
+      saltEdgeServer.stop(true);
     },
   };
 }

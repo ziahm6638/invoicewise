@@ -274,15 +274,25 @@ const accountOf = (value: unknown): SaltEdgeAccount => {
   };
 };
 
-/** A decimal amount as a string with at most four places, never a float. */
+/**
+ * A decimal amount as a string with two places (the minor unit InvoiceWise
+ * stores), never a float. A provider amount with more places is rounded half
+ * away from zero on its decimal digits.
+ */
 export const decimalOf = (value: unknown): string | null => {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value.toFixed(4).replace(/\.?0+$/, "") || "0";
-  }
-  if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value.trim())) {
-    return value.trim();
-  }
-  return null;
+  const raw =
+    typeof value === "number" && Number.isFinite(value)
+      ? value.toFixed(4)
+      : typeof value === "string"
+        ? value.trim()
+        : null;
+  const match = raw ? /^(-)?(\d+)(?:\.(\d+))?$/.exec(raw) : null;
+  if (!match) return null;
+  const [, sign, whole, fraction = ""] = match;
+  let minor = BigInt(whole!) * 100n + BigInt(`${fraction}00`.slice(0, 2));
+  if (Number(fraction[2] ?? "0") >= 5) minor += 1n;
+  const text = `${minor / 100n}.${String(minor % 100n).padStart(2, "0")}`;
+  return sign && minor !== 0n ? `-${text}` : text;
 };
 
 const transactionOf = (value: unknown): SaltEdgeTransaction | null => {

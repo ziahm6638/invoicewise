@@ -112,6 +112,18 @@ export const AUDIT_ACTIONS = {
     category: "authorization_source",
     label: "Unlinked an invoice from its authorization sources",
   },
+  "payment_match.confirm": {
+    category: "invoice",
+    label: "Confirmed an invoice's bank payment",
+  },
+  "payment_match.record": {
+    category: "invoice",
+    label: "Recorded an invoice's bank payments",
+  },
+  "payment_match.unlink": {
+    category: "invoice",
+    label: "Unlinked an invoice's bank payments",
+  },
   // Integrations
   "webhook.create": { category: "integration", label: "Added a webhook" },
   "webhook.disable": { category: "integration", label: "Disabled a webhook" },
@@ -143,6 +155,21 @@ export const AUDIT_ACTIONS = {
     category: "integration",
     label: "Chose the accounting organisation",
   },
+  "bank_payments.settings_update": {
+    category: "integration",
+    label: "Turned bank payments on or off",
+  },
+  "bank.connect_start": {
+    category: "integration",
+    label: "Started connecting a bank",
+  },
+  "bank.connect": { category: "integration", label: "Connected a bank" },
+  "bank.reconnect": {
+    category: "integration",
+    label: "Started reconnecting a bank",
+  },
+  "bank.disconnect": { category: "integration", label: "Disconnected a bank" },
+  "bank.sync": { category: "integration", label: "Synced a bank" },
   "mailbox.connect": { category: "integration", label: "Connected a mailbox" },
   "mailbox.disconnect": {
     category: "integration",

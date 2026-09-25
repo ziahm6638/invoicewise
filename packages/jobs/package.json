@@ -13,7 +13,7 @@
     "verify:quickbooks": "bun run src/verify-quickbooks.ts",
     "verify:xero": "bun run src/verify-xero.ts",
     "prove:accounting-sandbox": "bun run src/prove-accounting-sandbox.ts",
-    "prove:bank-sandbox": "bun run src/prove-bank-sandbox.ts",
+    "prove:bank-sandbox": "bun run src/verify-bank-sandbox.ts",
     "nango:configure-integration": "bun run src/configure-nango-integration.ts",
     "quickbooks:sandbox-connection": "bun run src/quickbooks-sandbox-connection.ts",
     "verify:handoff": "bun run src/verify-handoff.ts",

@@ -33,7 +33,31 @@ export function createFakeSaltEdge(options: {
   appId: string;
   secret: string;
   pageSize?: number;
+  /**
+   * Where connect URLs point. The e2e stub serves a loopback "bank sign-in"
+   * there that finishes the session (`finishSession`) and returns the
+   * browser to the app, as Salt Edge's hosted page does.
+   */
+  connectBaseUrl?: string;
 }) {
+  const connectBaseUrl = options.connectBaseUrl ?? "https://fake.saltedge.test";
+  /** Open bank sign-ins: token -> who started it and where to return. */
+  const sessions = new Map<
+    string,
+    { customerId: string; returnTo: string; connectionId: string | null }
+  >();
+  const openSession = (
+    customerId: string,
+    connectionId: string | null,
+    attempt: unknown,
+  ) => {
+    const token = nextId();
+    const returnTo = String(
+      (attempt as { return_to?: unknown } | null)?.return_to ?? "",
+    );
+    sessions.set(token, { customerId, returnTo, connectionId });
+    return token;
+  };
   const pageSize = options.pageSize ?? 3;
   let sequence = 1_000;
   const nextId = () => String((sequence += 1));
@@ -65,7 +89,10 @@ export function createFakeSaltEdge(options: {
     return { slice, nextId: next?.id ?? null };
   };
 
-  const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetcher = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
     const url = new URL(String(input));
     const method = (init?.method ?? "GET").toUpperCase();
     const headers = new Headers(init?.headers);
@@ -115,18 +142,25 @@ export function createFakeSaltEdge(options: {
       if (!customers.has(String(data.customer_id))) {
         return error(404, "CustomerNotFound", "No customer");
       }
+      const token = openSession(String(data.customer_id), null, data.attempt);
       return ok({
-        connect_url: `https://fake.saltedge.test/connect?customer=${data.customer_id}`,
+        connect_url: `${connectBaseUrl}/connect?customer=${data.customer_id}&session=${token}`,
         expires_at: "2099-01-01T00:00:00Z",
         customer_id: data.customer_id,
       });
     }
     if (segments[0] === "connections" && segments[2] === "reconnect") {
-      if (!connections.has(segments[1]!)) {
+      const existing = connections.get(segments[1]!);
+      if (!existing) {
         return error(404, "ConnectionNotFound", "No connection");
       }
+      const token = openSession(
+        existing.customer_id,
+        existing.id,
+        data.attempt,
+      );
       return ok({
-        connect_url: `https://fake.saltedge.test/reconnect/${segments[1]}`,
+        connect_url: `${connectBaseUrl}/reconnect/${segments[1]}?session=${token}`,
       });
     }
     if (segments[0] === "connections" && segments[2] === "refresh") {
@@ -208,6 +242,32 @@ export function createFakeSaltEdge(options: {
     calls,
     customers,
     connections,
+    /**
+     * The customer finishing the bank sign-in a connect or reconnect URL
+     * opened: a new connection (or renewed consent) and the URL the browser
+     * returns to, with `connection_id` appended as Salt Edge does. Null for
+     * an unknown or already used session.
+     */
+    finishSession(token: string) {
+      const session = sessions.get(token);
+      if (!session) return null;
+      sessions.delete(token);
+      let connectionId = session.connectionId;
+      if (connectionId && connections.has(connectionId)) {
+        this.setConsent(connectionId, "active");
+      } else {
+        connectionId = this.completeConnect({
+          customerId: session.customerId,
+        }).connectionId;
+      }
+      const url = new URL(session.returnTo);
+      url.searchParams.set("connection_id", connectionId);
+      return { connectionId, returnTo: url.toString() };
+    },
+    /** The account of a connection (the first one). */
+    accountOf(connectionId: string) {
+      return accounts.get(connectionId)?.[0]?.id ?? null;
+    },
     /** The customer's bank sign-in finishing: a connection with one account. */
     completeConnect(input: {
       customerId: string;
