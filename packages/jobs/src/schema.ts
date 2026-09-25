@@ -69,6 +69,11 @@ export type DeliverWebhookPayload = typeof DeliverWebhookPayload.Type;
 export const PostAccountingDraftPayload = Schema.Struct({
   invoiceId: Schema.String,
   teamId: Schema.String,
+  /**
+   * A person asked to send this invoice (a retry), so it posts even while
+   * the workspace's automatic posting is off.
+   */
+  explicit: Schema.optional(Schema.Boolean),
 });
 export type PostAccountingDraftPayload = typeof PostAccountingDraftPayload.Type;
 

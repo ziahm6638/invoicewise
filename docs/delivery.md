@@ -326,7 +326,8 @@ each destination was told: `accounting` is `deliver`, `held`, `off`,
 rules would let it through but the revision schedules no post: a question
 rerun of an invoice that was not held, a correction that posts nothing, or a
 connection not opted in to automatic posting, as a QuickBooks connection is
-until an admin opts in; see
+until an admin opts in: nothing is created automatically, but a person can
+still send an individual invoice with a retry; see
 [QuickBooks Online](accounting-integrations.md#quickbooks-online)),
 `webhooks` is `deliver` or `held`. A destination is scheduled only when its decision lets
 it through, so every webhook delivery and bill has the decision it was sent

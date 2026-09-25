@@ -19,4 +19,6 @@ ALTER TABLE "inbox" ADD COLUMN "accounting_attachment_status" text;--> statement
 ALTER TABLE "inbox" ADD COLUMN "accounting_attachment_error" text;--> statement-breakpoint
 ALTER TABLE "inbox" ADD CONSTRAINT "inbox_accounting_provider_entity_check" CHECK ("accounting_provider_entity" IN ('bill', 'vendor_credit'));--> statement-breakpoint
 ALTER TABLE "inbox" ADD CONSTRAINT "inbox_accounting_attachment_status_check" CHECK ("accounting_attachment_status" IN ('attached', 'queued', 'failed'));--> statement-breakpoint
-UPDATE "inbox" SET "accounting_provider_entity" = 'bill' WHERE "accounting_provider_id" IS NOT NULL;
+UPDATE "inbox" SET "accounting_provider_entity" = 'bill' WHERE "accounting_provider_id" IS NOT NULL;--> statement-breakpoint
+ALTER TABLE "inbox" ADD COLUMN "accounting_organisation_id" text;--> statement-breakpoint
+UPDATE "inbox" SET "accounting_organisation_id" = "accounting_connections"."organisation_id" FROM "accounting_connections" WHERE "inbox"."accounting_provider_id" IS NOT NULL AND "accounting_connections"."team_id" = "inbox"."team_id" AND "accounting_connections"."provider" = "inbox"."accounting_provider";

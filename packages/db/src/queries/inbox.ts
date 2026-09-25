@@ -2836,6 +2836,7 @@ export async function getInvoiceForDeliveryUpdate(
       accountingProviderId: inbox.accountingProviderId,
       accountingRevision: inbox.accountingRevision,
       accountingProvider: inbox.accountingProvider,
+      accountingOrganisationId: inbox.accountingOrganisationId,
       accountingAttachmentStatus: inbox.accountingAttachmentStatus,
     })
     .from(inbox)

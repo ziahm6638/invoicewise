@@ -599,14 +599,28 @@ async function quickBooksContext(
   });
   const Line = lines.map((entry) => line(entry.description, entry.total));
   // A US company's bill has no tax code, so the invoice's tax is its own
-  // line: the bill's total is the invoice's total either way.
-  if (!company.purchaseTax && tax > 0 && bill.netAmount !== null) {
-    Line.push(
-      line(
-        bill.invoiceNumber ? `Tax on invoice ${bill.invoiceNumber}` : "Tax",
-        tax,
-      ),
-    );
+  // line when the posted lines are net of it: the bill's total is the
+  // invoice's total either way, or the bill is refused.
+  if (!company.purchaseTax && tax > 0) {
+    const gross = bill.grossAmount;
+    const linesAreGross = gross !== null && Math.abs(net - gross) <= 0.01;
+    const linesAreNet =
+      gross === null
+        ? bill.netAmount !== null
+        : Math.abs(net + tax - gross) <= 0.01;
+    if (!linesAreGross && !linesAreNet) {
+      throw new BillRejectedError(
+        "QuickBooks needs the invoice's net amount to add its tax: its lines do not add up to the invoice total with or without the tax",
+      );
+    }
+    if (!linesAreGross) {
+      Line.push(
+        line(
+          bill.invoiceNumber ? `Tax on invoice ${bill.invoiceNumber}` : "Tax",
+          tax,
+        ),
+      );
+    }
   }
   const docNumber = bill.invoiceNumber
     ? bill.invoiceNumber.slice(0, DOC_NUMBER_MAX)

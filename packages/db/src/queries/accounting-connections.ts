@@ -227,6 +227,7 @@ export async function getAccountingPostInvoice(
       accountingIdempotencyKey: inbox.accountingIdempotencyKey,
       accountingPostReleased: inbox.accountingPostReleased,
       accountingProviderEntity: inbox.accountingProviderEntity,
+      accountingOrganisationId: inbox.accountingOrganisationId,
       accountingAttachmentStatus: inbox.accountingAttachmentStatus,
     })
     .from(inbox)
@@ -282,6 +283,8 @@ export async function recordAccountingPostSuccess(
     provider: AccountingProvider;
     providerId: string;
     entity: "bill" | "vendor_credit";
+    /** The company the record was created in. */
+    organisationId: string | null;
     idempotencyKey: string;
     duplicate: boolean;
     attachment: AccountingAttachmentOutcome;
@@ -294,6 +297,7 @@ export async function recordAccountingPostSuccess(
       accountingPostStatus: input.duplicate ? "already_posted" : "posted",
       accountingProviderId: input.providerId,
       accountingProviderEntity: input.entity,
+      accountingOrganisationId: input.organisationId,
       accountingAttachmentStatus: input.attachment.status,
       accountingAttachmentError: input.attachment.error,
       accountingIdempotencyKey: input.idempotencyKey,
@@ -484,17 +488,25 @@ export async function recordAccountingPostQueued(
   return invoice;
 }
 
-/** Settles a queued post whose connection or invoice is gone, without posting. */
+/**
+ * Settles a queued post without posting: its connection or invoice is gone,
+ * or automatic posting was switched off (retryable by a person).
+ */
 export async function recordAccountingPostCancelled(
   db: Database,
-  input: { invoiceId: string; teamId: string; reason: string },
+  input: {
+    invoiceId: string;
+    teamId: string;
+    reason: string;
+    retryable?: boolean;
+  },
 ) {
   const [invoice] = await db
     .update(inbox)
     .set({
       accountingPostStatus: "cancelled",
       accountingPostError: input.reason,
-      accountingPostRetryable: false,
+      accountingPostRetryable: input.retryable ?? false,
     })
     .where(
       and(

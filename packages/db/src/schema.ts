@@ -2451,6 +2451,9 @@ export const inbox = pgTable(
     accountingProviderEntity: text("accounting_provider_entity", {
       enum: ["bill", "vendor_credit"],
     }),
+    // The provider company (Xero organisation, QuickBooks realm) the record
+    // was created in; an update or attachment goes only to that company.
+    accountingOrganisationId: text("accounting_organisation_id"),
     // The source document on the provider record, retried on its own when
     // the record was created but the upload failed: attached, queued (a
     // separate upload is scheduled) or failed (with the reason).

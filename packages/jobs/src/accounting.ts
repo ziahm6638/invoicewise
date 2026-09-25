@@ -3,8 +3,8 @@ import type { Database } from "@invoicewise/db/client";
 import {
   type AccountingProvider,
   claimAccountingPost,
-  getAccountingConnections,
   disconnectAccountingConnectionRecord,
+  getAccountingConnections,
   getAccountingPostInvoice,
   getActiveAccountingConnection,
   getActiveAccountingConnectionByProvider,
@@ -23,11 +23,7 @@ import {
   upsertAccountingConnection,
 } from "@invoicewise/db/queries";
 import { redactOperationalText } from "@invoicewise/db/utils/redact";
-import {
-  accountingReadiness,
-  postingKeyOf,
-  validateInvoice,
-} from "@invoicewise/documents";
+import { postingKeyOf, validateInvoice } from "@invoicewise/documents";
 import { Effect, Schema } from "effect";
 import {
   type AccountingSettings,
@@ -41,7 +37,10 @@ import {
   updateProviderBill,
 } from "./accounting-providers";
 import {
+  otherAccountingCompanyReason,
+  providerAccountingReadiness,
   requeueAccountingIntent,
+  retryAccountingAttachment,
   scheduleAccountingAttachment,
 } from "./delivery";
 import {
@@ -295,7 +294,7 @@ export async function completeAccountingConnection(
     ),
     integrationIsSandbox(config),
   ]);
-  return upsertAccountingConnection(db, {
+  const connection = await upsertAccountingConnection(db, {
     ...input,
     integrationId: config.integrationId,
     organisationId: organisation.id,
@@ -305,6 +304,19 @@ export async function completeAccountingConnection(
     // QuickBooks bill is open and unpaid, so an admin opts in first.
     autoPostOnConnect: input.provider === "xero",
   });
+  // A reconnect replaces the Nango connection: the one it replaced no
+  // longer serves the workspace, so its credentials are deleted.
+  if (active && active.connectionId !== input.connectionId) {
+    await revokeAccountingConnection(
+      {
+        provider: active.provider,
+        connectionId: active.connectionId,
+        integrationId: active.integrationId,
+      },
+      env,
+    );
+  }
+  return connection;
 }
 
 const failureMessage = (error: unknown) =>
@@ -595,14 +607,17 @@ export const postAccountingDraft = (
     teamId: string;
     attempt?: number;
     maxAttempts?: number;
+    /** A person asked for this post; see `requeueAccountingIntent`. */
+    explicit?: boolean;
   },
   env = process.env,
 ) =>
   Effect.gen(function* () {
     const target = { invoiceId: input.invoiceId, teamId: input.teamId };
-    const cancel = (reason: string) =>
+    const cancel = (reason: string, retryable?: boolean) =>
       Effect.tryPromise({
-        try: () => recordAccountingPostCancelled(db, { ...target, reason }),
+        try: () =>
+          recordAccountingPostCancelled(db, { ...target, reason, retryable }),
         catch: () =>
           new AccountingPostError({
             reason: "Unable to record cancelled accounting post",
@@ -660,21 +675,26 @@ export const postAccountingDraft = (
       };
     }
 
+    // Automatic posting switched off after this post was scheduled: nothing
+    // is created unless a person asked for this invoice.
+    if (!input.explicit && !connection.autoPostEnabledAt) {
+      yield* cancel(
+        `Automatic posting to ${PROVIDER_NAME[connection.provider]} was switched off before this invoice was sent; send it yourself from the invoice if you want it`,
+        true,
+      );
+      return { invoiceId: invoice.id, status: "cancelled" };
+    }
+
     // Provider-required fields that are missing or invalid, an inconsistent
-    // total, a duplicate or a credit note: the bill is not attempted, and the
-    // reasons are recorded as a failure a retry cannot fix until the invoice
-    // is corrected (see docs/document-intake.md#validation).
-    const verdict = accountingReadiness(invoice.extraction, invoice.validation);
-    // QuickBooks takes a credit note as a vendor credit; Xero receives bills
-    // only (docs/accounting-integrations.md).
-    const blockers = verdict.blockers.filter(
-      (blocker) =>
-        !(
-          connection.provider === "quickbooks" &&
-          blocker.code === "credit_note_unsupported"
-        ),
+    // total, a duplicate or a credit note Xero cannot take: the bill is not
+    // attempted, and the reasons are recorded as a failure a retry cannot
+    // fix until the invoice is corrected (see
+    // docs/document-intake.md#validation).
+    const readiness = providerAccountingReadiness(
+      connection.provider,
+      invoice.extraction,
+      invoice.validation,
     );
-    const readiness = { ready: blockers.length === 0, blockers };
     // Keyed by document type and number, not the document, so the provider
     // replays one bill for any copy that reaches it. A post a user released
     // from review is its own bill, under its own claim and key.
@@ -899,6 +919,7 @@ export const postAccountingDraft = (
             provider: connection.provider,
             providerId: result.providerId,
             entity: result.entity,
+            organisationId: connection.organisationId,
             idempotencyKey,
             duplicate: false,
             attachment: attachmentOutcome,
@@ -999,6 +1020,17 @@ export const attachAccountingDocument = (
       );
       return { invoiceId: invoice.id, status: "failed" };
     }
+    const otherCompany = otherAccountingCompanyReason(
+      {
+        provider: invoice.accountingProvider,
+        organisationId: invoice.accountingOrganisationId,
+      },
+      connection,
+    );
+    if (otherCompany) {
+      yield* record("failed", otherCompany);
+      return { invoiceId: invoice.id, status: "failed" };
+    }
     const final = (error: AccountingPostError) =>
       !error.retryable ||
       input.attempt === undefined ||
@@ -1061,19 +1093,18 @@ export async function retryAccountingPost(
   if (invoice.accountingProviderId) {
     // A posted record whose document failed to attach: retry the upload.
     // A queued one whose job was lost is re-driven the same way.
-    if (
-      (invoice.accountingAttachmentStatus === "failed" ||
-        invoice.accountingAttachmentStatus === "queued") &&
-      (await getActiveAccountingConnection(db, input.teamId))?.provider ===
-        invoice.accountingProvider
-    ) {
-      await scheduleAccountingAttachment(db, {
-        ...input,
-        providerId: invoice.accountingProviderId,
-      });
-      return { status: "attachment_queued" as const };
-    }
-    return { status: "already_posted" as const };
+    const queued = await retryAccountingAttachment(db, {
+      ...input,
+      providerId: invoice.accountingProviderId,
+      provider: invoice.accountingProvider,
+      organisationId: invoice.accountingOrganisationId,
+      attachmentStatus: invoice.accountingAttachmentStatus,
+    });
+    return {
+      status: queued
+        ? ("attachment_queued" as const)
+        : ("already_posted" as const),
+    };
   }
   if (!(await getActiveAccountingConnection(db, input.teamId))) {
     throw new Error("No accounting connection is active");
@@ -1184,9 +1215,19 @@ export const updateAccountingBill = (
       );
       return { correctionId: correction.id, status: "failed" };
     }
+    const otherCompany = otherAccountingCompanyReason(
+      { provider, organisationId: invoice.accountingOrganisationId },
+      connection,
+    );
+    if (otherCompany) {
+      yield* settle("failed", otherCompany, false);
+      return { correctionId: correction.id, status: "failed" };
+    }
 
-    // The corrected invoice must still be one a draft bill can represent.
-    const readiness = accountingReadiness(
+    // The corrected invoice must still be one the provider record can
+    // represent.
+    const readiness = providerAccountingReadiness(
+      provider,
       correction.extraction,
       validateInvoice(correction.extraction),
     );

@@ -184,7 +184,8 @@ function SetupForm({ setup }: { setup: Setup }) {
           QuickBooks has no draft bills. When this is on, every invoice the
           delivery rules let through is created as an open, unpaid bill (a
           credit note as a vendor credit) in {companyLabel}. Nothing is paid or
-          approved for payment. When it is off, nothing is created.
+          approved for payment. When it is off, nothing is created
+          automatically; you can still send an individual invoice yourself.
         </span>
         {turningOn && (
           <Label className="flex items-start gap-2 text-xs font-normal">

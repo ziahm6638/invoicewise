@@ -42,6 +42,7 @@ export async function lockInvoiceForAction(
       accountingProvider: inbox.accountingProvider,
       accountingPostStatus: inbox.accountingPostStatus,
       accountingProviderId: inbox.accountingProviderId,
+      accountingOrganisationId: inbox.accountingOrganisationId,
       accountingIdempotencyKey: inbox.accountingIdempotencyKey,
       accountingPostRetryable: inbox.accountingPostRetryable,
       accountingRevision: inbox.accountingRevision,
@@ -290,6 +291,7 @@ export async function getBillUpdate(
         accountingProvider: inbox.accountingProvider,
         accountingProviderId: inbox.accountingProviderId,
         accountingProviderEntity: inbox.accountingProviderEntity,
+        accountingOrganisationId: inbox.accountingOrganisationId,
       },
     })
     .from(invoiceCorrections)

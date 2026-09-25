@@ -395,6 +395,7 @@ export async function runMigrationVerification(
       ["accounting_connections", "organisation_id"],
       ["accounting_connections", "auto_post_enabled_at"],
       ["inbox", "accounting_attachment_status"],
+      ["inbox", "accounting_organisation_id"],
     ];
     for (const [table, column] of expectedColumns) {
       if (!(await columnExists(FRESH_DATABASE, table, column))) {

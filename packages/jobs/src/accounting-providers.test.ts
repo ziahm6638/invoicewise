@@ -546,6 +546,51 @@ describe("QuickBooks", () => {
     ]);
   });
 
+  test("a US company's bill adds the tax to net lines without a net amount, and refuses lines it cannot reconcile", async () => {
+    quickBooks.state.company = {
+      name: "Sandbox Company US",
+      country: "US",
+      homeCurrency: "USD",
+      multiCurrency: false,
+    };
+    await post({ ...bill, currency: "USD", netAmount: null }, null);
+    expect(created()[0]!.Line.reduce((sum, line) => sum + line.Amount, 0)).toBe(
+      180,
+    );
+
+    const grossLines = {
+      ...bill,
+      invoiceNumber: "INV-43",
+      idempotencyKey: "invoicewise:gross-lines",
+      currency: "USD",
+      netAmount: null,
+      lineItems: [
+        { description: "Materials", quantity: 1, unitPrice: 120, total: 120 },
+        { description: "Labour", quantity: 1, unitPrice: 60, total: 60 },
+      ],
+    };
+    await post(grossLines, null);
+    expect(
+      created()
+        .find((record) => record.DocNumber === "INV-43")!
+        .Line.map((line) => line.Amount),
+    ).toEqual([120, 60]);
+
+    const unreconciled = await post(
+      {
+        ...grossLines,
+        invoiceNumber: "INV-44",
+        idempotencyKey: "invoicewise:unreconciled",
+        grossAmount: null,
+      },
+      null,
+    ).catch((caught) => caught);
+    expect(unreconciled).toBeInstanceOf(BillRejectedError);
+    expect(created().some((record) => record.DocNumber === "INV-44")).toBe(
+      false,
+    );
+  });
+
   test("refuses a foreign currency without multicurrency and posts it in its own currency with it", async () => {
     const euro = { ...bill, currency: "EUR" };
     const refused = await post(euro, null).catch((caught) => caught);

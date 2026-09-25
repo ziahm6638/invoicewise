@@ -153,15 +153,27 @@ customer pays in QuickBooks. Because that is not a draft, a QuickBooks
 connection creates nothing on processing until an owner or admin switches on
 **Create bills automatically** in Settings → Accounting, which requires the
 setup below and confirming the company by name and ID
-(`accounting_connections.auto_post_enabled_at` / `_by`). With it off,
-invoices show accounting as not scheduled. (Xero drafts await approval in
-Xero, so a Xero connection is opted in at connect, as before.)
+(`accounting_connections.auto_post_enabled_at` / `_by`). When it is off,
+nothing is created automatically; you can still send an individual invoice
+yourself. Invoices processed while it is off show accounting as not
+scheduled, and a post already queued when it is switched off runs but
+creates nothing: it settles `cancelled` with that reason, and a person's
+retry of that invoice sends it (the retry is marked explicit in the job
+payload; releasing a held invoice is not, and follows the opt-in). (Xero
+drafts await approval in Xero, so a Xero connection is opted in at connect,
+as before.)
 
 **Connecting and the company.** On Connect UI's `connect` event the API
 checks the connection's workspace tag, then reads the company through the
 proxy (`CompanyInfo`) and stores its realm ID and name; Settings shows
 "Company: name (ID …)". Reconnecting to the same company keeps the settings
-and opt-in; a connection to a different company clears both. **Check** runs a
+and opt-in; a connection to a different company clears both. A reconnect
+deletes the Nango connection it replaced. Each posted invoice records the
+company it was posted to (`inbox.accounting_organisation_id`); a bill update
+or attachment retry for an invoice posted to another company than the
+connected one is refused (QuickBooks IDs restart in every company, so the
+same ID names another record there), and the record must be changed in that
+company by hand. **Check** runs a
 live health check (the Nango connection exists and the company answers):
 `ok`, `reconnect` (authorisation gone, refused or a different company) or
 `unavailable` (Nango or QuickBooks down or throttling), stored with its time
@@ -174,7 +186,7 @@ and reason. **Reconnect** reruns Connect UI for the same provider.
 | Supplier name | `Vendor` by exact `DisplayName` (active or inactive), else created with that name (and the invoice currency when multicurrency is on). A name QuickBooks reserves for a customer or employee, an inactive vendor, or a vendor in another currency is refused with the fix. |
 | Lines | Extracted lines, or one net line (see below), each `AccountBasedExpenseLineDetail` on the **expense account the admin chose** (required setup). |
 | Tax, companies outside the US | `GlobalTaxCalculation: TaxExcluded` and one purchase `TaxCodeRef` per line: the active purchase tax code whose rate reproduces the invoice's tax on its net (to a penny a line), preferring the codes the admin ticked where several share a rate (0% zero-rated vs exempt). An ambiguous or unmatched rate (including mixed-rate invoices) is refused rather than guessed. |
-| Tax, US companies | No tax code (US bills carry none); the invoice's tax is its own line on the same account, so the bill total equals the invoice total. |
+| Tax, US companies | No tax code (US bills carry none); when the posted lines are net of tax, the invoice's tax is its own line on the same account, so the bill total equals the invoice total. When the lines match neither the net nor the gross total, the bill is refused rather than understated. |
 | Currency | Must be the home currency unless multicurrency is on, then `CurrencyRef`. |
 | Invoice number | `DocNumber`, cut to QuickBooks' 21 characters, with the full number in `PrivateNote` when cut. |
 | Dates | `TxnDate`, `DueDate` (bills). |
@@ -276,7 +288,8 @@ through. Its status is `queued` until it settles as
 `posted`, `already_posted`, `failed` (after the final attempt, or at once
 when validation blocks it; earlier failures keep it `queued` with the last
 error), `needs_review` (held as a possible duplicate, above) or `cancelled`
-(the connection was disconnected or the invoice deleted before it ran). The
+(the connection was disconnected, automatic posting was switched off or the
+invoice deleted before it ran). The
 per-invoice delivery retry re-drives `failed`, `needs_review` and `cancelled`
 posts the same way this route does; neither re-posts an invoice whose current
 revision the delivery rules hold. Reprocessing an invoice

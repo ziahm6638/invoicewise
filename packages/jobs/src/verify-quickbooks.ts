@@ -5,15 +5,18 @@
  * admin completes setup and confirms the company, then open bills through
  * the real processing, scheduling and workflow runner under an ambiguous
  * timeout, throttling, a failed token refresh and separately retried
- * attachments, a credit note as a vendor credit, the health check and
- * disconnect. Each business document ends as exactly one QuickBooks record.
+ * attachments, a credit note as a vendor credit (corrected in place), the
+ * opt-in switched off under a queued post, a record from another company
+ * refused, the health check and disconnect. Each business document ends as
+ * exactly one QuickBooks record.
  */
 import { createDatabaseClient } from "@invoicewise/db/client";
 import {
   createInbox,
   getInvoiceAccountingStatus,
+  getLatestBillUpdate,
 } from "@invoicewise/db/queries";
-import { inbox, teams, workflowJobs } from "@invoicewise/db/schema";
+import { inbox, teams, users, workflowJobs } from "@invoicewise/db/schema";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
 import type { InvoiceExtraction } from "@invoicewise/documents";
 import { and, eq, sql } from "drizzle-orm";
@@ -28,6 +31,7 @@ import {
   retryAccountingPost,
   updateAccountingSettings,
 } from "./accounting";
+import { InvoiceActionError, correctInvoice } from "./exceptions";
 import { saveProcessedDocument } from "./process-document";
 import { createQuickBooksFake } from "./quickbooks-fake";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
@@ -175,6 +179,7 @@ async function main() {
   process.env.NANGO_BASE_URL = `http://127.0.0.1:${stub.port}`;
 
   let teamId: string | undefined;
+  let adminId: string | undefined;
   const paths: string[][] = [];
   try {
     const [team] = await db
@@ -184,6 +189,16 @@ async function main() {
     assert(team, "the workspace is created");
     teamId = team.id;
     workspaceId = team.id;
+    const [admin] = await db
+      .insert(users)
+      .values({
+        fullName: "Ada Admin",
+        email: `${crypto.randomUUID()}@example.test`,
+        teamId,
+      })
+      .returning({ id: users.id });
+    assert(admin, "the admin is created");
+    adminId = admin.id;
     // The fixtures share a date and total; this proves the provider path,
     // and the delivery rules' duplicate hold has its own proof.
     await deliverPossibleDuplicates(db, teamId);
@@ -273,6 +288,32 @@ async function main() {
       quickBooks.records(kind).filter((record) => record.DocNumber === number);
     const attachedTo = (kind: string, id: string | null | undefined) =>
       quickBooks.state.attachables.get(`${kind}:${id}`) ?? 0;
+    // An admin's correction of a posted invoice that updates its record.
+    const correctRecord = async (
+      invoiceId: string,
+      changes: Record<string, unknown>,
+    ) => {
+      const [current] = await db
+        .select({ revision: inbox.processingRevision })
+        .from(inbox)
+        .where(eq(inbox.id, invoiceId));
+      return correctInvoice(db, {
+        invoiceId,
+        teamId: teamId!,
+        actorId: adminId!,
+        teamRole: "admin",
+        expectedRevision: current!.revision,
+        reason: "Date read from the delivery note",
+        changes,
+        accountingOutcome: "update_bill",
+      });
+    };
+    // As if the invoice was posted to another company before a reconnect.
+    const postedElsewhere = (invoiceId: string) =>
+      db
+        .update(inbox)
+        .set({ accountingOrganisationId: "4620" })
+        .where(eq(inbox.id, invoiceId));
 
     // --- Connect: only this workspace's connection binds, and the company
     // it reaches is recorded; nothing posts until setup and opt-in.
@@ -434,6 +475,44 @@ async function main() {
       "an explicit retry attaches the document without a second bill",
     );
 
+    // --- Automatic posting switched off while a post is queued: it creates
+    // nothing and is cancelled with the reason; a person's retry sends it.
+    const optedOut = await processInvoice("QB-OPTED-OUT");
+    assert(optedOut.scheduled, "the post is queued while opted in");
+    await updateAccountingSettings(db, {
+      teamId,
+      userId: null,
+      provider: "quickbooks",
+      autoPost: false,
+    });
+    await drain();
+    const optedOutStatus = await statusOf(optedOut.id);
+    assert(
+      optedOutStatus?.status === "cancelled" &&
+        optedOutStatus.retryable === true &&
+        optedOutStatus.lastError?.includes("switched off") &&
+        recordsNumbered("QB-OPTED-OUT").length === 0,
+      "a queued post creates nothing once automatic posting is off",
+    );
+    const sentByHand = await retryAccountingPost(db, {
+      invoiceId: optedOut.id,
+      teamId,
+    });
+    await drain();
+    assert(
+      sentByHand?.status === "queued" &&
+        (await statusOf(optedOut.id))?.status === "posted" &&
+        recordsNumbered("QB-OPTED-OUT").length === 1,
+      "a person's retry sends the invoice while automatic posting is off",
+    );
+    await updateAccountingSettings(db, {
+      teamId,
+      userId: null,
+      provider: "quickbooks",
+      autoPost: true,
+      confirmOrganisationId: REALM,
+    });
+
     // --- A credit note for an earlier invoice becomes a vendor credit.
     const credit = await processInvoice("QB-CREDIT", {
       documentType: "credit_note",
@@ -469,6 +548,85 @@ async function main() {
         creditUrl ===
           `https://app.qbo.intuit.com/app/vendorcredit?txnId=${creditStatus.providerId}`,
       `a credit note posts as one vendor credit with its link (${creditStatus?.status}: ${creditStatus?.lastError})`,
+    );
+    const creditCorrection = await correctRecord(credit.id, {
+      invoiceDate: "2026-09-23",
+    });
+    await drain();
+    const creditUpdate = await getLatestBillUpdate(db, {
+      invoiceId: credit.id,
+      teamId,
+    });
+    assert(
+      creditCorrection.accounting === "bill_update_queued" &&
+        creditUpdate?.updateStatus === "updated" &&
+        recordsNumbered("QB-CREDIT", "VendorCredit").length === 1 &&
+        recordsNumbered("QB-CREDIT", "VendorCredit")[0]?.TxnDate ===
+          "2026-09-23",
+      `a corrected credit note updates its vendor credit in place (${creditUpdate?.updateStatus}: ${creditUpdate?.updateError})`,
+    );
+
+    // --- A record posted to another company than the connected one: its
+    // IDs may name another record here, so it is never updated or attached.
+    const uploadsBeforeElsewhere = quickBooks.state.writes.upload ?? 0;
+    await postedElsewhere(throttled.id);
+    await db
+      .update(inbox)
+      .set({ accountingAttachmentStatus: "failed" })
+      .where(eq(inbox.id, throttled.id));
+    const elsewhereRetry = await retryAccountingPost(db, {
+      invoiceId: throttled.id,
+      teamId,
+    });
+    await drain();
+    const elsewhereStatus = await statusOf(throttled.id);
+    const elsewhereCorrection = await correctRecord(throttled.id, {
+      invoiceDate: "2026-09-23",
+    }).catch((error) => error);
+    assert(
+      elsewhereRetry?.status === "already_posted" &&
+        elsewhereStatus?.attachmentStatus === "failed" &&
+        elsewhereStatus.attachmentError?.includes(
+          "different connected QuickBooks company",
+        ) &&
+        elsewhereCorrection instanceof InvoiceActionError &&
+        elsewhereCorrection.code === "conflict" &&
+        elsewhereCorrection.message.includes(
+          "different connected QuickBooks company",
+        ),
+      "an attachment retry or bill update for another company is refused",
+    );
+    const flakyBill = recordsNumbered("QB-FLAKY-UPLOAD")[0];
+    const flakyCorrection = await correctRecord(flakyUpload.id, {
+      invoiceDate: "2026-09-23",
+    });
+    await db
+      .update(inbox)
+      .set({ accountingAttachmentStatus: "failed" })
+      .where(eq(inbox.id, flakyUpload.id));
+    await retryAccountingPost(db, { invoiceId: flakyUpload.id, teamId });
+    await postedElsewhere(flakyUpload.id);
+    await drain();
+    const flakyUpdate = await getLatestBillUpdate(db, {
+      invoiceId: flakyUpload.id,
+      teamId,
+    });
+    const flakyAfter = await statusOf(flakyUpload.id);
+    assert(
+      flakyCorrection.accounting === "bill_update_queued" &&
+        flakyUpdate?.updateStatus === "failed" &&
+        flakyUpdate.updateRetryable === false &&
+        flakyUpdate.updateError?.includes(
+          "different connected QuickBooks company",
+        ) &&
+        flakyAfter?.attachmentStatus === "failed" &&
+        flakyAfter.attachmentError?.includes(
+          "different connected QuickBooks company",
+        ) &&
+        recordsNumbered("QB-FLAKY-UPLOAD")[0]?.SyncToken ===
+          flakyBill?.SyncToken &&
+        (quickBooks.state.writes.upload ?? 0) === uploadsBeforeElsewhere,
+      "a queued update or upload for another company writes nothing",
     );
 
     // --- Health: ok, unreachable while Nango's refresh fails, reconnect
@@ -525,6 +683,7 @@ async function main() {
       await storage.remove({ bucket: "vault", path });
     }
     if (teamId) await db.delete(teams).where(eq(teams.id, teamId));
+    if (adminId) await db.delete(users).where(eq(users.id, adminId));
     stub.stop(true);
     await database.close();
   }
