@@ -61,9 +61,7 @@ demotion and revocation take effect on the next call. See
 
 The Redis client automatically configures itself based on the environment:
 
-- The resolver picks the address family (IPv4 on the Kamal Docker network);
-  IPv6 is forced only on Fly (`FLY_APP_NAME`), whose private network is
-  IPv6-only.
+- The resolver picks the address family (IPv4 on the Kamal Docker network).
 - Connection timeout: 15s in production, 5s elsewhere.
 
 This ensures cache consistency across multiple stateful servers and eliminates the "No procedure found" TRPC errors caused by cache misses.
