@@ -154,12 +154,12 @@ connection creates nothing on processing until an owner or admin switches on
 **Create bills automatically** in Settings → Accounting, which requires the
 setup below and confirming the company by name and ID
 (`accounting_connections.auto_post_enabled_at` / `_by`). When it is off,
-nothing is created automatically; you can still send an individual invoice
-yourself. Invoices processed while it is off show accounting as not
-scheduled, and a post already queued when it is switched off runs but
-creates nothing: it settles `cancelled` with that reason, and a person's
-retry of that invoice sends it (the retry is marked explicit in the job
-payload; releasing a held invoice is not, and follows the opt-in). (Xero
+nothing is created automatically. An invoice whose queued post was stopped
+can still be sent from that invoice. Invoices processed while it is off show
+accounting as not scheduled, and a post already queued when it is switched
+off runs but creates nothing: it settles `cancelled` with that reason, and a
+person's retry of that invoice sends it (the retry is marked explicit in the
+job payload; releasing a held invoice is not, and follows the opt-in). (Xero
 drafts await approval in Xero, so a Xero connection is opted in at connect,
 as before.)
 
@@ -279,7 +279,8 @@ The same operations are REST endpoints for API clients:
   `PUT /accounting/connections/:provider/settings` (`expenseAccountId`,
   `taxCodeIds`, `autoPost`, `confirmOrganisationId`) and
   `POST /accounting/connections/:provider/health-check`
-- `POST /accounting/invoices/:id/retry`
+- `POST /accounting/invoices/:id/retry` (also posts an invoice that has no
+  post yet, such as one processed while automatic posting was off)
 
 `GET /invoices/:id/delivery-status` returns webhook deliveries plus the
 invoice's `accounting` posting status, provider ID, error, retryability,

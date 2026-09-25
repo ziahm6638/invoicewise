@@ -185,7 +185,8 @@ function SetupForm({ setup }: { setup: Setup }) {
           delivery rules let through is created as an open, unpaid bill (a
           credit note as a vendor credit) in {companyLabel}. Nothing is paid or
           approved for payment. When it is off, nothing is created
-          automatically; you can still send an individual invoice yourself.
+          automatically. An invoice whose queued post was stopped can still be
+          sent from that invoice.
         </span>
         {turningOn && (
           <Label className="flex items-start gap-2 text-xs font-normal">
