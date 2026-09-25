@@ -78,7 +78,8 @@ seconds to 60 seconds. A running job has a renewable two-minute lease. If the
 process dies, another runner reclaims the job after that lease; a final expired
 lease is marked failed. Every start, retry, success, and terminal failure is
 written as a structured JSON log with the workflow ID, name, attempt, and
-outcome.
+outcome; a handler that dies with a defect logs `workflow_run_defect` and frees
+its slot, and the job is reclaimed after its lease.
 
 The API starts the runner automatically. A second runner can safely be started
 against the same queue for local concurrency testing:
