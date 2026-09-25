@@ -24,6 +24,7 @@ import {
   getOAuthApplicationByClientId,
   getTeamRole,
   hasUserEverAuthorizedApp,
+  recordAuditEvent,
   refreshAccessToken,
   revokeAccessToken,
   scopesWithinRole,
@@ -299,6 +300,20 @@ app.openapi(
         message: "Failed to create authorization code",
       });
     }
+
+    // The grant is recorded in the workspace's audit trail, as the
+    // dashboard's consent is (docs/operations.md#audit-trail).
+    await recordAuditEvent(db, {
+      teamId,
+      actor: { type: "user", userId: session.user.id },
+      surface: "api",
+      action: "oauth.grant",
+      category: "access",
+      targetType: "oauth_application",
+      targetId: application.id,
+      detail: { decision: "allow", scopes: grantedScopes },
+      outcome: "succeeded",
+    });
 
     // Send app installation email only if this is the first time authorizing this app
     try {

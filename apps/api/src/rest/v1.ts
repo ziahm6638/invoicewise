@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { rateLimiter } from "hono-rate-limiter";
 import { HTTPException } from "hono/http-exception";
+import { withRestAuditTrail } from "./middleware/audit";
 import { withAuth } from "./middleware/auth";
 import { normalizeResponse, unauthorized, v1Error } from "./v1-errors";
 
@@ -112,7 +113,16 @@ v1.onError((error) => {
 // The contract itself is public.
 v1.get("/openapi.json", (c) => c.json(publicApiContract()));
 
-v1.use("*", requireBearer, withAuth, requireWorkspace, limiter);
+// Every write is recorded in the workspace's audit trail, including scope
+// refusals (docs/operations.md#audit-trail).
+v1.use(
+  "*",
+  requireBearer,
+  withAuth,
+  requireWorkspace,
+  limiter,
+  withRestAuditTrail,
+);
 
 v1.on(["GET", "HEAD"], "*", requireScope("inbox.read"));
 v1.on(["POST", "PUT", "PATCH", "DELETE"], "*", requireScope("inbox.write"));

@@ -39,7 +39,7 @@ import {
 import { saveDeliveryPolicy } from "./delivery-rules";
 import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
-import { required } from "./verify-support";
+import { enableXeroPosting, required, xeroConnectStub } from "./verify-support";
 
 const runBatch = () =>
   Effect.runPromise(
@@ -123,6 +123,8 @@ async function main() {
           { status: 401 },
         );
       }
+      const connectCheck = xeroConnectStub(request, url);
+      if (connectCheck) return connectCheck;
       if (request.method === "GET" && url.pathname === "/connections") {
         return Response.json({
           connections: [
@@ -210,6 +212,7 @@ async function main() {
       provider: "xero",
       connectionId: "xero-connection",
     });
+    await enableXeroPosting(db, workspace);
 
     const drain = async () => {
       for (let round = 0; round < 60; round++) {

@@ -82,7 +82,8 @@ Forked from [Midday](https://github.com/midday-ai/midday), an open-source busine
 ## Development
 
 See [docs/development.md](docs/development.md) for the complete local setup,
-database migrations, app-specific commands and the authoritative
+database migrations, app-specific commands, the gate (`bun run gate`: typecheck,
+lint, build, then e2e journeys against the running app) and the authoritative
 `bun run verify` release check.
 See [docs/delivery.md](docs/delivery.md) for REST, MCP, webhook signing and
 retry behavior, and CSV export.

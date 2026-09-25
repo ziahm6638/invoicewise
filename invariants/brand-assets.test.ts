@@ -1,8 +1,9 @@
+// Guards: favicons, app icons, email logos or OG images drifting from packages/ui/src/brand.ts, or Midday's sun mark returning to the shared logo components.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { faviconSvg } from "../../packages/ui/src/brand.ts";
-import { BRAND_SVG_FILES, ICO_SIZES, ROOT } from "./files.ts";
+import { faviconSvg } from "../packages/ui/src/brand.ts";
+import { BRAND_SVG_FILES, ICO_SIZES, ROOT } from "../scripts/brand/files.ts";
 
 const read = (path: string) => readFileSync(join(ROOT, path));
 

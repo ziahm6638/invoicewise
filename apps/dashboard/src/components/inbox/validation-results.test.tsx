@@ -47,7 +47,7 @@ describe("invoice validation panel", () => {
     expect(uncertainFields(validation)).toEqual(new Set(["invoiceNumber"]));
   });
 
-  test("marks a deliverable invoice ready and a credit note as not sent", () => {
+  test("marks a deliverable invoice and a credit note ready", () => {
     const ready = renderToStaticMarkup(
       <ValidationResults
         validation={validateInvoice({ ...extraction, grossAmount: 2400 })}
@@ -66,7 +66,7 @@ describe("invoice validation panel", () => {
       />,
     );
     expect(credit).toContain("Credit note");
-    expect(credit).toContain("credit notes are not posted");
+    expect(credit).toContain("Ready for accounting");
   });
 
   test("an invoice processed before validation existed says so", () => {

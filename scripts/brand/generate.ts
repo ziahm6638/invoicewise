@@ -5,7 +5,7 @@
  *
  *   bun scripts/brand/generate.ts
  *
- * `scripts/brand/brand-assets.test.ts` checks the committed files still match.
+ * `invariants/brand-assets.test.ts` checks the committed files still match.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";

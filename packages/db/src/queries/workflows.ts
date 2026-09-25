@@ -1,5 +1,6 @@
 import type { Database, PrimaryDatabase } from "@db/client";
 import { workflowJobs } from "@db/schema";
+import { redactOperationalText } from "@db/utils/redact";
 import {
   and,
   asc,
@@ -282,7 +283,8 @@ export async function retryWorkflowJob(
       lockedAt: null,
       heartbeatAt: null,
       leaseExpiresAt: null,
-      lastError: params.error,
+      // Errors can quote provider responses: stored redacted and bounded.
+      lastError: redactOperationalText(params.error),
       updatedAt: now.toISOString(),
     })
     .where(
@@ -309,7 +311,8 @@ export async function failWorkflowJob(
       lockedAt: null,
       heartbeatAt: null,
       leaseExpiresAt: null,
-      lastError: params.error,
+      // Errors can quote provider responses: stored redacted and bounded.
+      lastError: redactOperationalText(params.error),
       updatedAt: now,
     })
     .where(
@@ -419,12 +422,19 @@ export async function restartFailedWorkflowJob(
  */
 export async function requeueFinishedWorkflowJob(
   db: Pick<Database, "update">,
-  params: { name: string; idempotencyKey: string; teamId: string },
+  params: {
+    name: string;
+    idempotencyKey: string;
+    teamId: string;
+    /** Replaces the job's payload for the restarted run. */
+    payload?: Record<string, unknown>;
+  },
 ) {
   const now = new Date().toISOString();
   const [job] = await db
     .update(workflowJobs)
     .set({
+      ...(params.payload ? { payload: params.payload } : {}),
       status: "queued",
       attempts: 0,
       runAt: now,
@@ -454,4 +464,206 @@ export function listWorkflowJobs(db: Database, limit = 50) {
     .from(workflowJobs)
     .orderBy(desc(workflowJobs.createdAt))
     .limit(limit);
+}
+
+// --- Operator recovery (docs/operations.md#recovery) ------------------------
+
+/**
+ * Payload fields an operator may see: record identifiers only. Payloads can
+ * hold invitation codes, email addresses and legacy file paths, so nothing
+ * else of a payload ever leaves the queue through an operator surface.
+ */
+export const OPERATOR_SUBJECT_KEYS = [
+  "inboxId",
+  "invoiceId",
+  "deliveryId",
+  "correctionId",
+  "runId",
+  "exportId",
+  "inboundEmailId",
+  "deletionId",
+  "revision",
+] as const;
+
+const subjectColumn = sql<
+  Record<string, string | number>
+>`jsonb_strip_nulls(jsonb_build_object(${sql.raw(
+  OPERATOR_SUBJECT_KEYS.map(
+    (key) => `'${key}', "workflow_jobs"."payload" -> '${key}'`,
+  ).join(", "),
+)}))`;
+
+const operatorJobColumns = {
+  id: workflowJobs.id,
+  name: workflowJobs.name,
+  teamId: workflowJobs.teamId,
+  status: workflowJobs.status,
+  attempts: workflowJobs.attempts,
+  maxAttempts: workflowJobs.maxAttempts,
+  runAt: workflowJobs.runAt,
+  lockedBy: workflowJobs.lockedBy,
+  heartbeatAt: workflowJobs.heartbeatAt,
+  leaseExpiresAt: workflowJobs.leaseExpiresAt,
+  finishedAt: workflowJobs.finishedAt,
+  lastError: workflowJobs.lastError,
+  createdAt: workflowJobs.createdAt,
+  updatedAt: workflowJobs.updatedAt,
+  subject: subjectColumn,
+};
+
+export type OperatorJob = Awaited<ReturnType<typeof getOperatorJob>>;
+
+export type OperatorJobFilter =
+  | "stuck"
+  | "failed"
+  | "overdue"
+  | "queued"
+  | "running";
+
+/**
+ * Jobs an operator is looking for, newest first, without their payloads:
+ * `stuck` (running, lease expired), `overdue` (queued and due for longer
+ * than `overdueMs`), `failed`, or any `queued`/`running` job.
+ */
+export async function listOperatorJobs(
+  db: Pick<Database, "select">,
+  params: {
+    filter: OperatorJobFilter;
+    workflow?: string;
+    teamId?: string;
+    overdueMs?: number;
+    limit?: number;
+    now?: Date;
+  },
+) {
+  const now = params.now ?? new Date();
+  const nowIso = now.toISOString();
+  const state = {
+    stuck: and(
+      eq(workflowJobs.status, "running"),
+      lte(workflowJobs.leaseExpiresAt, nowIso),
+    ),
+    overdue: and(
+      eq(workflowJobs.status, "queued"),
+      lte(
+        workflowJobs.runAt,
+        new Date(
+          now.getTime() - (params.overdueMs ?? 15 * 60_000),
+        ).toISOString(),
+      ),
+    ),
+    failed: eq(workflowJobs.status, "failed"),
+    queued: eq(workflowJobs.status, "queued"),
+    running: eq(workflowJobs.status, "running"),
+  }[params.filter];
+  return db
+    .select(operatorJobColumns)
+    .from(workflowJobs)
+    .where(
+      and(
+        state,
+        params.workflow ? eq(workflowJobs.name, params.workflow) : undefined,
+        params.teamId ? eq(workflowJobs.teamId, params.teamId) : undefined,
+      ),
+    )
+    .orderBy(desc(workflowJobs.updatedAt), desc(workflowJobs.id))
+    .limit(Math.min(Math.max(params.limit ?? 50, 1), 200));
+}
+
+export async function getOperatorJob(
+  db: Pick<Database, "select">,
+  params: { id: string },
+) {
+  const [job] = await db
+    .select(operatorJobColumns)
+    .from(workflowJobs)
+    .where(eq(workflowJobs.id, params.id))
+    .limit(1);
+  return job;
+}
+
+/** The subject key a workflow's jobs are about, for "is there a newer job". */
+const SUBJECT_KEY_BY_WORKFLOW: Record<string, string> = {
+  "process-attachment": "inboxId",
+  "post-accounting-draft": "invoiceId",
+  "rerun-judgments": "invoiceId",
+  "match-invoice": "invoiceId",
+  "update-accounting-bill": "correctionId",
+  "deliver-webhook": "deliveryId",
+  "process-inbound-email": "inboundEmailId",
+  "build-data-export": "exportId",
+  "purge-deleted-data": "deletionId",
+  "rerun-question": "runId",
+};
+
+/**
+ * Whether a later job of the same workflow exists for the same record, in
+ * which case this one is history and an operator retry of it is refused.
+ */
+export async function hasNewerWorkflowJob(
+  db: Pick<Database, "select">,
+  job: { id: string; name: string; teamId: string | null; createdAt: string },
+) {
+  const key = SUBJECT_KEY_BY_WORKFLOW[job.name];
+  if (!key) return false;
+  const [newer] = await db
+    .select({ id: workflowJobs.id })
+    .from(workflowJobs)
+    .where(
+      and(
+        eq(workflowJobs.name, job.name),
+        job.teamId
+          ? eq(workflowJobs.teamId, job.teamId)
+          : isNull(workflowJobs.teamId),
+        sql`${workflowJobs.payload} ->> ${key} = (select payload ->> ${key} from workflow_jobs where id = ${job.id})`,
+        sql`${workflowJobs.createdAt} > ${job.createdAt}`,
+      ),
+    )
+    .limit(1);
+  return !!newer;
+}
+
+export const OPERATOR_CANCELLED_ERROR = "Cancelled by an operator";
+
+/**
+ * Stops a job that no live worker holds: a queued one, or a running one
+ * whose lease expired. It is recorded as failed with the operator's reason,
+ * and the runner's reconcilers then settle its record the same way as any
+ * failed job (a visible, retryable failure the customer can see). A job a
+ * live worker holds is left alone. Returns the job, or undefined when it was
+ * not in a cancellable state.
+ */
+export async function cancelWorkflowJobAsOperator(
+  db: Pick<Database, "update">,
+  params: { id: string; reason: string; now?: Date },
+) {
+  const now = (params.now ?? new Date()).toISOString();
+  const [job] = await db
+    .update(workflowJobs)
+    .set({
+      status: "failed",
+      finishedAt: now,
+      lastError: redactOperationalText(
+        `${OPERATOR_CANCELLED_ERROR}: ${params.reason}`,
+      ),
+      lockedBy: null,
+      lockedAt: null,
+      heartbeatAt: null,
+      leaseExpiresAt: null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(workflowJobs.id, params.id),
+        or(
+          eq(workflowJobs.status, "queued"),
+          and(
+            eq(workflowJobs.status, "running"),
+            lte(workflowJobs.leaseExpiresAt, now),
+          ),
+        ),
+      ),
+    )
+    .returning({ id: workflowJobs.id, status: workflowJobs.status });
+  return job;
 }

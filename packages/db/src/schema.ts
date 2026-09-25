@@ -1544,6 +1544,19 @@ export const workflowJobs = pgTable(
     ),
     index("workflow_jobs_due_idx").on(table.status, table.runAt),
     index("workflow_jobs_team_id_idx").on(table.teamId),
+    // The links an invoice's activity trace follows (invoiceJobsQuery).
+    index("workflow_jobs_team_inbox_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'inboxId')`)
+      .where(sql`(${table.payload} ->> 'inboxId') is not null`),
+    index("workflow_jobs_team_invoice_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'invoiceId')`)
+      .where(sql`(${table.payload} ->> 'invoiceId') is not null`),
+    index("workflow_jobs_team_delivery_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'deliveryId')`)
+      .where(sql`(${table.payload} ->> 'deliveryId') is not null`),
+    index("workflow_jobs_team_correction_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'correctionId')`)
+      .where(sql`(${table.payload} ->> 'correctionId') is not null`),
   ],
 );
 
@@ -2434,6 +2447,20 @@ export const inbox = pgTable(
     // The processing revision whose accounting intent is scheduled; the
     // workflow key is derived from it.
     accountingRevision: integer("accounting_revision"),
+    // What the provider record is: a bill, or a QuickBooks vendor credit.
+    accountingProviderEntity: text("accounting_provider_entity", {
+      enum: ["bill", "vendor_credit"],
+    }),
+    // The provider company (Xero organisation, QuickBooks realm) the record
+    // was created in; an update or attachment goes only to that company.
+    accountingOrganisationId: text("accounting_organisation_id"),
+    // The source document on the provider record, retried on its own when
+    // the record was created but the upload failed: attached, queued (a
+    // separate upload is scheduled) or failed (with the reason).
+    accountingAttachmentStatus: text("accounting_attachment_status", {
+      enum: ["attached", "queued", "failed"],
+    }),
+    accountingAttachmentError: text("accounting_attachment_error"),
     // Incremented in the same transaction that persists a processing result
     // and schedules its deliveries, so (id, revision) names one accepted
     // invoice revision across worker retries and replays.
@@ -2612,6 +2639,37 @@ export const accountingConnections = pgTable(
       .array()
       .default(sql`ARRAY['draft_bills']::text[]`)
       .notNull(),
+    // The organisation the connection reaches (Xero tenant, QuickBooks
+    // realm), read through the proxy at connect time, so an admin can check
+    // it is the intended company. A reconnect to another company resets the
+    // settings and the automatic-posting opt-in below.
+    organisationId: text("organisation_id"),
+    organisationName: text("organisation_name"),
+    // Whether the Nango integration reaches the provider's sandbox.
+    sandbox: boolean("sandbox").default(false).notNull(),
+    // Posting choices for the organisation (expense account, purchase tax
+    // codes); see AccountingSettings in packages/jobs.
+    settings: jsonb("settings")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    // The workspace's opt-in to creating provider records automatically;
+    // null means nothing is posted on processing. An admin opts in after
+    // the setup, confirming the organisation (both providers).
+    autoPostEnabledAt: timestamp("auto_post_enabled_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    autoPostEnabledBy: uuid("auto_post_enabled_by"),
+    // The last live health check through Nango.
+    healthStatus: text("health_status", {
+      enum: ["ok", "reconnect", "unavailable"],
+    }),
+    healthError: text("health_error"),
+    healthCheckedAt: timestamp("health_checked_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     connectedAt: timestamp("connected_at", {
       withTimezone: true,
       mode: "string",
@@ -2643,6 +2701,11 @@ export const accountingConnections = pgTable(
       foreignColumns: [teams.id],
       name: "accounting_connections_team_id_fkey",
     }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.autoPostEnabledBy],
+      foreignColumns: [users.id],
+      name: "accounting_connections_auto_post_enabled_by_fkey",
+    }).onDelete("set null"),
   ],
 );
 
@@ -3373,6 +3436,7 @@ export const deliveryDecisions = pgTable(
         "held",
         "off",
         "not_connected",
+        // Recorded for credit notes before every provider took them.
         "not_applicable",
         "already_posted",
         "not_scheduled",
@@ -3415,6 +3479,80 @@ export const deliveryDecisions = pgTable(
       columns: [table.resolvedBy],
       foreignColumns: [users.id],
       name: "delivery_decisions_resolved_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+/**
+ * Who changed what in a workspace, and every operator action and operator
+ * access to customer data (docs/operations.md#audit-trail). One row per
+ * action: written as `started` before the change runs and settled with its
+ * outcome after, so an action that crashed mid-way still reads as attempted.
+ * `detail` holds only named, redacted fields: never document contents,
+ * extracted values, bank details, tokens or secrets.
+ */
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    // Null for an operator action that belongs to no workspace.
+    teamId: uuid("team_id"),
+    actorType: text("actor_type", {
+      enum: ["user", "api_key", "oauth", "operator"],
+    }).notNull(),
+    // The acting user (the key's or grant's owner for API access); null for
+    // an operator, and once the user's account is deleted.
+    actorUserId: uuid("actor_user_id"),
+    // The API key or OAuth application id, or the operator's name.
+    actorRef: text("actor_ref"),
+    // app (dashboard, tRPC), api (REST), ops (operator routes).
+    surface: text("surface", { enum: ["app", "api", "ops"] }).notNull(),
+    action: text("action").notNull(),
+    category: text("category", {
+      enum: [
+        "invoice",
+        "delivery",
+        "question",
+        "supplier",
+        "authorization_source",
+        "integration",
+        "access",
+        "workspace",
+        "operator",
+      ],
+    }).notNull(),
+    targetType: text("target_type"),
+    targetId: text("target_id"),
+    // The invoice processing revision the action named or produced.
+    revision: integer("revision"),
+    outcome: text("outcome", {
+      enum: ["started", "succeeded", "refused", "denied", "failed"],
+    }).notNull(),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    // Operator actions: why the operator acted (incident, support, security).
+    purpose: text("purpose"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true, mode: "string" }),
+  },
+  (table) => [
+    index("audit_events_team_created_at_idx").on(table.teamId, table.createdAt),
+    index("audit_events_team_target_idx").on(
+      table.teamId,
+      table.targetType,
+      table.targetId,
+    ),
+    index("audit_events_created_at_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "audit_events_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.actorUserId],
+      foreignColumns: [users.id],
+      name: "audit_events_actor_user_id_fkey",
     }).onDelete("set null"),
   ],
 );

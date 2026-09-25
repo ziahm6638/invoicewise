@@ -24,7 +24,7 @@ After changing `brand.ts`, regenerate every file and commit the result:
 bun scripts/brand/generate.ts
 ```
 
-`scripts/brand/brand-assets.test.ts` (part of `bun run verify`) fails when the
+`invariants/brand-assets.test.ts` (part of `bun run verify`) fails when the
 committed files no longer match `brand.ts`.
 
 Colours: ink `#0c0c0c`, paper `#ffffff`.

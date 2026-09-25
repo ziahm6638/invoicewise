@@ -28,7 +28,6 @@ import {
   type InvoiceExtraction,
   type InvoiceValidation,
   MAX_CORRECTION_REASON_LENGTH,
-  accountingReadiness,
   applyInvoiceCorrection,
   changesPostingIdentity,
   invoiceColumnsFromExtraction,
@@ -36,7 +35,12 @@ import {
 } from "@invoicewise/documents";
 import { InvoiceActionError } from "./action-error";
 import { workflowKey } from "./client";
-import { enqueueBillUpdate, scheduleInvoiceDeliveries } from "./delivery";
+import {
+  enqueueBillUpdate,
+  otherAccountingCompanyReason,
+  providerAccountingReadiness,
+  scheduleInvoiceDeliveries,
+} from "./delivery";
 import { decisionHeld } from "./delivery-rules";
 import { resolveWorkerIntakeBinding, verifyStoredIntake } from "./intake";
 import {
@@ -248,6 +252,16 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
             `${provider} is not connected, so the bill cannot be updated. Reconnect ${provider} first, or keep the bill as it is.`,
           );
         }
+        const otherCompany = otherAccountingCompanyReason(
+          {
+            provider: invoice.accountingProvider,
+            organisationId: invoice.accountingOrganisationId,
+          },
+          connection,
+        );
+        if (otherCompany) {
+          throw refuse("conflict", `${otherCompany} Keep the bill as it is.`);
+        }
       }
       outcome = input.accountingOutcome;
     }
@@ -304,7 +318,11 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
     });
 
     if (outcome === "update_bill") {
-      const readiness = accountingReadiness(applied.extraction, validation);
+      const readiness = providerAccountingReadiness(
+        invoice.accountingProvider ?? "",
+        applied.extraction,
+        validation,
+      );
       if (!readiness.ready) {
         throw refuse(
           "invalid",

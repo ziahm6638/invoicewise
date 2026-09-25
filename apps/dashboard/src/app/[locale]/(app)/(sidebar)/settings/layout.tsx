@@ -32,6 +32,9 @@ export default async function Layout({
           { path: "/settings/developer", label: "Developer" },
         ]
       : []),
+    ...(permissions?.readAuditLog
+      ? [{ path: "/settings/audit", label: "Audit log" }]
+      : []),
   ];
 
   return (

@@ -16,6 +16,8 @@ export type RetentionPolicy = {
   sourceEmailDays: number;
   /** Payloads, results and errors of finished jobs and webhook deliveries. */
   jobPayloadDays: number;
+  /** Audit events: who changed what, and operator actions and access. */
+  auditEventDays: number;
   /** Nightly database dumps (ops/backup). */
   backupDays: number;
   /** How long a finished data export can be downloaded. */
@@ -26,6 +28,7 @@ export const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
   failedUploadDays: 30,
   sourceEmailDays: 90,
   jobPayloadDays: 30,
+  auditEventDays: 365,
   backupDays: 30,
   exportLinkHours: 24,
 };
@@ -34,6 +37,7 @@ const ENV_NAMES: Record<keyof RetentionPolicy, string> = {
   failedUploadDays: "RETENTION_FAILED_UPLOAD_DAYS",
   sourceEmailDays: "RETENTION_SOURCE_EMAIL_DAYS",
   jobPayloadDays: "RETENTION_JOB_PAYLOAD_DAYS",
+  auditEventDays: "RETENTION_AUDIT_EVENT_DAYS",
   backupDays: "RETENTION_BACKUP_DAYS",
   exportLinkHours: "EXPORT_LINK_TTL_HOURS",
 };
@@ -104,6 +108,13 @@ export function describeRetentionPolicy(
       period: days(policy.jobPayloadDays),
       appliedBy:
         "Finished jobs and webhook deliveries keep their status and times; their payloads are emptied by the retention job.",
+    },
+    {
+      key: "audit",
+      label: "Audit trail",
+      period: days(policy.auditEventDays),
+      appliedBy:
+        "Who changed what in the workspace, and every operator action or access, is readable by owners and admins and removed by the retention job after this period.",
     },
     {
       key: "logs",

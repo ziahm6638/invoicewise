@@ -288,9 +288,9 @@ describe("credit notes and identity", () => {
         currency: "GBP",
       });
       expect(validation.identity.creditsInvoiceId).toBe("original");
-      expect(validation.accounting.blockers.map((b) => b.code)).toEqual([
-        "credit_note_unsupported",
-      ]);
+      // Every provider takes a credit note (a Xero draft credit note, a
+      // QuickBooks vendor credit).
+      expect(validation.accounting.blockers).toEqual([]);
     }
   });
 

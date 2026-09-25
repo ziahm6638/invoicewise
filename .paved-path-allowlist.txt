@@ -1,0 +1,26 @@
+# Existing code that predates docs/paved-path.md, one "<rule> <key>" per line.
+# This list may only shrink (scripts/check-paved-path.ts). Fix an entry and delete its line; never add one.
+db-access apps/api/src/auth.ts
+db-access apps/api/src/ops/metrics.ts
+db-access apps/api/src/ops/recovery.ts
+db-access apps/api/src/scripts/reset-second-factor.ts
+money-columns transactions.amount
+money-columns transactions.balance
+money-columns transactions.baseAmount
+money-columns transactions.taxAmount
+money-columns bank_accounts.balance
+money-columns bank_accounts.baseBalance
+money-columns invoices.amount
+money-columns invoices.vat
+money-columns invoices.tax
+money-columns invoices.discount
+money-columns invoices.subtotal
+money-columns invoice_products.price
+money-columns inbox.amount
+money-columns inbox.baseAmount
+money-columns inbox.taxAmount
+money-columns authorization_sources.authorizedTotal
+money-columns authorization_source_versions.authorizedTotal
+money-columns invoice_source_allocations.amount
+provider-hosts packages/jobs/src/questions.ts
+provider-hosts packages/jobs/src/quickbooks-sandbox-connection.ts

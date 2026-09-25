@@ -16,7 +16,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src"
+    "test:legacy": "bun test src"
   },
   "dependencies": {
     "@ai-sdk/google": "^2.0.11",

@@ -320,7 +320,7 @@ Settings → Email once to provision the address, then read it with
   (both Cloudflare results must show the pass; forged results after
   Cloudflare's block and a missing Cloudflare `Received` are ignored), the live
   setting.
-- `apps/api/src/inbound-email.http.integration.test.ts` (in `bun run verify`)
+- `apps/api/src/inbound-email.http.integration.test.ts` (legacy, in `bun run test:legacy`)
   — real HTTP and Postgres: delivery through the Worker to the right
   workspace once with provenance, redelivery, refusals (unknown, revoked,
   deleted workspace, subaddress, spoofed/unsigned), attachment outcomes

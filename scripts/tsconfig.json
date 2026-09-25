@@ -12,13 +12,20 @@
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
     "types": ["bun-types"],
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@db/*": ["../packages/db/src/*"],
+      "@jobs/*": ["../packages/jobs/src/*"]
+    }
   },
   "include": [
+    "*.ts",
     "verify/**/*.ts",
     "deploy/**/*.ts",
     "ops/**/*.ts",
-    "brand/**/*.ts"
+    "brand/**/*.ts",
+    "../e2e/**/*.ts",
+    "../types"
   ],
   "exclude": ["node_modules"]
 }
