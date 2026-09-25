@@ -769,8 +769,9 @@ export const toInvoice = (row: PublicInvoiceRow): Invoice => {
       size: row.size,
       sha256: row.contentHash,
       source,
-      idempotencyKey:
-        row.referenceId?.startsWith("api:") ? row.referenceId.slice(4) : null,
+      idempotencyKey: row.referenceId?.startsWith("api:")
+        ? row.referenceId.slice(4)
+        : null,
     },
     supplierId: row.supplierId,
     supplierName: text(extraction?.supplierName),
