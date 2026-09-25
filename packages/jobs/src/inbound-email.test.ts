@@ -89,70 +89,118 @@ describe("inbound headers", () => {
 });
 
 describe("gmail forwarding confirmation", () => {
-  const RECEIVED = {
+  // Cloudflare's receipt block as observed in production on 2026-09-25
+  // (docs/inbound-email.md, live proof step 7), for a message from Google.
+  const CF_RECEIVED = {
     key: "received",
-    value: "from mail-sor-f41.google.com by mx.cloudflare.net",
+    value:
+      "from mail-sor-f41.google.com (209.85.220.41)\r\n        by cloudflare-email.net (cloudflare) id AuYfoj6x77E4\r\n        for <u4833cja7jktx258@in.invoicewise.uk>; Fri, 25 Sep 2026 05:07:50 +0000",
   };
-  const results = (value: string) => ({
-    key: "authentication-results",
-    value,
-  });
   const PASS =
-    "mx.cloudflare.net; dkim=pass header.d=google.com header.s=20230601";
+    "mx.cloudflare.net;\r\n\tdkim=pass header.d=google.com header.s=20230601 header.b=abc;\r\n\tdmarc=pass header.from=google.com policy.dmarc=reject;\r\n\tspf=pass smtp.mailfrom=forwarding-noreply@google.com";
+  const header = (key: string, value: string) => ({ key, value });
+  const cloudflareBlock = (results: string) => [
+    CF_RECEIVED,
+    header(
+      "arc-seal",
+      "i=1; a=rsa-sha256; s=cf2024-1; d=cloudflare-email.net; cv=none; b=x",
+    ),
+    header(
+      "arc-message-signature",
+      "i=1; a=rsa-sha256; s=cf2024-1; d=cloudflare-email.net; b=x",
+    ),
+    header("arc-authentication-results", `i=1; ${results}`),
+    header(
+      "received-spf",
+      "pass (mx.cloudflare.net: domain of forwarding-noreply@google.com designates 209.85.220.41 as permitted sender)",
+    ),
+    header("authentication-results", results),
+    header("x-cf-spamh-score", "0"),
+  ];
+  const senderHeaders = [
+    header(
+      "dkim-signature",
+      "v=1; a=rsa-sha256; d=google.com; s=20230601; b=x",
+    ),
+    header(
+      "received",
+      "by 2002:a05:6214:... with SMTP id ...; Fri, 25 Sep 2026 05:07:40 +0000",
+    ),
+    header("from", "Gmail Team <forwarding-noreply@google.com>"),
+  ];
 
-  test("only the receiving hop's DKIM pass for google.com is believed", () => {
-    expect(isGoogleSigned([results(PASS), RECEIVED])).toBe(true);
-    expect(
-      isGoogleSigned([
-        results(
-          "mx.cloudflare.net;\r\n\tdkim=pass header.i=@google.com header.d=google.com",
-        ),
-        RECEIVED,
-      ]),
-    ).toBe(true);
-    expect(
-      isGoogleSigned([
-        {
-          key: "arc-authentication-results",
-          value: `i=1; ${PASS}`,
-        },
-        RECEIVED,
-      ]),
-    ).toBe(true);
+  test("the observed Cloudflare layout with a DKIM pass for google.com is believed", () => {
+    expect(isGoogleSigned([...cloudflareBlock(PASS), ...senderHeaders])).toBe(
+      true,
+    );
+    // Either of Cloudflare's two results is enough.
+    const onlyArc = cloudflareBlock(PASS).filter(
+      ({ key }) => key !== "authentication-results",
+    );
+    expect(isGoogleSigned([...onlyArc, ...senderHeaders])).toBe(true);
+    const onlyResults = cloudflareBlock(PASS).filter(
+      ({ key }) => key !== "arc-authentication-results",
+    );
+    expect(isGoogleSigned([...onlyResults, ...senderHeaders])).toBe(true);
+  });
 
+  test("Cloudflare's results must show DKIM pass for google.com itself", () => {
     for (const value of [
-      "",
       "mx.cloudflare.net; dkim=fail header.d=google.com",
       "mx.cloudflare.net; dkim=none; spf=pass smtp.mailfrom=google.com",
       "mx.cloudflare.net; dkim=pass header.d=evil.example",
       "mx.cloudflare.net; dkim=pass header.d=google.com.evil.example",
       "mx.cloudflare.net; dkim=pass header.d=notgoogle.com",
-      // Not added by Cloudflare on receipt.
       "mx.evil.example; dkim=pass header.d=google.com",
     ]) {
-      expect(isGoogleSigned([results(value), RECEIVED])).toBe(false);
+      expect(
+        isGoogleSigned([...cloudflareBlock(value), ...senderHeaders]),
+      ).toBe(false);
     }
   });
 
-  test("results below the first Received header are sender-controlled and ignored", () => {
+  test("a forged mx.cloudflare.net pass placed after Cloudflare's block is ignored", () => {
+    const failing = "mx.cloudflare.net; dkim=pass header.d=evil.example";
+    const forged = [
+      ...cloudflareBlock(failing),
+      // What a sender writes into its own message ends up here.
+      header("authentication-results", PASS),
+      header("arc-authentication-results", `i=1; ${PASS}`),
+      ...senderHeaders,
+    ];
+    expect(isGoogleSigned(forged)).toBe(false);
+  });
+
+  test("without Cloudflare's Received on top nothing is believed", () => {
     expect(isGoogleSigned([])).toBe(false);
-    // No receiving hop block at all.
-    expect(isGoogleSigned([results(PASS)])).toBe(false);
-    // Forged below the receiving hop's Received header.
+    // Results with no receipt header at all.
     expect(
       isGoogleSigned([
-        results("mx.cloudflare.net; dkim=pass header.d=evil.example"),
-        RECEIVED,
-        results(PASS),
-        { key: "arc-authentication-results", value: `i=1; ${PASS}` },
+        header("authentication-results", PASS),
+        ...senderHeaders,
       ]),
     ).toBe(false);
-    expect(isGoogleSigned([RECEIVED, results(PASS)])).toBe(false);
-    // A later ARC instance is not the receiving hop's.
+    // A sender's own Received on top, claiming the same results.
     expect(
       isGoogleSigned([
-        { key: "arc-authentication-results", value: `i=2; ${PASS}` },
-        RECEIVED,
+        header("received", "from mail.evil.example by mx.evil.example"),
+        ...cloudflareBlock(PASS).slice(1),
+      ]),
+    ).toBe(false);
+    // Cloudflare's block present but not first.
+    expect(
+      isGoogleSigned([
+        header("x-injected", "1"),
+        ...cloudflareBlock(PASS),
+        ...senderHeaders,
+      ]),
+    ).toBe(false);
+    // A later ARC instance is not Cloudflare's receipt.
+    expect(
+      isGoogleSigned([
+        CF_RECEIVED,
+        header("arc-authentication-results", `i=2; ${PASS}`),
+        ...senderHeaders,
       ]),
     ).toBe(false);
   });

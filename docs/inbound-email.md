@@ -149,15 +149,17 @@ Email lists the recent messages with their status and reasons.
   "No PDF, JPEG or PNG attachment was found in this message."
 - **Only rejected attachments**: `processed` with "No attachment in this
   message could be read as an invoice."
-- **Gmail forwarding confirmation** (`forwarding-noreply@google.com`, and an
-  `Authentication-Results` or `ARC-Authentication-Results: i=1` from
-  `mx.cloudflare.net` showing `dkim=pass header.d=google.com` in the receiving
-  hop's block, above the first `Received` header): the confirmation text,
-  including its link and code, is shown as the message's detail so the
-  workspace can finish setting up Gmail forwarding. Such headers below the
-  first `Received` header are sender-controlled and ignored; without the pass
-  the message is ordinary mail. This relies on Cloudflare's header layout,
-  which the live proof must record (step 7).
+- **Gmail forwarding confirmation** (`forwarding-noreply@google.com`, with
+  Cloudflare's own results showing `dkim=pass header.d=google.com`): the
+  confirmation text, including its link and code, is shown as the message's
+  detail so the workspace can finish setting up Gmail forwarding. Cloudflare's
+  results are recognised by position (live proof step 7): the topmost header
+  must be Cloudflare's `Received … by cloudflare-email.net`, and only the
+  first `Authentication-Results` and the first `ARC-Authentication-Results:
+  i=1` after it count, each with authserv-id `mx.cloudflare.net`. Cloudflare
+  prepends its block above everything the sender supplied, so a sender's own
+  `mx.cloudflare.net` claim always comes after Cloudflare's and is ignored;
+  without the pass the message is ordinary mail.
 - **Unreadable MIME**: `failed` at once ("This message could not be read as
   email."), not retried.
 - **Transient intake failure** (storage, parser capacity): the job retries; on
@@ -267,14 +269,40 @@ Settings → Email once to provision the address, then read it with
    rather than bounced; this confirms the Cloudflare behaviour for a thrown
    Worker.
 7. Record here the headers Cloudflare puts at the top of a received message
-   (read `inbound_emails.raw` of a test message before it is processed, since
-   processing clears it, or of a failed message): which of `Authentication-Results` /
-   `ARC-Authentication-Results` it adds, with authserv-id `mx.cloudflare.net`,
-   and that they sit above its first `Received` header. If the layout differs
-   from what `isGoogleSigned` (`packages/jobs/src/inbound-email.ts`) trusts,
-   fix the check before turning `INBOUND_EMAIL_LIVE` on.
+   (read `inbound_emails.raw` of a failed message, since processing clears it
+   otherwise; a MIME message nested deeper than 32 levels fails on purpose).
+   If the layout differs from what `isGoogleSigned`
+   (`packages/jobs/src/inbound-email.ts`) trusts, fix the check before turning
+   `INBOUND_EMAIL_LIVE` on.
 
-   Observed layout: _not yet recorded._
+   Observed layout (production, 2026-09-25, a message sent from a Purelymail
+   mailbox; values shortened). Cloudflare's block comes first, then the
+   sender's headers unchanged:
+
+   ```text
+   Received: from sendmail.purelymail.com (34.202.193.197)
+           by cloudflare-email.net (cloudflare) id AuYfoj6x77E4
+           for <u4833cja7jktx258@in.invoicewise.uk>; Fri, 25 Sep 2026 05:07:50 +0000
+   ARC-Seal: i=1; a=rsa-sha256; s=cf2024-1; d=cloudflare-email.net; cv=none; b=…
+   ARC-Message-Signature: i=1; a=rsa-sha256; s=cf2024-1; d=cloudflare-email.net; …
+   ARC-Authentication-Results: i=1; mx.cloudflare.net;
+           dkim=pass header.d=ziahm.com header.s=purelymail3 header.b=…;
+           dkim=pass header.d=purelymail.com header.s=purelymail3 header.b=…;
+           dmarc=pass header.from=ziahm.com policy.dmarc=reject;
+           spf=pass (…) smtp.mailfrom=iwproof0925@ziahm.com;
+           arc=none smtp.remote-ip=34.202.193.197
+   Received-SPF: pass (mx.cloudflare.net: …) receiver=mx.cloudflare.net; …
+   Authentication-Results: mx.cloudflare.net; <the same results as above>
+   X-CF-SpamH-Score: 0
+   DKIM-Signature: … (the sender's headers from here on)
+   Authentication-Results: purelymail.com; auth=pass
+   Received: by smtp.purelymail.com (Purelymail SMTP) …
+   From: …
+   ```
+
+   So Cloudflare's `Received` is the topmost header and its two result
+   headers follow it; `isGoogleSigned` trusts exactly those (the first of each
+   after that `Received`). The unit and integration tests use this layout.
 
 ## Tests
 
@@ -286,7 +314,9 @@ Settings → Email once to provision the address, then read it with
   handler.
 - `packages/jobs/src/inbound-email.test.ts` — recipient parsing (no
   subaddresses), local part shape, header reading, message identity, the
-  Gmail confirmation's DKIM check (receiving-hop headers only), the live
+  Gmail confirmation's DKIM check against the observed Cloudflare layout
+  (forged results after Cloudflare's block and a missing Cloudflare
+  `Received` are ignored), the live
   setting.
 - `apps/api/src/inbound-email.http.integration.test.ts` (in `bun run verify`)
   — real HTTP and Postgres: delivery through the Worker to the right
