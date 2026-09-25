@@ -85,7 +85,8 @@ suite("data lifecycle (integration)", () => {
     primaryDb = client.primaryDb;
     storage = storageModule.createStorageClientFromEnv();
     caller = createCallerFactory(appRouter);
-  });
+    // Cold-loading the app router can exceed bun's 5s default hook timeout.
+  }, 60_000);
 
   afterAll(async () => {
     if (!primaryDb) return;
