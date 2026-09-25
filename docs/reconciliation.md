@@ -188,8 +188,8 @@ invoice.
   **Balance** (authorized, committed, remaining, per line) and each matched
   invoice's reconciliation and consumed amount. **Settings → Delivery rules**
   lists the three checks.
-- **REST and MCP.** Invoice reads (`GET /invoices`, `GET /invoices/:id`,
-  `get_invoice`, `list_invoices`) return `reconciliation`: the current result
+- **REST.** Invoice reads (`GET /invoices`, `GET /invoices/:id`) return
+  `reconciliation`: the current result
   with `id`, `sequence`, `matchId`, `processingRevision`, `status`,
   `consumes`, `reconciledAt`, or null. A credential without `sources.read`
   gets only `{ "status", "discrepancies", "unresolved" }` with the findings'
@@ -254,6 +254,9 @@ bill 20 more under v2              reconciled      deliver                      
 ```
 
 ## Not yet covered
+
+- The versioned `/v1` API and the MCP tools built on it do not carry the
+  match or its reconciliation yet; read them from `GET /invoices/:id`.
 
 - A credit note that credits a matched invoice but prints no source
   reference is matched (and so counted) on its own evidence only; it does not
