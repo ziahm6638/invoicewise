@@ -1,5 +1,5 @@
 {
-  "id": "1da4d789-53ef-4604-bde6-3f9baaf402e3",
+  "id": "85c41fc8-5358-41b1-8f4f-51afc405db37",
   "prevId": "bc94a9a5-949a-458f-aee3-e11ae5f57b88",
   "version": "7",
   "dialect": "postgresql",
@@ -134,6 +134,79 @@
           ]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.accounting_post_claims": {
+      "name": "accounting_post_claims",
+      "schema": "",
+      "columns": {
+        "team_id": {
+          "name": "team_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "identity_key": {
+          "name": "identity_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "invoice_id": {
+          "name": "invoice_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "accounting_post_claims_team_id_fkey": {
+          "name": "accounting_post_claims_team_id_fkey",
+          "tableFrom": "accounting_post_claims",
+          "tableTo": "teams",
+          "columnsFrom": [
+            "team_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "accounting_post_claims_invoice_id_fkey": {
+          "name": "accounting_post_claims_invoice_id_fkey",
+          "tableFrom": "accounting_post_claims",
+          "tableTo": "inbox",
+          "columnsFrom": [
+            "invoice_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "accounting_post_claims_pkey": {
+          "name": "accounting_post_claims_pkey",
+          "columns": [
+            "team_id",
+            "identity_key"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2817,6 +2890,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "validation": {
+          "name": "validation",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "accounting_provider": {
           "name": "accounting_provider",
           "type": "accounting_provider",
@@ -2843,6 +2922,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "accounting_post_released": {
+          "name": "accounting_post_released",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "accounting_posted_at": {
           "name": "accounting_posted_at",
           "type": "timestamp with time zone",
@@ -2854,6 +2940,25 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "accounting_post_retryable": {
+          "name": "accounting_post_retryable",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "accounting_revision": {
+          "name": "accounting_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "processing_revision": {
+          "name": "processing_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "status": {
           "name": "status",
@@ -2978,25 +3083,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "accounting_post_retryable": {
-          "name": "accounting_post_retryable",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "accounting_revision": {
-          "name": "accounting_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "processing_revision": {
-          "name": "processing_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
         }
       },
       "indexes": {
@@ -3025,6 +3111,21 @@
               "asc": true,
               "nulls": "last",
               "opclass": "timestamptz_ops"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "inbox_accounting_post_status_idx": {
+          "name": "inbox_accounting_post_status_idx",
+          "columns": [
+            {
+              "expression": "accounting_post_status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
             }
           ],
           "isUnique": false,
@@ -3120,21 +3221,6 @@
           ],
           "isUnique": true,
           "where": "\"inbox\".\"intake_state\" in ('reserved'::\"public\".\"inbox_intake_state\", 'accepted'::\"public\".\"inbox_intake_state\")",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "inbox_accounting_post_status_idx": {
-          "name": "inbox_accounting_post_status_idx",
-          "columns": [
-            {
-              "expression": "accounting_post_status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -9081,6 +9167,18 @@
           "primaryKey": false,
           "notNull": true
         },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "status": {
           "name": "status",
           "type": "webhook_delivery_status",
@@ -9099,6 +9197,12 @@
         "last_error": {
           "name": "last_error",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "retryable": {
+          "name": "retryable",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": false
         },
@@ -9121,24 +9225,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "event_id": {
-          "name": "event_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "retryable": {
-          "name": "retryable",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -9768,6 +9854,7 @@
         "posted",
         "already_posted",
         "failed",
+        "needs_review",
         "queued",
         "cancelled"
       ]

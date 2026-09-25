@@ -4,6 +4,7 @@ import type {
   InvoiceJudgmentQuestion,
   PreviousInvoice,
 } from "./typesafe/invoice";
+import type { InvoiceValidation } from "./validation";
 
 export type GetDocumentRequest = {
   content?: string;
@@ -29,6 +30,7 @@ export type GetInvoiceResponse = {
   tax_type: string | null;
   metadata: Record<string, string | number | boolean | null>;
   extraction: InvoiceExtraction;
+  validation: InvoiceValidation;
   judgments: InvoiceJudgment[];
 };
 

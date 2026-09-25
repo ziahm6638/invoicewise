@@ -17,6 +17,7 @@ import {
   listStalledAccountingPosts,
   listStalledWebhookDeliveries,
   recordAccountingPostQueued,
+  releaseAccountingPostForReview,
   requeueFinishedWorkflowJob,
   requeueWebhookDelivery,
   roleAtLeast,
@@ -188,17 +189,30 @@ export async function scheduleAccountingPost(
  */
 export async function completeInvoiceProcessing(
   db: Database,
-  params: Omit<UpdateInboxWithProcessedDataParams, "status"> & {
-    teamId: string;
-  },
+  params: CompleteInvoiceParams,
 ) {
-  return db.transaction(async (tx) => {
-    const executor = asDatabase(tx);
-    const invoice = await completeInboxProcessing(executor, params);
-    if (!invoice) return null;
-    const scheduled = await scheduleInvoiceDeliveries(executor, invoice);
-    return { invoice, revision: invoice.processingRevision, scheduled };
-  });
+  return db.transaction((tx) => completeAndSchedule(asDatabase(tx), params));
+}
+
+type CompleteInvoiceParams = Omit<
+  UpdateInboxWithProcessedDataParams,
+  "status"
+> & {
+  teamId: string;
+};
+
+/**
+ * The body of `completeInvoiceProcessing` for a caller that already holds the
+ * transaction the completion must share (document validation, for one).
+ */
+export async function completeAndSchedule(
+  executor: Database,
+  params: CompleteInvoiceParams,
+) {
+  const invoice = await completeInboxProcessing(executor, params);
+  if (!invoice) return null;
+  const scheduled = await scheduleInvoiceDeliveries(executor, invoice);
+  return { invoice, revision: invoice.processingRevision, scheduled };
 }
 
 /**
@@ -405,12 +419,21 @@ export async function requeueAccountingIntent(
     return "already_posted";
   }
   if (input.status === "queued") return "in_progress";
-  if (input.status !== "failed" && input.status !== "cancelled") {
+  if (
+    input.status !== "failed" &&
+    input.status !== "cancelled" &&
+    input.status !== "needs_review"
+  ) {
     return "not_scheduled";
   }
   if (!input.permitted) return "admin_required";
   const connection = await getActiveAccountingConnection(db, input.teamId);
   if (!connection) return "no_active_connection";
+  // Retrying a post held for review is the user's decision that it is not a
+  // duplicate: it is sent as its own bill.
+  if (input.status === "needs_review") {
+    await releaseAccountingPostForReview(db, input);
+  }
   await recordAccountingPostQueued(db, {
     invoiceId: input.invoiceId,
     teamId: input.teamId,

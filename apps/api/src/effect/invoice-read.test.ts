@@ -38,6 +38,29 @@ const invoice = {
   judgments: [
     { questionId: "known_supplier", label: "Known supplier", answer: true },
   ],
+  validation: {
+    version: 1,
+    status: "invalid",
+    documentType: "invoice",
+    issues: [
+      {
+        code: "gross",
+        severity: "error",
+        message:
+          "Net 100.00 + VAT 20.00 = 120.00, but the gross total is 125.50.",
+      },
+    ],
+    accounting: {
+      ready: false,
+      blockers: [
+        {
+          code: "gross",
+          message:
+            "Net 100.00 + VAT 20.00 = 120.00, but the gross total is 125.50.",
+        },
+      ],
+    },
+  },
   processingError: null,
   processingRevision: 1,
   delivery: {
@@ -164,6 +187,7 @@ describe("Effect invoice read HTTP slice", () => {
           description: invoice.description,
           extraction: invoice.extraction,
           judgments: invoice.judgments,
+          validation: invoice.validation,
           processingError: null,
           transaction: null,
         },
@@ -251,5 +275,26 @@ describe("Effect invoice read HTTP slice", () => {
     expect(csv).toContain("known_supplier");
     expect(csv).toContain("INV-42");
     expect(csv).toContain("true");
+  });
+
+  test("returns the persisted validation and exports why an invoice cannot be delivered", async () => {
+    const detail = (await (
+      await request(`/invoices/${invoice.id}`)
+    ).json()) as Record<string, unknown>;
+    expect(detail.validation).toEqual(invoice.validation);
+
+    const [header, row] = (
+      await (await request("/invoices/export.csv")).text()
+    ).split("\r\n");
+    const columns = header!.split(",");
+    const cells = Object.fromEntries(
+      columns.map((column, index) => [column, row!.split(",")[index]]),
+    );
+    expect(cells).toMatchObject({
+      document_type: "invoice",
+      validation_status: "invalid",
+      accounting_ready: "false",
+    });
+    expect(row).toContain("but the gross total is 125.50.");
   });
 });

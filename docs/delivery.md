@@ -23,12 +23,18 @@ Available read routes are:
 | Route | Result |
 | --- | --- |
 | `GET /invoices` | Cursor-paginated invoices; supports `cursor`, `pageSize`, `status`, `q`, `sort`, and `order` |
-| `GET /invoices/:id` | Extraction, line items, judgments, and a five-minute signed document URL |
+| `GET /invoices/:id` | Extraction (with per-value evidence), validation, line items, judgments, and a five-minute signed document URL |
 | `GET /invoices/:id/delivery-status` | Webhook deliveries (logical event ID, revision, status, attempts, last error, whether a retry may succeed) plus the Nango accounting post status, provider ID, failure reason and retryability |
-| `GET /invoices/export.csv` | Workspace invoices with a `judgment:<questionId>` column for every judgment |
+| `GET /invoices/export.csv` | Workspace invoices with document type, validation status, accounting readiness and issues, and a `judgment:<questionId>` column for every judgment |
 
 An invoice outside the API key's workspace is returned as `404`, so the route
 does not reveal whether another workspace owns that identifier.
+
+Every invoice read, the `invoice.processed` webhook payload and MCP
+`get_invoice` carry `validation`: the deterministic checks, issues, canonical
+totals with their currencies, duplicate and credit-note identity, and
+`accounting.ready` with its blockers. See
+[Validation](document-intake.md#validation).
 
 `POST /invoices/:id/delivery/retry` (scope `inbox.write`) is the recovery
 action for failed or cancelled destinations; see
@@ -165,9 +171,12 @@ configured when it completed, or ends in a visible terminal state.
   destination, and a revision completed afterwards schedules only the current
   destinations.
 - **Outcomes.** Each webhook delivery and the accounting post end `succeeded`
-  (`posted`/`already_posted`), `failed` or `cancelled`. A failure records
-  whether a retry may succeed (exhausted retries, provider outage) or needs a
-  configuration change (a rejected URL or request). A failing destination
+  (`posted`/`already_posted`), `failed`, `cancelled` or, for accounting,
+  `needs_review` (a possible duplicate held for the user, counted as a
+  failure). A failure records whether a retry may succeed (exhausted retries,
+  provider outage, a post held for review) or needs a change first (a rejected
+  URL or request, or an invoice that fails
+  [validation](document-intake.md#validation)). A failing destination
   does not affect the others.
 - **Recovery.** The invoice's **Delivery** panel in the dashboard, tRPC
   `inbox.retryDelivery`, and `POST /invoices/:id/delivery/retry` re-drive the

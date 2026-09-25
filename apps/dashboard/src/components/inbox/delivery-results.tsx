@@ -13,11 +13,12 @@ const statusLabel: Record<string, string> = {
   posted: "Posted",
   already_posted: "Posted",
   failed: "Failed",
+  needs_review: "Needs review",
   cancelled: "Cancelled",
 };
 
 const statusTone = (status: string) =>
-  status === "failed"
+  status === "failed" || status === "needs_review"
     ? "text-destructive"
     : status === "cancelled"
       ? "text-muted-foreground"
@@ -43,17 +44,20 @@ function Outcome({
       <div className="min-w-0">
         <p className="truncate text-sm font-medium">{label}</p>
         <p className="truncate text-xs text-muted-foreground">{detail}</p>
-        {error && (status === "failed" || status === "cancelled") && (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {error}
-            {/* Failures recorded before retryability existed carry null. */}
-            {status === "failed" &&
-              retryable !== null &&
-              (retryable
-                ? " · Retry may succeed"
-                : " · Needs a configuration change")}
-          </p>
-        )}
+        {error &&
+          (status === "failed" ||
+            status === "needs_review" ||
+            status === "cancelled") && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {error}
+              {/* Failures recorded before retryability existed carry null. */}
+              {status === "failed" &&
+                retryable !== null &&
+                (retryable
+                  ? " · Retry may succeed"
+                  : " · Needs a change before retrying")}
+            </p>
+          )}
       </div>
       <span className={cn("shrink-0 text-xs font-medium", statusTone(status))}>
         {statusLabel[status] ?? status}
@@ -119,6 +123,7 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
         delivery.status === "failed" || delivery.status === "cancelled",
     ) ||
     accounting?.status === "failed" ||
+    accounting?.status === "needs_review" ||
     accounting?.status === "cancelled";
 
   return (

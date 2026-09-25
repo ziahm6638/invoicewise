@@ -42,6 +42,12 @@ export const InvoiceItem = Schema.Struct({
   description: Schema.NullOr(Schema.String),
   extraction: Schema.optional(Schema.NullOr(Schema.Unknown)),
   judgments: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+  /**
+   * Deterministic checks of the extraction and whether it may be posted to
+   * accounting (`status`, `checks`, `issues`, `identity`, `accounting`);
+   * null until processed.
+   */
+  validation: Schema.optional(Schema.NullOr(Schema.Unknown)),
   /** Why extraction failed, when it did; null while processing or once processed. */
   processingError: Schema.optional(Schema.NullOr(Schema.String)),
   transaction: Schema.NullOr(Transaction),
@@ -384,12 +390,21 @@ export const invoicesToCsv = (rows: ExportRowsResult) => {
     "due_date",
     "amount",
     "currency",
+    "document_type",
+    "validation_status",
+    "accounting_ready",
+    "validation_issues",
     "status",
     "created_at",
     ...judgmentIds.map((id) => `judgment:${id}`),
   ];
   const lines = rows.map((row) => {
     const extraction = record(row.extraction);
+    const validation = record(row.validation);
+    const accounting = record(validation.accounting);
+    const issues = Array.isArray(validation.issues)
+      ? validation.issues.map((issue) => record(issue).message).join(" | ")
+      : null;
     const judgments = new Map(
       (row.judgments ?? []).flatMap((value) => {
         const judgment = record(value);
@@ -418,6 +433,10 @@ export const invoicesToCsv = (rows: ExportRowsResult) => {
       extraction.dueDate,
       row.amount,
       row.currency,
+      validation.documentType ?? extraction.documentType,
+      validation.status,
+      typeof accounting.ready === "boolean" ? accounting.ready : null,
+      issues,
       row.status,
       row.createdAt,
       ...judgmentIds.map((id) => judgments.get(id)),

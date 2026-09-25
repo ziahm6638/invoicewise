@@ -158,9 +158,11 @@ async function main() {
 
   // Nango stand-in: the connection lookup plus the Xero proxy. One bill per
   // provider idempotency key, like Xero, which replays the original response
-  // for a repeated Idempotency-Key.
+  // for a repeated Idempotency-Key. Requests and distinct bills are also
+  // counted per invoice number, which the verifier sets to the invoice id.
   const bills = new Map<string, string>();
   const billRequests = new Map<string, number>();
+  const billKeys = new Map<string, Set<string>>();
   const nango = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -180,7 +182,12 @@ async function main() {
         url.pathname === "/proxy/api.xro/2.0/Invoices"
       ) {
         const key = request.headers.get("nango-proxy-idempotency-key") ?? "";
-        billRequests.set(key, (billRequests.get(key) ?? 0) + 1);
+        const body = (await request.json()) as {
+          Invoices?: { InvoiceNumber?: string }[];
+        };
+        const number = body.Invoices?.[0]?.InvoiceNumber ?? "";
+        billRequests.set(number, (billRequests.get(number) ?? 0) + 1);
+        billKeys.set(number, (billKeys.get(number) ?? new Set()).add(key));
         const providerId = bills.get(key) ?? `xero-bill-${bills.size + 1}`;
         bills.set(key, providerId);
         return Response.json({ Invoices: [{ InvoiceID: providerId }] });
@@ -433,14 +440,21 @@ async function main() {
           receipt.invoiceId === invoiceId && receipt.endpoint === endpoint,
       );
 
+    // Complete enough to pass the accounting readiness checks.
     const extraction = (invoiceNumber: string) => ({
+      documentType: "invoice",
       supplierName: "Acme Supplies Ltd",
+      supplierVatNumber: "GB123456789",
       invoiceNumber,
+      invoiceDate: "2026-09-22",
+      dueDate: "2026-10-22",
       currency: "GBP",
       netAmount: 100,
       vatAmount: 20,
       grossAmount: 120,
-      lineItems: [],
+      lineItems: [
+        { description: "Materials", quantity: 1, unitPrice: 100, total: 100 },
+      ],
     });
     const processingInvoice = async (name: string, owner = teamId) => {
       const filePath = [owner, "inbox", `${name}.pdf`];
@@ -675,7 +689,7 @@ async function main() {
     });
     await billHold.reached();
     check(
-      bills.has(`invoicewise:${billInvoice}`),
+      billKeys.has(billInvoice),
       "the provider must have created the bill before the crash",
     );
     await billHold.crash(posting);
@@ -683,20 +697,21 @@ async function main() {
     await waitSettled("the bill invoice", [billInvoice]);
     await billRestart.stop();
     const afterBill = await invoiceState(billInvoice);
-    const billKey = `invoicewise:${billInvoice}`;
+    const billKey = [...(billKeys.get(billInvoice) ?? [])];
     check(
-      billRequests.get(billKey) === 2 &&
-        afterBill.accountingProviderId === bills.get(billKey) &&
+      billRequests.get(billInvoice) === 2 &&
+        billKey.length === 1 &&
+        afterBill.accountingProviderId === bills.get(billKey[0]!) &&
         afterBill.accountingPostStatus === "posted",
       `a provider timeout after success must yield one bill: ${JSON.stringify({
-        requests: billRequests.get(billKey),
+        requests: billRequests.get(billInvoice),
         status: afterBill.accountingPostStatus,
       })}`,
     );
     boundaries.accountingTimeoutAfterRemoteSuccess = {
       killedWorker:
         "SIGKILL after the provider created the bill, before recording",
-      providerRequests: billRequests.get(billKey),
+      providerRequests: billRequests.get(billInvoice),
       billsCreated: 1,
       finalStatus: afterBill.accountingPostStatus,
     };
@@ -1003,7 +1018,7 @@ async function main() {
         deliveryFor(disabledState, endpointB.id)?.status === "cancelled" &&
         disabledState.accountingPostStatus === "cancelled" &&
         receiptsFor(disabledInvoice, "b").length === 0 &&
-        !billRequests.has(`invoicewise:${disabledInvoice}`) &&
+        !billRequests.has(disabledInvoice) &&
         deletedState.deliveries.every(
           (delivery) => delivery.status === "cancelled",
         ) &&
@@ -1046,6 +1061,7 @@ async function main() {
         id: inbox.id,
         revision: inbox.processingRevision,
         status: inbox.status,
+        extraction: inbox.extraction,
         accountingPostStatus: inbox.accountingPostStatus,
       })
       .from(inbox)
@@ -1100,9 +1116,9 @@ async function main() {
           `delivery ${delivery.id} (${delivery.status}) was received ${accepted.length} times`,
         );
       }
-      const billCount = [...bills.keys()].filter(
-        (key) => key === `invoicewise:${invoice.id}`,
-      ).length;
+      const number = (invoice.extraction as { invoiceNumber?: string } | null)
+        ?.invoiceNumber;
+      const billCount = number ? (billKeys.get(number)?.size ?? 0) : 0;
       check(billCount <= 1, `invoice ${invoice.id} has ${billCount} bills`);
       check(
         invoice.accountingPostStatus !== "queued" &&

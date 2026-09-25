@@ -48,11 +48,12 @@ export class InvoiceProcessor {
       );
     }
 
-    const { extraction, judgments } = exit.value;
+    const { extraction, validation, judgments } = exit.value;
     const taxRate =
-      extraction.netAmount && extraction.vatAmount !== null
+      extraction.taxRate ??
+      (extraction.netAmount && extraction.vatAmount !== null
         ? (extraction.vatAmount / extraction.netAmount) * 100
-        : null;
+        : null);
 
     return {
       type: "invoice",
@@ -66,6 +67,7 @@ export class InvoiceProcessor {
       tax_rate: taxRate,
       tax_type: extraction.vatAmount === null ? null : "vat",
       extraction,
+      validation,
       judgments,
       metadata: {
         invoice_number: extraction.invoiceNumber,
@@ -73,6 +75,9 @@ export class InvoiceProcessor {
         due_date: extraction.dueDate,
         supplier_vat_number: extraction.supplierVatNumber,
         purchase_order_reference: extraction.purchaseOrderReference,
+        document_type: extraction.documentType,
+        payment_reference: extraction.paymentReference,
+        validation_status: validation.status,
       },
     };
   }

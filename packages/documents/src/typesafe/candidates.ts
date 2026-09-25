@@ -325,15 +325,109 @@ export const accountNameCandidates = (lines: readonly DocumentLine[]) =>
     (value) => value.toLowerCase(),
   );
 
+const DOCUMENT_NUMBER_VALUE = /[A-Z0-9][A-Z0-9/._-]{0,30}/i;
+
+/** The document's own number: an invoice number or a credit note number. */
 export const invoiceNumberCandidates = (lines: readonly DocumentLine[]) =>
   withIds(
     "invoice_number",
     labeledValues(
       lines,
-      /\b(?:(?:tax\s+)?invoice|inv)\.?\s*(?:no\b\.?|number|num\b|#|ref(?:erence)?\b\.?|id\b)\s*[:.]?|\binvoice\s*:|^invoice\s+(?=[A-Z0-9-]*\d)/i,
-      /[A-Z0-9][A-Z0-9/._-]{0,30}/i,
+      /\b(?:(?:tax\s+)?invoice|inv|credit\s*(?:note|memo)|credit|CN)\.?\s*(?:no\b\.?|number|num\b|#|ref(?:erence)?\b\.?|id\b)\s*[:.]?|\b(?:invoice|credit\s+note)\s*:|^(?:invoice|credit\s+note)\s+(?=[A-Z0-9-]*\d)/i,
+      DOCUMENT_NUMBER_VALUE,
     ).filter((found) => /\d/.test(found.value)),
     (value) => value,
+  );
+
+/**
+ * Numbers a credit note may give for the invoice it credits: an explicitly
+ * labelled original invoice, plus every invoice number on the page (a credit
+ * note often prints the original under a plain "Invoice No" label).
+ */
+export const originalInvoiceCandidates = (lines: readonly DocumentLine[]) =>
+  withIds(
+    "original_invoice",
+    [
+      ...labeledValues(
+        lines,
+        /\b(?:original|orig\.?|against|relat(?:es|ing)\s+to|credit(?:ing)?\s+(?:for|against)|in\s+respect\s+of|re)\s*:?\s+(?:our\s+)?(?:tax\s+)?invoice\s*(?:no\b\.?|number|num\b|#|ref(?:erence)?\b\.?)?\s*[:.]?/i,
+        DOCUMENT_NUMBER_VALUE,
+      ),
+      ...invoiceNumberCandidates(lines),
+    ].filter((found) => /\d/.test(found.value)),
+    (value) => value,
+  );
+
+/** The reference the supplier asks the payer to quote with the payment. */
+export const paymentReferenceCandidates = (lines: readonly DocumentLine[]) =>
+  withIds(
+    "payment_reference",
+    labeledValues(
+      lines,
+      /\b(?:payment|remittance|bank|transfer|pay)\s+ref(?:erence)?\b\.?\s*[:.]?|\b(?:please\s+)?quote\s+(?:(?:the\s+)?ref(?:erence)?\s*)?[:.]?|\bref(?:erence)?\s+to\s+quote\s*[:.]?|\b(?:use|with)\s+(?:the\s+)?ref(?:erence)?\s*[:.]?/i,
+      /[A-Z0-9][A-Z0-9/._-]{2,30}/i,
+    ).filter(
+      (found) => /\d/.test(found.value) || /^[A-Z]{3,}$/.test(found.value),
+    ),
+    (value) => value,
+  );
+
+const COMPANY_NUMBER_LABEL =
+  /(?<!vat\s{0,3})\b(?:company|co\.?|registered|registration|reg\.?)\s*(?:no\b\.?|number|num\b|#)\s*[:.]?|\bregistered\s+in\s+(?:england(?:\s+(?:and|&)\s+wales)?|scotland|northern\s+ireland|wales)(?:\s+(?:with\s+)?(?:company\s+)?(?:no\b\.?|number))?\s*[:.]?|\bcompany\s+registration\s*(?:no\b\.?|number)?\s*[:.]?|\bCRN\s*[:.]?/i;
+
+/** Companies House numbers: eight digits, or two letters and six digits. */
+const COMPANY_NUMBER = /^(?:\d{8}|(?:SC|NI|OC|SO|NC|FC|SL|LP|R0|GE)\d{6})$/;
+
+export const companyNumberCandidates = (lines: readonly DocumentLine[]) =>
+  withIds(
+    "company_number",
+    labeledValues(lines, COMPANY_NUMBER_LABEL, /[A-Z]{0,2}\s?\d[\d ]{5,9}/i)
+      .map((found) => ({
+        ...found,
+        value: found.value.replace(/\s+/g, "").toUpperCase(),
+      }))
+      .filter((found) => COMPANY_NUMBER.test(found.value)),
+    (value) => value,
+  );
+
+const CREDIT_MARKER = /\bcredit\s*(?:note|memo)\b/i;
+const INVOICE_MARKER = /\b(?:(?:tax|vat)\s+)?invoice\b/i;
+
+/**
+ * What kind of document this is. Rows naming a credit note or an invoice are
+ * offered, shortest (title-like) rows first; TypeSafe decides which one the
+ * document is (a credit note also mentions the invoice it credits).
+ */
+export const documentTypeCandidates = (lines: readonly DocumentLine[]) => {
+  const found: Found<"invoice" | "credit_note">[] = [];
+  lines.forEach((line, index) => {
+    for (const segment of line.segments) {
+      if (CREDIT_MARKER.test(segment.text)) {
+        found.push({ value: "credit_note", line: index, label: segment.text });
+      } else if (INVOICE_MARKER.test(segment.text)) {
+        found.push({ value: "invoice", line: index, label: segment.text });
+      }
+    }
+  });
+  const words = (candidate: Found<unknown>) =>
+    candidate.label!.split(/\s+/).length;
+  return withIds(
+    "document_type",
+    [...found].sort((a, b) => words(a) - words(b) || a.line - b.line),
+  );
+};
+
+/** VAT or tax rates printed as percentages on rows that mention VAT or tax. */
+export const taxRateCandidates = (lines: readonly DocumentLine[]) =>
+  withIds(
+    "tax_rate",
+    patternValues(lines, /(?<![\d.])\d{1,2}(?:\.\d{1,2})?\s?%/)
+      .filter((found) => /\b(?:vat|tax|gst)\b/i.test(lines[found.line]!.text))
+      .map((found) => ({
+        ...found,
+        value: Number(String(found.value).replace(/[^\d.]/g, "")),
+      })),
+    (value) => String(value),
   );
 
 export const purchaseOrderCandidates = (lines: readonly DocumentLine[]) =>
@@ -341,7 +435,7 @@ export const purchaseOrderCandidates = (lines: readonly DocumentLine[]) =>
     "purchase_order",
     labeledValues(
       lines,
-      /\b(?:purchase\s+order|P\.?\s?O\b\.?)(?!\s*box)\s*(?:no\b\.?|number|num\b|#|ref(?:erence)?\b\.?)?\s*[:.]?|\b(?:your|customer)\s+(?:order\s+)?ref(?:erence)?\b\.?\s*[:.]?/i,
+      /\b(?:purchase\s+order|P\.?\s?O\b\.?)(?!\s*box)\s*(?:no\b\.?|number|num\b|#|ref(?:erence)?\b\.?)?\s*[:.]?|\b(?:your|customer)\s+(?:order\s+)?ref(?:erence)?\b\.?\s*[:.]?|\b(?:your|customer)\s+order\s*(?:no\b\.?|number|#)?\s*[:.]?/i,
       /[A-Z0-9][A-Z0-9/._-]{0,30}/i,
     ).filter((found) => /\d/.test(found.value)),
     (value) => value,
@@ -378,7 +472,7 @@ export const dateCandidates = (lines: readonly DocumentLine[]) =>
   ) as (Candidate<string> & { iso: string })[];
 
 const MONEY =
-  /(?:(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\s?|[£€$]\s?)-?\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?(?!\d)|(?:(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\s?|[£€$]\s?)-?\d+(?:\.\d{1,2})?(?!\d)|-?\(?\b\d{1,3}(?:,\d{3})*\.\d{2}\b\)?|-?\b\d+\.\d{2}\b(?!\s?%)|\b-?\d[\d.,]*\s?(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\b/g;
+  /-?(?:(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\s?|[£€$]\s?)-?\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?(?!\d)|-?(?:(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\s?|[£€$]\s?)-?\d+(?:\.\d{1,2})?(?!\d)|-?\(?\b\d{1,3}(?:,\d{3})*\.\d{2}\b\)?|-?\b\d+\.\d{2}\b(?!\s?%)|\b-?\d[\d.,]*\s?(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\b/g;
 
 export const parseMoney = (raw: string): number | null => {
   const negative = /^-|^\(.*\)$|-\s*$/.test(raw.trim());
@@ -402,35 +496,102 @@ export const parseMoney = (raw: string): number | null => {
   return negative ? -Math.abs(value) : value;
 };
 
+const CURRENCY_CODES = /\b(GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\b/;
+
+/** Dollar prefixes that name their currency; a bare "$" does not. */
+const DOLLAR_PREFIX: Record<string, string> = {
+  US: "USD",
+  A: "AUD",
+  AU: "AUD",
+  C: "CAD",
+  CA: "CAD",
+  NZ: "NZD",
+};
+
+/**
+ * The currency printed with an amount: an ISO code, "£", "€" or a prefixed
+ * dollar ("US$"). A bare "$" is ambiguous (US, Canadian, Australian ...) and
+ * an amount printed without a marker has none; both resolve to null.
+ */
+export const amountCurrency = (
+  match: string,
+  before: string,
+): { marker: string | null; currency: string | null } => {
+  const code = CURRENCY_CODES.exec(match)?.[1];
+  if (code) return { marker: code, currency: code };
+  if (match.includes("£")) return { marker: "£", currency: "GBP" };
+  if (match.includes("€")) return { marker: "€", currency: "EUR" };
+  if (match.includes("$")) {
+    const prefix = /\b(US|AU|A|CA|C|NZ)\s?$/.exec(before)?.[1];
+    return prefix
+      ? { marker: `${prefix}$`, currency: DOLLAR_PREFIX[prefix]! }
+      : { marker: "$", currency: null };
+  }
+  return { marker: null, currency: null };
+};
+
+export type AmountCandidate = Candidate<number> & {
+  /** The currency marker printed with the amount, e.g. "£", "USD" or "$". */
+  marker: string | null;
+  /** The ISO currency that marker names, or null when none or ambiguous. */
+  currency: string | null;
+};
+
 export const amountCandidates = (
   lines: readonly DocumentLine[],
   limit = 150,
-) => {
-  const found: Found<number>[] = [];
+): AmountCandidate[] => {
+  const found: Omit<AmountCandidate, "id">[] = [];
   lines.forEach((line, index) => {
     for (const segment of line.segments) {
       for (const match of segment.text.matchAll(MONEY)) {
         const value = parseMoney(match[0]);
         if (value === null) continue;
+        const before = segment.text.slice(0, match.index);
         found.push({
           value,
           line: index,
-          label: labelFor(
-            lines,
-            index,
-            segment,
-            segment.text.slice(0, match.index),
-          ),
+          label: labelFor(lines, index, segment, before),
+          ...amountCurrency(match[0], before),
         });
       }
     }
   });
+  // The same figure printed in two currencies is two amounts; printed once
+  // with a marker and elsewhere without, it is one amount in that currency.
+  const markedCurrencies = new Map<string, Set<string>>();
+  for (const candidate of found) {
+    const key = candidate.value.toFixed(2);
+    const set = markedCurrencies.get(key) ?? new Set<string>();
+    if (candidate.marker) set.add(candidate.marker);
+    markedCurrencies.set(key, set);
+  }
+  const identity = (candidate: Omit<AmountCandidate, "id">) => {
+    const key = candidate.value.toFixed(2);
+    return markedCurrencies.get(key)!.size > 1
+      ? `${key}|${candidate.marker ?? ""}`
+      : key;
+  };
+  const inherit = (candidate: Omit<AmountCandidate, "id">) => {
+    const markers = markedCurrencies.get(candidate.value.toFixed(2))!;
+    if (candidate.marker || markers.size !== 1) return candidate;
+    const marker = [...markers][0]!;
+    const source = found.find((other) => other.marker === marker)!;
+    return { ...candidate, marker, currency: source.currency };
+  };
   // Totals come after the rows they sum, so the last occurrence of a value
   // carries the most useful label; keep that one.
-  const unique = withIds("amount", [...found].reverse(), (value) =>
-    value.toFixed(2),
-  ).reverse();
-  const summary = /total|vat|tax|net|gross|due|balance|payable|subtotal/i;
+  const seen = new Set<string>();
+  const unique: AmountCandidate[] = [];
+  for (const candidate of [...found].reverse()) {
+    const key = identity(candidate);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ ...inherit(candidate), id: `amount_${unique.length}` });
+  }
+  unique.reverse();
+  const summary =
+    /total|vat|tax|net|gross|due|balance|payable|subtotal|discount/i;
   const ranked = [
     ...unique.filter((candidate) => summary.test(candidate.label ?? "")),
     ...unique
@@ -443,22 +604,38 @@ export const amountCandidates = (
     .map((candidate, index) => ({ ...candidate, id: `amount_${index}` }));
 };
 
-export const currencyCandidates = (text: string): Candidate<string>[] => {
-  const currencies = new Set<string>();
-  for (const match of text.matchAll(
-    /\b(?:GBP|USD|EUR|CAD|AUD|NZD|SEK|NOK|DKK|CHF)\b/g,
-  )) {
-    currencies.add(match[0]);
-  }
-  if (text.includes("£")) currencies.add("GBP");
-  if (text.includes("€")) currencies.add("EUR");
-  if (text.includes("$") && currencies.size === 0) currencies.add("USD");
-  return [...currencies].map((value, index) => ({
-    id: `currency_${index}`,
-    value,
-    line: -1,
-    label: `Currency marker in the invoice resolves to ${value}`,
-  }));
+/**
+ * Currencies the document names: ISO codes, "£", "€" and prefixed dollars
+ * ("US$"), each with the first row that shows it. A bare "$" names no single
+ * currency, so it offers none: the currency is then left unknown rather than
+ * assumed to be US dollars.
+ */
+export const currencyCandidates = (
+  lines: readonly DocumentLine[],
+): Candidate<string>[] => {
+  const found: Found<string>[] = [];
+  lines.forEach((line, index) => {
+    for (const segment of line.segments) {
+      const add = (value: string, marker: string) =>
+        found.push({
+          value,
+          line: index,
+          label: `"${marker}" printed in the invoice`,
+          span: { x: segment.x, xEnd: segment.xEnd },
+        });
+      for (const match of segment.text.matchAll(
+        new RegExp(CURRENCY_CODES, "g"),
+      )) {
+        add(match[1]!, match[1]!);
+      }
+      if (segment.text.includes("£")) add("GBP", "£");
+      if (segment.text.includes("€")) add("EUR", "€");
+      for (const match of segment.text.matchAll(/\b(US|AU|A|CA|C|NZ)\s?\$/g)) {
+        add(DOLLAR_PREFIX[match[1]!]!, `${match[1]}$`);
+      }
+    }
+  });
+  return withIds("currency", found, (value) => value);
 };
 
 // --- Supplier identity -------------------------------------------------------
@@ -529,7 +706,7 @@ const UK_POSTCODE =
 
 /** Words that introduce an address inside running text, e.g. a footer. */
 const ADDRESS_INTRO =
-  /\b(?:registered\s+(?:office|address)|(?:trading|business|postal)\s+address|address|registered\s+in\s+[\p{L} ]+?\s+at|located\s+at|office)\b\s*[:\-–]?\s*/giu;
+  /\b(?:registered\s+(?:office|address)|(?:trading|business|postal)\s+address|address|registered\s+in\s+[\p{L} ]+?\s+at|located\s+at|office(?=\s*[:\-–]))\b\s*[:\-–]?\s*/giu;
 
 /** Rows that end an address block when walking up from its postcode. */
 const NOT_AN_ADDRESS_ROW =

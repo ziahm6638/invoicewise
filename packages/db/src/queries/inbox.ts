@@ -84,6 +84,8 @@ const invoiceDeliverySummary = () =>
       union all
       select case
         when ${inbox.accountingPostStatus} in ('posted', 'already_posted') then 'succeeded'
+        -- A post held for review awaits the user like a failure does.
+        when ${inbox.accountingPostStatus}::text = 'needs_review' then 'failed'
         else ${inbox.accountingPostStatus}::text
       end
       where ${inbox.accountingPostStatus} is not null
@@ -234,6 +236,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
       description: inbox.description,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      validation: inbox.validation,
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
@@ -317,6 +320,7 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
       description: inbox.description,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      validation: inbox.validation,
       processingError: inbox.processingError,
       processingRevision: inbox.processingRevision,
       delivery: invoiceDeliverySummary(),
@@ -399,6 +403,7 @@ export function getInvoiceExportRows(db: Database, teamId: string) {
       description: inbox.description,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      validation: inbox.validation,
     })
     .from(inbox)
     .where(
@@ -1968,19 +1973,121 @@ export async function getInboxByFilePath(
   return result;
 }
 
+/**
+ * The live, processed documents in the workspace received before (or after)
+ * the given one, ordered by `created_at` then id: the earliest copy of an
+ * invoice is its original whatever order the copies were processed in, and a
+ * deleted or reserved document is never a duplicate or credit candidate.
+ */
+const liveDocumentsReceived = (
+  direction: "before" | "after",
+  teamId: string,
+  documentId: string,
+) =>
+  and(
+    eq(inbox.teamId, teamId),
+    ne(inbox.status, "deleted"),
+    visibleIntakeState(),
+    isNotNull(inbox.extraction),
+    direction === "before"
+      ? sql`(${inbox.createdAt}, ${inbox.id}) < (select current.created_at, current.id from ${inbox} as current where current.id = ${documentId})`
+      : sql`(${inbox.createdAt}, ${inbox.id}) > (select current.created_at, current.id from ${inbox} as current where current.id = ${documentId})`,
+  );
+
+const documentNumberKeys = (numbers: string[]) => [
+  ...new Set(
+    numbers
+      .map((number) => number.toUpperCase().replace(/[^A-Z0-9]/g, ""))
+      .filter(Boolean),
+  ),
+];
+
+const documentNumberOf = (field: "invoiceNumber" | "originalInvoiceNumber") =>
+  sql<string>`upper(regexp_replace(${inbox.extraction} ->> ${field}::text, '[^A-Za-z0-9]', '', 'g'))`;
+
+/**
+ * Earlier documents in the workspace with the given document numbers,
+ * compared without spacing, punctuation or case: the candidates for a
+ * duplicate or for the invoice a credit note credits, however far back.
+ */
+export async function getInvoicesByDocumentNumber(
+  db: Database,
+  params: { teamId: string; documentId: string; numbers: string[] },
+) {
+  const keys = documentNumberKeys(params.numbers);
+  if (keys.length === 0) return [];
+  return db
+    .select({ id: inbox.id, extraction: inbox.extraction })
+    .from(inbox)
+    .where(
+      and(
+        liveDocumentsReceived("before", params.teamId, params.documentId),
+        inArray(documentNumberOf("invoiceNumber"), keys),
+      ),
+    )
+    .orderBy(inbox.createdAt, inbox.id)
+    .limit(20);
+}
+
+/**
+ * Later documents, not yet sent to accounting, that carry the given number
+ * or credit it: the copies and credit notes whose validation depends on a
+ * document that was processed after them.
+ */
+export async function getLaterDocumentsByNumber(
+  db: Database,
+  params: { teamId: string; documentId: string; number: string },
+) {
+  const keys = documentNumberKeys([params.number]);
+  if (keys.length === 0) return [];
+  return db
+    .select({ id: inbox.id, extraction: inbox.extraction })
+    .from(inbox)
+    .where(
+      and(
+        liveDocumentsReceived("after", params.teamId, params.documentId),
+        isNull(inbox.accountingProviderId),
+        or(
+          inArray(documentNumberOf("invoiceNumber"), keys),
+          inArray(documentNumberOf("originalInvoiceNumber"), keys),
+        ),
+      ),
+    )
+    .orderBy(inbox.createdAt, inbox.id)
+    .limit(20);
+}
+
+/**
+ * Serialises validation of a workspace's documents until the transaction
+ * ends, so two copies saved at once still see each other.
+ */
+export async function lockDocumentIdentities(db: Database, teamId: string) {
+  await db.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${`inbox-identity:${teamId}`}))`,
+  );
+}
+
+export async function updateInboxValidation(
+  db: Database,
+  params: { id: string; teamId: string; validation: Record<string, unknown> },
+) {
+  await db
+    .update(inbox)
+    .set({ validation: params.validation })
+    .where(and(eq(inbox.id, params.id), eq(inbox.teamId, params.teamId)));
+}
+
 export async function getProcessedInvoiceHistory(
   db: Database,
-  params: { teamId: string; excludeId: string; limit?: number },
+  params: { teamId: string; documentId: string; limit?: number },
 ) {
   return db
     .select({ id: inbox.id, extraction: inbox.extraction })
     .from(inbox)
     .where(
       and(
-        eq(inbox.teamId, params.teamId),
-        ne(inbox.id, params.excludeId),
+        liveDocumentsReceived("before", params.teamId, params.documentId),
         eq(inbox.type, "invoice"),
-        isNotNull(inbox.extraction),
       ),
     )
     .orderBy(desc(inbox.createdAt))
@@ -2093,6 +2200,7 @@ export type UpdateInboxWithProcessedDataParams = {
   description?: string | null;
   extraction?: Record<string, unknown> | null;
   judgments?: Record<string, unknown>[] | null;
+  validation?: Record<string, unknown> | null;
   processingError?: string | null;
   type?: "invoice" | "expense" | null;
   status?:
@@ -2155,6 +2263,7 @@ export async function completeInboxProcessing(
       type: inbox.type,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      validation: inbox.validation,
       processingRevision: inbox.processingRevision,
       accountingPostStatus: inbox.accountingPostStatus,
       accountingProviderId: inbox.accountingProviderId,
@@ -2229,6 +2338,7 @@ export async function updateInboxWithProcessedData(
       type: inbox.type,
       extraction: inbox.extraction,
       judgments: inbox.judgments,
+      validation: inbox.validation,
       processingError: inbox.processingError,
     });
 
@@ -2253,6 +2363,7 @@ export async function recordInboxProcessingFailure(
       processingError: params.error,
       extraction: null,
       judgments: null,
+      validation: null,
     })
     .where(
       and(

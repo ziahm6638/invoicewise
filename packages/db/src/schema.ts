@@ -143,6 +143,7 @@ export const accountingPostStatusEnum = pgEnum("accounting_post_status", [
   "posted",
   "already_posted",
   "failed",
+  "needs_review",
   "queued",
   "cancelled",
 ]);
@@ -2107,10 +2108,19 @@ export const inbox = pgTable(
     meta: json(),
     extraction: jsonb("extraction").$type<Record<string, unknown>>(),
     judgments: jsonb("judgments").$type<Record<string, unknown>[]>(),
+    // Deterministic checks of the extraction (arithmetic, currency, identity,
+    // required fields) and whether it may be posted to accounting; see
+    // docs/document-intake.md#validation. Null until processed.
+    validation: jsonb("validation").$type<Record<string, unknown>>(),
     accountingProvider: accountingProviderEnum("accounting_provider"),
     accountingPostStatus: accountingPostStatusEnum("accounting_post_status"),
     accountingProviderId: text("accounting_provider_id"),
     accountingPostError: text("accounting_post_error"),
+    // Set when a user retries a post held for review (another supplier's
+    // bill already has its number): it then posts under its own key.
+    accountingPostReleased: boolean("accounting_post_released")
+      .default(false)
+      .notNull(),
     accountingPostedAt: timestamp("accounting_posted_at", {
       withTimezone: true,
       mode: "string",
@@ -2293,6 +2303,38 @@ export const accountingConnections = pgTable(
       columns: [table.teamId],
       foreignColumns: [teams.id],
       name: "accounting_connections_team_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// One claim per document type and number: only the document holding it may
+// post a bill, so two documents with one number are never both posted
+// automatically. Kept after a successful post; released only on a definitive
+// provider failure.
+export const accountingPostClaims = pgTable(
+  "accounting_post_claims",
+  {
+    teamId: uuid("team_id").notNull(),
+    identityKey: text("identity_key").notNull(),
+    invoiceId: uuid("invoice_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.teamId, table.identityKey],
+      name: "accounting_post_claims_pkey",
+    }),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "accounting_post_claims_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [inbox.id],
+      name: "accounting_post_claims_invoice_id_fkey",
     }).onDelete("cascade"),
   ],
 );

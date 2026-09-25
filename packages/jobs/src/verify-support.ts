@@ -1,6 +1,6 @@
 /**
  * Shared fixtures for the DB-backed verifiers: a TypeSafe stub that answers
- * like a correct model for the committed synthetic invoice.
+ * like a correct model for the committed synthetic invoices.
  */
 
 export const required = (name: string) => {
@@ -13,7 +13,8 @@ export const required = (name: string) => {
 // stub can only choose among the candidates the pipeline found in the PDF, so
 // the persisted extraction proves the real reading, layout and candidate
 // mining end to end.
-export const extractionValues: Record<string, string | number> = {
+const extractionValues: Record<string, string | number> = {
+  document_type: "invoice",
   supplier_name: "ACME SUPPLIES LTD",
   supplier_address: "10 Market Street, London, EC1A 1AA",
   supplier_vat_number: "GB123456789",
@@ -36,6 +37,7 @@ export const extractionValues: Record<string, string | number> = {
 // The same selections for the UK invoice fixture, which the input-matrix
 // phase uploads as a text PDF, a scanned PDF, a PNG scan and a JPEG photo.
 const ukInvoiceValues: Record<string, string | number> = {
+  document_type: "invoice",
   supplier_name: "Northwind Joinery Ltd",
   supplier_address: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
   supplier_vat_number: "GB293445512",

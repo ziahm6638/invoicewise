@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import type { Database } from "@invoicewise/db/client";
 import {
   type AccountingProvider,
+  claimAccountingPost,
   disconnectAccountingConnectionRecord,
   getAccountingPostInvoice,
   getActiveAccountingConnection,
@@ -10,8 +12,15 @@ import {
   recordAccountingPostCancelled,
   recordAccountingPostFailure,
   recordAccountingPostSuccess,
+  releaseAccountingPostClaim,
+  updateInboxValidation,
   upsertAccountingConnection,
 } from "@invoicewise/db/queries";
+import {
+  accountingReadiness,
+  postingKeyOf,
+  validateInvoice,
+} from "@invoicewise/documents";
 import { Effect, Schema } from "effect";
 import { BillRejectedError, postProviderBill } from "./accounting-providers";
 import { requeueAccountingIntent } from "./delivery";
@@ -23,6 +32,11 @@ import {
 } from "./nango";
 
 export { getNangoConfig } from "./nango";
+
+const PROVIDER_NAME: Record<AccountingProvider, string> = {
+  xero: "Xero",
+  quickbooks: "QuickBooks",
+};
 
 type AttachmentStorage = {
   download: (input: { bucket: string; path: string[] }) => Promise<Blob>;
@@ -266,12 +280,43 @@ export const postAccountingDraft = (
       };
     }
 
+    // Provider-required fields that are missing or invalid, an inconsistent
+    // total, a duplicate or a credit note: the bill is not attempted, and the
+    // reasons are recorded as a failure a retry cannot fix until the invoice
+    // is corrected (see docs/document-intake.md#validation).
+    const readiness = accountingReadiness(
+      invoice.extraction,
+      invoice.validation,
+    );
+    // Keyed by document type and number, not the document, so the provider
+    // replays one bill for any copy that reaches it. A post a user released
+    // from review is its own bill, under its own claim and key.
+    const postingKey = postingKeyOf(invoice.extraction);
+    const released = invoice.accountingPostReleased;
     const idempotencyKey =
-      invoice.accountingIdempotencyKey ?? `invoicewise:${invoice.id}`;
+      (!released && invoice.accountingIdempotencyKey) ||
+      `invoicewise:${
+        postingKey && !released
+          ? createHash("sha256")
+              .update(`${input.teamId}:${postingKey}`)
+              .digest("hex")
+              .slice(0, 36)
+          : invoice.id
+      }`;
+    const claim = postingKey
+      ? {
+          teamId: input.teamId,
+          identityKey: released ? `${postingKey}:${invoice.id}` : postingKey,
+          invoiceId: invoice.id,
+        }
+      : null;
     const recordFailure = (error: AccountingPostError) =>
       Effect.tryPromise({
-        try: () =>
-          recordAccountingPostFailure(db, {
+        try: async () => {
+          if (claim && !error.retryable) {
+            await releaseAccountingPostClaim(db, claim);
+          }
+          await recordAccountingPostFailure(db, {
             ...target,
             provider: connection.provider,
             idempotencyKey,
@@ -281,13 +326,114 @@ export const postAccountingDraft = (
               input.attempt === undefined ||
               input.attempt >= (input.maxAttempts ?? input.attempt),
             retryable: error.retryable,
-          }),
+          });
+        },
         catch: () =>
           new AccountingPostError({
             reason: "Unable to record accounting post failure",
             retryable: true,
           }),
       }).pipe(Effect.zipRight(Effect.fail(error)));
+    const notSent = (reasons: string) =>
+      `Not sent to ${PROVIDER_NAME[connection.provider]}: ${reasons}`;
+    const block = (blockers: readonly { code: string; message: string }[]) =>
+      Effect.tryPromise({
+        try: () =>
+          recordAccountingPostFailure(db, {
+            ...target,
+            provider: connection.provider,
+            idempotencyKey,
+            error: notSent(
+              blockers.map((blocker) => blocker.message).join(" "),
+            ),
+            retryable: false,
+          }),
+        catch: () =>
+          new AccountingPostError({
+            reason: "Unable to record blocked accounting post",
+            retryable: true,
+          }),
+      }).pipe(
+        Effect.as({
+          invoiceId: invoice.id,
+          status: "blocked",
+          blockers: blockers.map((blocker) => blocker.code),
+        }),
+      );
+
+    if (!readiness.ready) return yield* block(readiness.blockers);
+
+    // Only the document holding the claim for its type and number posts.
+    // Another copy from the same supplier that loses it becomes a duplicate
+    // of the holder; a document from another supplier is held for review.
+    if (claim) {
+      const holder = yield* Effect.tryPromise({
+        try: () => claimAccountingPost(db, claim),
+        catch: () =>
+          new AccountingPostError({
+            reason: "Unable to claim the accounting post",
+            retryable: true,
+          }),
+      });
+      if (!holder) {
+        return yield* Effect.fail(
+          new AccountingPostError({
+            reason: "The accounting post claim was released; retrying",
+            retryable: true,
+          }),
+        );
+      }
+      if (holder !== invoice.id) {
+        const validation = yield* Effect.tryPromise({
+          try: async () => {
+            const original = await getAccountingPostInvoice(db, {
+              invoiceId: holder,
+              teamId: input.teamId,
+            });
+            const validation = validateInvoice(
+              invoice.extraction,
+              original ? [{ id: holder, extraction: original.extraction }] : [],
+            );
+            await updateInboxValidation(db, {
+              id: invoice.id,
+              teamId: input.teamId,
+              validation,
+            });
+            return validation;
+          },
+          catch: () =>
+            new AccountingPostError({
+              reason: "Unable to record the duplicate copy",
+              retryable: true,
+            }),
+        });
+        if (validation.identity.duplicateOf) {
+          return yield* block(validation.accounting.blockers);
+        }
+        const reason = notSent(
+          `invoice number ${String(asRecord(invoice.extraction).invoiceNumber)} was already sent for a different supplier (document ${holder}). Check it is not a duplicate, then retry to send it as a separate bill.`,
+        );
+        yield* Effect.tryPromise({
+          try: () =>
+            recordAccountingPostFailure(db, {
+              ...target,
+              provider: connection.provider,
+              idempotencyKey,
+              error: reason,
+              status: "needs_review",
+              retryable: true,
+            }),
+          catch: () =>
+            new AccountingPostError({
+              reason: "Unable to record the post held for review",
+              retryable: true,
+            }),
+        });
+        return yield* Effect.fail(
+          new AccountingPostError({ reason, retryable: false }),
+        );
+      }
+    }
 
     const config = yield* Effect.try({
       try: () => getNangoConfig(connection.provider, env),

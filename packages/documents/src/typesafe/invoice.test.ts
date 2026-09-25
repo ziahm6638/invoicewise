@@ -7,7 +7,13 @@ import sharp from "sharp";
 import { validateIntakeDocument } from "../intake";
 import { renderPdfPageIsolated } from "../isolated";
 import { layoutRuns } from "../layout";
-import { type OracleRequest as Request, oracle } from "../test/oracle";
+import {
+  NOT_FOUND,
+  type OracleRequest as Request,
+  fieldsOf,
+  lineItem,
+  oracle,
+} from "../test/oracle";
 import { TypeSafe, type TypeSafeAnswer, TypeSafeLive } from "./client";
 import {
   INVOICE_EXTRACTION_LIMITS,
@@ -66,7 +72,10 @@ const dataUrl = (bytes: Buffer, mimetype: string) =>
 
 /** What a UK invoice's printed fields should become, by TypeSafe question id. */
 const ukInvoiceSelections = {
+  document_type: "invoice",
   supplier_name: "Northwind Joinery Ltd",
+  supplier_company_number: "08123456",
+  tax_rate: 20,
   supplier_address: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
   supplier_vat_number: "GB293445512",
   invoice_number: "NJ-10457",
@@ -86,7 +95,11 @@ const ukInvoiceSelections = {
 
 const ukInvoiceExtraction = (
   textSource: "text-layer" | "ocr",
-): InvoiceExtraction => ({
+): Omit<InvoiceExtraction, "evidence"> => ({
+  ...NOT_FOUND,
+  documentType: "invoice",
+  supplierCompanyNumber: "08123456",
+  taxRate: 20,
   supplierName: "Northwind Joinery Ltd",
   supplierAddress: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
   supplierVatNumber: "GB293445512",
@@ -98,30 +111,34 @@ const ukInvoiceExtraction = (
   vatAmount: 432.2,
   grossAmount: 2593.2,
   lineItems: [
-    {
+    lineItem({
+      taxRate: 20,
       description: "Oak skirting board supply and fit",
       quantity: 12,
       unitPrice: 45,
       total: 540,
-    },
-    {
+    }),
+    lineItem({
+      taxRate: 20,
       description: "Kitchen worktop installation including sealing and edging",
       quantity: 1,
       unitPrice: 850,
       total: 850,
-    },
-    {
+    }),
+    lineItem({
+      taxRate: 20,
       description: "Bespoke shelving unit",
       quantity: 2,
       unitPrice: 325.5,
       total: 651,
-    },
-    {
+    }),
+    lineItem({
+      taxRate: 20,
       description: "Site waste disposal",
       quantity: 3,
       unitPrice: 40,
       total: 120,
-    },
+    }),
   ],
   bankDetails: {
     accountName: "Northwind Joinery Ltd",
@@ -157,7 +174,9 @@ describe("invoice extraction from real PDFs", () => {
       }).pipe(Effect.provide(oracle(ukInvoiceSelections, requests))),
     );
 
-    expect(result.extraction).toEqual(ukInvoiceExtraction("text-layer"));
+    expect(fieldsOf(result.extraction)).toEqual(
+      ukInvoiceExtraction("text-layer"),
+    );
     // TypeSafe sees the laid-out document, one tagged row per printed line,
     // with table cells still in their columns.
     const state = requests[0]!.state as { invoice: string };
@@ -181,7 +200,7 @@ describe("invoice extraction from real PDFs", () => {
         }).pipe(Effect.provide(oracle(ukInvoiceSelections))),
       );
 
-      expect(result.extraction).toEqual(ukInvoiceExtraction("ocr"));
+      expect(fieldsOf(result.extraction)).toEqual(ukInvoiceExtraction("ocr"));
     },
     60_000,
   );
@@ -217,7 +236,7 @@ describe("invoice extraction from real PDFs", () => {
         }).pipe(Effect.provide(oracle(ukInvoiceSelections))),
       );
 
-      expect(result.extraction).toEqual(ukInvoiceExtraction("ocr"));
+      expect(fieldsOf(result.extraction)).toEqual(ukInvoiceExtraction("ocr"));
     },
     60_000,
   );
@@ -234,6 +253,8 @@ describe("invoice extraction from real PDFs", () => {
       }).pipe(
         Effect.provide(
           oracle({
+            document_type: "invoice",
+            supplier_company_number: "12345678",
             supplier_name: "Brightwater Advisory Ltd",
             supplier_address: "7 Canal Wharf, Wharf Road, Leeds, LS1 4BR",
             invoice_number: "BW-2031",
@@ -248,7 +269,10 @@ describe("invoice extraction from real PDFs", () => {
       ),
     );
 
-    expect(result.extraction).toEqual({
+    expect(fieldsOf(result.extraction)).toEqual({
+      ...NOT_FOUND,
+      documentType: "invoice",
+      supplierCompanyNumber: "12345678",
       supplierName: "Brightwater Advisory Ltd",
       supplierAddress: "7 Canal Wharf, Wharf Road, Leeds, LS1 4BR",
       supplierVatNumber: null,
@@ -261,12 +285,12 @@ describe("invoice extraction from real PDFs", () => {
       vatAmount: null,
       grossAmount: 1200,
       lineItems: [
-        {
+        lineItem({
           description: "Consultation – 1 DEC 25 to 31 DEC 25",
           quantity: 4,
           unitPrice: 300,
           total: 1200,
-        },
+        }),
       ],
       bankDetails: {
         accountName: "Brightwater Advisory Ltd",
@@ -436,7 +460,8 @@ describe("TypeSafe invoice extraction", () => {
       ),
     );
 
-    expect(result).toEqual({
+    expect(fieldsOf(result)).toEqual({
+      ...NOT_FOUND,
       supplierName: "Acme Supplies Ltd",
       supplierAddress: null,
       supplierVatNumber: "GB123456789",
@@ -448,12 +473,12 @@ describe("TypeSafe invoice extraction", () => {
       vatAmount: 200,
       grossAmount: 1200,
       lineItems: [
-        {
+        lineItem({
           description: "Consulting services",
           quantity: 2,
           unitPrice: 500,
           total: 1000,
-        },
+        }),
       ],
       bankDetails: {
         accountName: "Acme Supplies Ltd",
@@ -524,7 +549,10 @@ describe("TypeSafe invoice extraction", () => {
   });
 });
 
-const extraction = ukInvoiceExtraction("text-layer");
+const extraction: InvoiceExtraction = {
+  ...ukInvoiceExtraction("text-layer"),
+  evidence: { fields: {}, lineItems: [] },
+};
 
 describe("TypeSafe invoice judgments", () => {
   test("stores defaults and configured questions in one typed shape", async () => {
@@ -761,6 +789,8 @@ const multipageSelections = {
   bank_account_number: "71234598",
   bank_sort_code: "40-11-62",
   purchase_order_reference: "PO-55187",
+  document_type: "invoice",
+  tax_rate: 20,
 };
 
 const item = (
@@ -768,7 +798,7 @@ const item = (
   quantity: number,
   unitPrice: number,
   total: number,
-) => ({ description, quantity, unitPrice, total });
+) => lineItem({ description, quantity, unitPrice, total });
 
 /** Both pages' rows, in page order: nothing dropped, nothing added. */
 const multipageLineItems = [
@@ -789,6 +819,9 @@ const multipageLineItems = [
 ];
 
 const multipageExtraction = {
+  ...NOT_FOUND,
+  documentType: "invoice" as const,
+  taxRate: 20,
   supplierName: "Northwind Joinery Ltd",
   supplierAddress: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
   supplierVatNumber: "GB293445512",
@@ -872,6 +905,7 @@ describe("supported input matrix", () => {
         const {
           textSource,
           pageSources: read,
+          evidence: _evidence,
           ...fields
         } = result.right.extraction;
         expect({ name, textSource, read }).toEqual({
@@ -901,7 +935,7 @@ describe("supported input matrix", () => {
       multipageSelections,
     );
     if (result._tag === "Left") throw new Error(result.left.reason);
-    expect(result.right.extraction).toEqual({
+    expect(fieldsOf(result.right.extraction)).toEqual({
       ...multipageExtraction,
       textSource: "text-layer",
       pageSources: ["text-layer", "text-layer"],
@@ -916,7 +950,7 @@ describe("supported input matrix", () => {
         multipageSelections,
       );
       if (result._tag === "Left") throw new Error(result.left.reason);
-      expect(result.right.extraction).toEqual({
+      expect(fieldsOf(result.right.extraction)).toEqual({
         ...multipageExtraction,
         textSource: "mixed",
         pageSources: ["text-layer", "ocr"],

@@ -7,6 +7,8 @@ import {
   deleteUserQuestion,
   getInboxByFilePath,
   getInboxIntakeBinding,
+  getInvoicesByDocumentNumber,
+  getProcessedInvoiceHistory,
   getUserQuestions,
   getWorkflowJob,
   recordInboxProcessingFailure,
@@ -15,7 +17,10 @@ import {
 } from "@invoicewise/db/queries";
 import { inbox, teams, users, workflowJobs } from "@invoicewise/db/schema";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
-import type { InvoiceExtraction } from "@invoicewise/documents";
+import {
+  type InvoiceExtraction,
+  validateInvoice,
+} from "@invoicewise/documents";
 import { eq } from "drizzle-orm";
 import { Effect, Logger } from "effect";
 import { enqueueWorkflow, workflowKey } from "./client";
@@ -25,6 +30,13 @@ import { required, startTypeSafeStub } from "./verify-support";
 import { TEMPORARY_PROCESSING_FAILURE } from "./workflows";
 
 const priorExtraction: InvoiceExtraction = {
+  documentType: "invoice",
+  supplierCompanyNumber: null,
+  originalInvoiceNumber: null,
+  discountAmount: null,
+  taxRate: null,
+  amountsIncludeTax: null,
+  paymentReference: null,
   supplierName: "ACME SUPPLIES LTD",
   supplierAddress: "10 Market Street, London, EC1A 1AA",
   supplierVatNumber: "GB123456789",
@@ -40,6 +52,10 @@ const priorExtraction: InvoiceExtraction = {
       description: "Consulting services",
       quantity: 2,
       unitPrice: 500,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: null,
+      taxAmount: null,
       total: 1000,
     },
   ],
@@ -54,13 +70,31 @@ const priorExtraction: InvoiceExtraction = {
   purchaseOrderReference: "PO-7788",
   textSource: "text-layer",
   pageSources: ["text-layer"],
+  evidence: { fields: {}, lineItems: [] },
 };
 
 /** Every field the synthetic PDF prints, as the pipeline must persist it. */
 const expectedExtraction: InvoiceExtraction = { ...priorExtraction };
 
+/**
+ * An extraction's values without its evidence, which records the printed
+ * rows (and so differs between a text layer and OCR); the evidence itself
+ * is checked for presence per value.
+ */
+const valuesOf = (extraction: unknown) => {
+  const { evidence, ...values } = (extraction ?? {}) as InvoiceExtraction;
+  return { values, evidence };
+};
+
 /** The UK invoice fixture, as every input format must persist it. */
 const ukInvoiceExtraction: InvoiceExtraction = {
+  documentType: "invoice",
+  supplierCompanyNumber: null,
+  originalInvoiceNumber: null,
+  discountAmount: null,
+  taxRate: null,
+  amountsIncludeTax: null,
+  paymentReference: null,
   supplierName: "Northwind Joinery Ltd",
   supplierAddress: "Unit 4, Riverside Trading Estate, Leeds, LS11 5QP",
   supplierVatNumber: "GB293445512",
@@ -76,24 +110,40 @@ const ukInvoiceExtraction: InvoiceExtraction = {
       description: "Oak skirting board supply and fit",
       quantity: 12,
       unitPrice: 45,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: 20,
+      taxAmount: null,
       total: 540,
     },
     {
       description: "Kitchen worktop installation including sealing and edging",
       quantity: 1,
       unitPrice: 850,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: 20,
+      taxAmount: null,
       total: 850,
     },
     {
       description: "Bespoke shelving unit",
       quantity: 2,
       unitPrice: 325.5,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: 20,
+      taxAmount: null,
       total: 651,
     },
     {
       description: "Site waste disposal",
       quantity: 3,
       unitPrice: 40,
+      discountAmount: null,
+      discountRate: null,
+      taxRate: 20,
+      taxAmount: null,
       total: 120,
     },
   ],
@@ -108,6 +158,7 @@ const ukInvoiceExtraction: InvoiceExtraction = {
   purchaseOrderReference: "PO-55120",
   textSource: "text-layer",
   pageSources: ["text-layer"],
+  evidence: { fields: {}, lineItems: [] },
 };
 
 const runBatch = () =>
@@ -228,11 +279,16 @@ async function verifyInputMatrix(
   const {
     textSource: _source,
     pageSources: _pages,
+    evidence: _evidence,
     ...expectedFields
   } = ukInvoiceExtraction;
   const shapes = rows.map(({ upload, row }) => {
-    const { textSource, pageSources, ...fields } = (row.extraction ??
-      {}) as InvoiceExtraction;
+    const {
+      textSource,
+      pageSources,
+      evidence: _read,
+      ...fields
+    } = (row.extraction ?? {}) as InvoiceExtraction;
     if (
       row.processingError !== null ||
       row.status !== "pending" ||
@@ -259,6 +315,14 @@ async function verifyInputMatrix(
       taxType: row.taxType,
       type: row.type,
       extraction: row.extraction,
+      // Issues differ by design: the same invoice sent again in another
+      // format is a duplicate of the first (asserted below).
+      validation: {
+        ...row.validation,
+        issues: [],
+        accounting: null,
+        identity: null,
+      },
       judgments: (row.judgments ?? []).map(
         (judgment) => `${judgment.source}:${judgment.questionId}`,
       ),
@@ -266,6 +330,25 @@ async function verifyInputMatrix(
   });
   if (!shapes.every((shape) => Bun.deepEquals(shape, shapes[0]))) {
     throw new Error("The input formats persisted different data shapes");
+  }
+  // One invoice is one identity whatever its format: the first copy received
+  // is the original, and every other copy is its duplicate, whatever order
+  // the concurrently processed copies finished in.
+  const duplicates = rows.map(
+    ({ row }) =>
+      (row.validation as { identity?: { duplicateOf?: string | null } } | null)
+        ?.identity?.duplicateOf ?? null,
+  );
+  const originals = rows.filter((_, index) => duplicates[index] === null);
+  if (
+    originals.length !== 1 ||
+    duplicates
+      .filter((id) => id !== null)
+      .some((id) => id !== originals[0]!.row.id)
+  ) {
+    throw new Error(
+      `The copies of this invoice do not share one original: ${JSON.stringify(duplicates)}`,
+    );
   }
 
   // A failure after the extraction is saved (for example while emitting its
@@ -354,6 +437,94 @@ async function verifyInternalFailureHidden(
     process.env.TYPESAFE_BASE_URL = baseUrl;
     rejecting.stop(true);
   }
+}
+
+async function verifyDuplicateCandidates(
+  database: ReturnType<typeof createDatabaseClient>,
+  teamId: string,
+) {
+  const extraction: InvoiceExtraction = {
+    ...priorExtraction,
+    invoiceNumber: "CAND-100",
+  };
+  const insert = async (
+    label: string,
+    createdAt: string,
+    state: Partial<typeof inbox.$inferInsert> = {},
+  ) => {
+    const [row] = await database.db
+      .insert(inbox)
+      .values({
+        teamId,
+        createdAt,
+        displayName: label,
+        fileName: `${label}.pdf`,
+        contentType: "application/pdf",
+        type: "invoice",
+        status: "pending",
+        intakeState: "accepted",
+        extraction,
+        ...state,
+      })
+      .returning({ id: inbox.id });
+    if (!row) throw new Error(`Unable to create the ${label} copy`);
+    return row.id;
+  };
+  // Every copy of one invoice: only an earlier, live copy may make the
+  // current one a duplicate. A deleted, reserved or later copy never does.
+  const deleted = await insert("deleted", "2020-01-01T00:00:00Z", {
+    status: "deleted",
+    intakeState: "cancelled",
+  });
+  const earlier = await insert("earlier", "2020-01-02T00:00:00Z");
+  const reserved = await insert("reserved", "2020-01-03T00:00:00Z", {
+    intakeState: "reserved",
+  });
+  const current = await insert("current", "2020-01-04T00:00:00Z");
+  const later = await insert("later", "2020-01-05T00:00:00Z");
+
+  const candidatesOf = async (documentId: string) => {
+    const [sameNumber, history] = await Promise.all([
+      getInvoicesByDocumentNumber(database.db, {
+        teamId,
+        documentId,
+        numbers: ["CAND-100"],
+      }),
+      getProcessedInvoiceHistory(database.db, { teamId, documentId }),
+    ]);
+    const copies = new Set([deleted, earlier, reserved, current, later]);
+    const ids = (rows: { id: string }[]) =>
+      rows.map((row) => row.id).filter((id) => copies.has(id));
+    return {
+      sameNumber: ids(sameNumber),
+      history: ids(history),
+      duplicateOf: validateInvoice(extraction, [...sameNumber, ...history])
+        .identity.duplicateOf,
+    };
+  };
+  const forCurrent = await candidatesOf(current);
+  // Reprocessing the first live copy (a retried job) finds no earlier copy.
+  const forEarlier = await candidatesOf(earlier);
+  const expected = {
+    forCurrent: {
+      sameNumber: [earlier],
+      history: [earlier],
+      duplicateOf: earlier,
+    },
+    forEarlier: { sameNumber: [], history: [], duplicateOf: null },
+  };
+  if (!Bun.deepEquals({ forCurrent, forEarlier }, expected)) {
+    throw new Error(
+      `Duplicate candidates include a deleted, reserved or later copy: ${JSON.stringify(
+        {
+          forCurrent,
+          forEarlier,
+          copies: { deleted, earlier, reserved, current, later },
+        },
+      )}`,
+    );
+  }
+  return { duplicateOfEarlierOnly: true };
 }
 
 async function main() {
@@ -572,7 +743,16 @@ async function main() {
       (judgment) => judgment.status === "failed",
     );
 
-    if (!Bun.deepEquals(persisted?.extraction, expectedExtraction)) {
+    const persistedValues = valuesOf(persisted?.extraction);
+    if (
+      !Bun.deepEquals(
+        persistedValues.values,
+        valuesOf(expectedExtraction).values,
+      ) ||
+      persistedValues.evidence?.lineItems.length !==
+        expectedExtraction.lineItems.length ||
+      !persistedValues.evidence.fields.grossAmount
+    ) {
       throw new Error(
         `Persisted extraction does not match the invoice: ${JSON.stringify(
           persisted?.extraction ?? null,
@@ -584,6 +764,8 @@ async function main() {
       completed?.status !== "succeeded" ||
       completed.attempts !== 2 ||
       !persisted?.extraction ||
+      // The deterministic checks are persisted beside the extraction.
+      persisted.validation?.version !== 1 ||
       persisted.status !== "pending" ||
       defaultJudgments.length !== 4 ||
       !approvalJudgment ||
@@ -598,11 +780,16 @@ async function main() {
     }
 
     const inputMatrix = await verifyInputMatrix(database, storage, teamId);
+    const duplicateCandidates = await verifyDuplicateCandidates(
+      database,
+      teamId,
+    );
 
     console.log(
       JSON.stringify({
         event: "workflow_verification_succeeded",
         inputMatrix,
+        duplicateCandidates,
         workflowId: completed.id,
         attempts: completed.attempts,
         persistedInvoiceId: persisted.id,
