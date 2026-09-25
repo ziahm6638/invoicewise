@@ -2,9 +2,9 @@ import type { Database } from "@invoicewise/db/client";
 import {
   type OperatorJob,
   cancelWorkflowJobAsOperator,
+  getDeliveryDecision,
   getInboundEmailForProcessing,
   getInvoiceForMatching,
-  getDeliveryDecision,
   hasNewerWorkflowJob,
   reopenFailedInboundEmail,
   requeueFinishedWorkflowJob,

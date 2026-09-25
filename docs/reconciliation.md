@@ -79,7 +79,8 @@ in effect on the invoice date):
 Against the **version in effect now** (else the newest), the **balance**:
 authorized, committed before this invoice (by the source's other invoices),
 this invoice, committed after, and remaining; and the same per authorized
-line, by amount and quantity. An amendment therefore moves the balance at
+line, by amount and quantity (a quantity another invoice billed without
+stating leaves that line's quantity balance unknown, never zero). An amendment therefore moves the balance at
 once, while each recorded reconciliation keeps the terms it compared.
 
 ## Outcomes
