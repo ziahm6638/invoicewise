@@ -50,14 +50,26 @@ const runBatch = () =>
     ),
   );
 
-/** Runs batches (waiting out retry backoff) until no job is queued or running. */
-const drain = async (db: ReturnType<typeof createDatabaseClient>["db"]) => {
+/**
+ * Runs batches (waiting out retry backoff) until none of this workspace's jobs
+ * is queued or running. Other verifiers share the database, and recurring
+ * work such as the retention schedule always has a next run queued.
+ */
+const drain = async (
+  db: ReturnType<typeof createDatabaseClient>["db"],
+  teamId: string,
+) => {
   for (let round = 0; round < 60; round++) {
     await runBatch();
     const [pending] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(workflowJobs)
-      .where(sql`${workflowJobs.status} in ('queued', 'running')`);
+      .where(
+        and(
+          eq(workflowJobs.teamId, teamId),
+          sql`${workflowJobs.status} in ('queued', 'running')`,
+        ),
+      );
     if (!pending?.count) return;
     await Bun.sleep(20);
   }
@@ -390,7 +402,7 @@ async function main() {
     });
     if (upload.status !== "accepted") throw new Error(upload.message);
     const scanned = upload.inboxId;
-    await drain(db);
+    await drain(db, workspace);
     const failedRead = await read(scanned);
     check(
       "a failed extraction is recorded with its reason and listed as failed",
@@ -420,7 +432,7 @@ async function main() {
         retryJobs.length === 1,
       { clicks, retryJobs },
     );
-    await drain(db);
+    await drain(db, workspace);
     const reextracted = await read(scanned);
     check(
       "the re-extraction completes as a new revision",
@@ -474,7 +486,7 @@ async function main() {
       inboxId: scanned,
       expectedRevision: afterStall.processingRevision,
     });
-    await drain(db);
+    await drain(db, workspace);
     const recovered = await read(scanned);
     check(
       "the stalled document is read again",
@@ -498,7 +510,7 @@ async function main() {
       reruns,
     );
     typeSafeUp(false);
-    await drain(db);
+    await drain(db, workspace);
     const rerunFailed = await read(scanned);
     check(
       "a failed question rerun is recorded and does not change the revision",
@@ -542,7 +554,7 @@ async function main() {
       teamId: teamId!,
       expectedRevision: recovered.processingRevision,
     });
-    await drain(db);
+    await drain(db, workspace);
     const rerun = await read(scanned);
     const rerunEvents = received
       .slice(webhooksBeforeRerun)
@@ -572,7 +584,7 @@ async function main() {
 
     // --- 3. Invalid totals, corrected, then posted once ---------------------------
     const invalid = await processed("EXC-TOTAL", 150);
-    await drain(db);
+    await drain(db, workspace);
     const blocked = await accounting(invalid);
     const invalidRead = await read(invalid);
     check(
@@ -659,7 +671,7 @@ async function main() {
         ]),
       { corrected, history },
     );
-    await drain(db);
+    await drain(db, workspace);
     const postedAfterCorrection = await accounting(invalid);
     check(
       "the corrected invoice is posted once",
@@ -677,7 +689,7 @@ async function main() {
 
     // A member's correction of a blocked invoice waits for an admin retry.
     const memberCase = await processed("EXC-MEMBER", 150);
-    await drain(db);
+    await drain(db, workspace);
     const memberCorrection = await correctInvoice(db, {
       invoiceId: memberCase,
       teamId,
@@ -696,7 +708,7 @@ async function main() {
       teamId,
       teamRole: "admin",
     });
-    await drain(db);
+    await drain(db, workspace);
     check(
       "re-posting after a member's correction needs an admin, then posts once",
       memberCorrection.accounting === "admin_required" &&
@@ -711,7 +723,7 @@ async function main() {
     // --- 4. Ambiguous provider timeout --------------------------------------------
     timeOutAfterCreate.add("EXC-TIMEOUT");
     const ambiguous = await processed("EXC-TIMEOUT");
-    await drain(db);
+    await drain(db, workspace);
     const timedOut = await accounting(ambiguous);
     const timedOutRead = await read(ambiguous);
     check(
@@ -741,7 +753,7 @@ async function main() {
       teamId,
       teamRole: "admin",
     });
-    await drain(db);
+    await drain(db, workspace);
     const settledPost = await accounting(ambiguous);
     const timeoutBills = [...bills.entries()].filter(
       ([, bill]) => bill.InvoiceNumber === "EXC-TIMEOUT",
@@ -806,7 +818,7 @@ async function main() {
       changes: { purchaseOrderReference: "PO-9" },
       accountingOutcome: "keep_bill",
     });
-    await drain(db);
+    await drain(db, workspace);
     check(
       "keeping the bill changes only InvoiceWise's record",
       kept.accounting === "bill_kept" &&
@@ -849,7 +861,7 @@ async function main() {
         }),
       )) === "conflict",
     );
-    await drain(db);
+    await drain(db, workspace);
     const updateFailed = await read(invalid);
     const memberRedo = await retryInvoiceDelivery(db, {
       invoiceId: invalid,
@@ -868,7 +880,7 @@ async function main() {
       teamId,
       teamRole: "admin",
     });
-    await drain(db);
+    await drain(db, workspace);
     const final = await read(invalid);
     const finalHistory = await listInvoiceCorrections(db, {
       invoiceId: invalid,
@@ -919,7 +931,7 @@ async function main() {
       changes: { paymentReference: "REF-2" },
       accountingOutcome: "update_bill",
     });
-    await drain(db);
+    await drain(db, workspace);
     timeOutAfterUpdate = false;
     const failedUpdate = await read(invalid);
     await requestQuestionRerun(db, {
@@ -943,7 +955,7 @@ async function main() {
       teamId,
       teamRole: "admin",
     });
-    await drain(db);
+    await drain(db, workspace);
     const superseded = await read(invalid);
     check(
       "a later correction supersedes a failed bill update and a queued question rerun",
