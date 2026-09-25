@@ -68,7 +68,13 @@ const TARGET: Record<string, string> = {
 /** A readable summary of an event's recorded detail (no values it lacks). */
 const detailText = (detail: AuditEvent["detail"]) =>
   Object.entries(detail ?? {})
-    .filter(([, value]) => value !== null && value !== "" && value !== false)
+    .filter(
+      ([key, value]) =>
+        key !== "tokenFingerprint" &&
+        value !== null &&
+        value !== "" &&
+        value !== false,
+    )
     .slice(0, 6)
     .map(
       ([key, value]) =>
@@ -93,6 +99,8 @@ function AuditRow({ event }: { event: AuditEvent }) {
           minute: "2-digit",
         })}{" "}
         · {actorLabel({ ...event.actor, id: event.actor.id }) ?? "Unknown"}
+        {event.actor.type === "operator" &&
+          ` · operator token ${event.actor.credentialId ?? "unknown"}`}
         {event.surface === "api" && " · API"}
         {event.target &&
           ` · ${TARGET[event.target.type] ?? event.target.type}${event.revision !== null ? ` (revision ${event.revision})` : ""}`}

@@ -745,7 +745,7 @@ suite("invoice activity and operator recovery over real HTTP", () => {
     ]);
     expect(refusals.every((event) => event.purpose === "incident")).toBe(true);
     expect(find("operator.job_retry", "succeeded", "operator")).toMatchObject({
-      actor: { name: "on-call" },
+      actor: { name: "on-call", credentialId: OPS_TOKEN_FINGERPRINT },
       purpose: "incident",
       target: { type: "invoice", id: invoiceId },
       detail: {

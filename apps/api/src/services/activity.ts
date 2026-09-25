@@ -60,7 +60,12 @@ export const presentAuditEvent = (row: AuditRow) => ({
       row.actorType === "operator"
         ? (row.actorRef ?? "Operator")
         : (row.actor?.fullName ?? row.actor?.email ?? null),
-    credentialId: row.actorType === "operator" ? null : row.actorRef,
+    credentialId:
+      row.actorType === "operator"
+        ? typeof row.detail?.tokenFingerprint === "string"
+          ? row.detail.tokenFingerprint
+          : null
+        : row.actorRef,
   },
   target: row.targetType ? { type: row.targetType, id: row.targetId } : null,
   revision: row.revision,
