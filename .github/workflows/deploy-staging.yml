@@ -1,0 +1,78 @@
+name: Deploy staging
+
+# Every push to main deploys staging.invoicewise.uk (hostinger) with Kamal,
+# then smoke-checks it. Production is deployed separately by the operator
+# (docs/deployment.md). The `staging` environment only admits main, and the
+# Infisical identity this job signs in as (GitHub OIDC, subject
+# repo:ziahm6638/invoicewise:environment:staging) can read the Infisical
+# `staging` environment and nothing else.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: deploy staging
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://staging.invoicewise.uk
+    timeout-minutes: 45
+    env:
+      STAGING_HOST: 31.97.116.107
+      # hostinger's ed25519 host key, pinned so the deploy never trusts on first use.
+      STAGING_HOST_KEY: 31.97.116.107 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINFubIR3v4tzYETgzasm1OytU1Ex8iVWr5hdVpTpgJNH
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+
+      - name: Install Kamal 2.12.0
+        run: gem install kamal -v 2.12.0 --no-document
+
+      - name: Staging secrets from Infisical (OIDC)
+        uses: Infisical/secrets-action@v1.0.9
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_STAGING_IDENTITY_ID }}
+          domain: https://infisical.zzapp.uk
+          project-slug: invoicewise
+          env-slug: staging
+          oidc-audience: https://infisical.zzapp.uk
+
+      - name: SSH to hostinger
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$STAGING_HOST_KEY" >> ~/.ssh/known_hosts
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s' "$KAMAL_SSH_KEY_B64" | base64 -d | ssh-add - 2>/dev/null
+          ssh -o BatchMode=yes "root@$STAGING_HOST" true
+
+      - name: Deploy
+        run: kamal deploy -d staging
+
+      - name: Smoke check
+        run: |
+          set -euo pipefail
+          test "$(curl -fsS --max-time 20 https://api-staging.invoicewise.uk/health/ready)" = '{"status":"ok"}'
+          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://staging.invoicewise.uk/login)" = 200
+          printf 'header = "Authorization: Bearer %s"\n' "$OPS_TOKEN" > "$RUNNER_TEMP/ops-auth"
+          curl -fsS --max-time 30 --config "$RUNNER_TEMP/ops-auth" \
+            https://api-staging.invoicewise.uk/ops/metrics > "$RUNNER_TEMP/metrics.json"
+          rm -f "$RUNNER_TEMP/ops-auth"
+          jq -e --arg sha "$GITHUB_SHA" '.version == $sha and .database.ok' "$RUNNER_TEMP/metrics.json" >/dev/null
+          jq -c '{version, environment, alerts: [.alerts[].key]}' "$RUNNER_TEMP/metrics.json"

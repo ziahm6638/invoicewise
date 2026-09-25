@@ -12,6 +12,7 @@ import {
   claimSettledObjectRemovalForDiscard,
   clearAcceptedObjectRemovalIntent,
   clearObjectRemovalPending,
+  countPendingIntakeJobs,
   createInbox,
   documentBindingIssue,
   enqueueWorkflowJob,
@@ -131,9 +132,27 @@ export type IntakeUploadResult =
         | "storage_unavailable"
         | "malformed_binding"
         | "reference_conflict"
-        | "superseded";
+        | "superseded"
+        | "queue_full";
       message: string;
     };
+
+/**
+ * Bounds on document-processing work waiting in the queue. Beyond them intake
+ * refuses new documents with the transient `queue_full` code (HTTP 429), so a
+ * burst cannot grow queued work, memory or provider spend without limit;
+ * mailbox and webhook callers retry later. See docs/operations.md.
+ */
+export const intakeQueueLimits = () => {
+  const read = (name: string, fallback: number) => {
+    const value = Number(process.env[name]);
+    return Number.isInteger(value) && value > 0 ? value : fallback;
+  };
+  return {
+    perWorkspace: read("INTAKE_MAX_PENDING_PER_WORKSPACE", 200),
+    total: read("INTAKE_MAX_PENDING_TOTAL", 1000),
+  };
+};
 
 export const intakeContentHash = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -289,6 +308,25 @@ const acceptIntake = async (
   storage: IntakeStorage,
   input: IntakeUploadInput,
 ): Promise<IntakeUploadResult> => {
+  // Checked before validation so a full queue costs no parser work. A replay
+  // of content this workspace already has is still answered normally.
+  const limits = intakeQueueLimits();
+  const pending = await countPendingIntakeJobs(db, { teamId: input.teamId });
+  if (
+    (pending.team >= limits.perWorkspace || pending.total >= limits.total) &&
+    !(await findInboxIntakeByContentHash(db, {
+      teamId: input.teamId,
+      contentHash: intakeContentHash(input.bytes),
+    }))
+  ) {
+    return {
+      status: "rejected",
+      code: "queue_full",
+      message:
+        "InvoiceWise is working through a backlog of documents. Send this one again in a few minutes.",
+    };
+  }
+
   const validation = await validateIntakeDocument({
     bytes: input.bytes,
     declaredMimeType: input.declaredMimeType,

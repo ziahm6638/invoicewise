@@ -25,7 +25,11 @@ export async function middleware(request: NextRequest) {
 
   const returnTo = `${newUrl.pathname}${nextUrl.search}`;
 
-  const hasSessionCookie = Boolean(getSessionCookie(request));
+  const hasSessionCookie = Boolean(
+    getSessionCookie(request, {
+      cookiePrefix: process.env.BETTER_AUTH_COOKIE_PREFIX || undefined,
+    }),
+  );
   const isPublicAuthPage = [
     "/login",
     "/signup",

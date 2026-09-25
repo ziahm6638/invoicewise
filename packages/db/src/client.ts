@@ -5,158 +5,65 @@ import * as schema from "./schema";
 
 export type DatabaseClientConfig = {
   primaryUrl: string;
-  replicaUrls?: {
-    fra: string;
-    sjc: string;
-    iad: string;
-  };
-  region?: string;
-  instance?: string;
   isDevelopment?: boolean;
-  /** Connections per pool; defaults to 8 in development and 12 otherwise. */
+  /**
+   * Connections in the pool. Defaults to `DATABASE_POOL_MAX`, else 8 in
+   * development and 10 otherwise. Each process holds its own pool, so the
+   * total a deployment can open is this bound times its pools (see
+   * docs/deployment.md#capacity).
+   */
   maxConnections?: number;
+};
+
+const poolMaxFromEnv = () => {
+  const value = Number(process.env.DATABASE_POOL_MAX);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
 };
 
 export function createDatabaseClient(config: DatabaseClientConfig) {
   const isDevelopment = config.isDevelopment ?? false;
-  const connectionsPerPool = config.maxConnections ?? (isDevelopment ? 8 : 12);
-  const connectionConfig = {
-    max: connectionsPerPool,
+  const maxConnections =
+    config.maxConnections ?? poolMaxFromEnv() ?? (isDevelopment ? 8 : 10);
+
+  const primaryPool = new Pool({
+    connectionString: config.primaryUrl,
+    max: maxConnections,
     idleTimeoutMillis: isDevelopment ? 5000 : 60000,
     connectionTimeoutMillis: 15000,
     maxUses: isDevelopment ? 100 : 0,
     allowExitOnIdle: true,
-  };
-
-  const primaryPool = new Pool({
-    connectionString: config.primaryUrl,
-    ...connectionConfig,
   });
-  const replicaPools = config.replicaUrls
-    ? {
-        fra: new Pool({
-          connectionString: config.replicaUrls.fra,
-          ...connectionConfig,
-        }),
-        sjc: new Pool({
-          connectionString: config.replicaUrls.sjc,
-          ...connectionConfig,
-        }),
-        iad: new Pool({
-          connectionString: config.replicaUrls.iad,
-          ...connectionConfig,
-        }),
-      }
-    : null;
 
   const primaryDb = drizzle(primaryPool, {
     schema,
     casing: "snake_case",
   });
-  const replicaDatabases = replicaPools
-    ? [
-        drizzle(replicaPools.fra, { schema, casing: "snake_case" }),
-        drizzle(replicaPools.iad, { schema, casing: "snake_case" }),
-        drizzle(replicaPools.sjc, { schema, casing: "snake_case" }),
-      ]
-    : [];
-  const replicaIndex =
-    config.region === "iad" ? 1 : config.region === "sjc" ? 2 : 0;
-  const db = withReplicas(
-    primaryDb,
-    replicaDatabases,
-    (replicas) => replicas[replicaIndex]!,
-  );
+  // One database: reads and writes share the primary. The replica wrapper
+  // keeps the `executeOnReplica`/`usePrimaryOnly` surface callers rely on.
+  const db = withReplicas(primaryDb, []);
 
+  /** Pool occupancy, for operator diagnostics only (never public health). */
   const getConnectionPoolStats = () => {
-    const getPoolStats = (pool: Pool, name: string) => {
-      try {
-        return {
-          name,
-          total: pool.options.max || 0,
-          idle: pool.idleCount || 0,
-          active: pool.totalCount - pool.idleCount,
-          waiting: pool.waitingCount || 0,
-          ended: pool.ended || false,
-        };
-      } catch (error) {
-        return {
-          name,
-          error: error instanceof Error ? error.message : String(error),
-          total: 0,
-          idle: 0,
-          active: 0,
-          waiting: 0,
-          ended: true,
-        };
-      }
-    };
-
-    const pools: Record<string, ReturnType<typeof getPoolStats>> = {
-      primary: getPoolStats(primaryPool, "primary"),
-    };
-    if (replicaPools) {
-      pools.fra = getPoolStats(replicaPools.fra, "fra");
-      pools.sjc = getPoolStats(replicaPools.sjc, "sjc");
-      pools.iad = getPoolStats(replicaPools.iad, "iad");
-    }
-
-    const poolArray = Object.values(pools);
-    const totalActive = poolArray.reduce(
-      (sum, pool) => sum + (pool.active || 0),
-      0,
-    );
-    const totalWaiting = poolArray.reduce(
-      (sum, pool) => sum + (pool.waiting || 0),
-      0,
-    );
-    const hasExhaustedPools = poolArray.some(
-      (pool) =>
-        (pool.active || 0) >= (pool.total || 0) || (pool.waiting || 0) > 0,
-    );
-    const totalConnections = connectionsPerPool * (replicaPools ? 4 : 1);
-
+    const active = primaryPool.totalCount - primaryPool.idleCount;
     return {
-      timestamp: new Date().toISOString(),
-      region: config.region || "unknown",
-      instance: config.instance || "local",
-      pools,
-      summary: {
-        totalConnections,
-        totalActive,
-        totalWaiting,
-        hasExhaustedPools,
-        utilizationPercent: Math.round((totalActive / totalConnections) * 100),
-      },
+      max: maxConnections,
+      open: primaryPool.totalCount,
+      idle: primaryPool.idleCount,
+      active,
+      waiting: primaryPool.waitingCount,
+      utilizationPercent: Math.round((active / maxConnections) * 100),
     };
   };
 
   const close = async () => {
-    await Promise.all(
-      [primaryPool, ...(replicaPools ? Object.values(replicaPools) : [])].map(
-        (pool) => pool.end(),
-      ),
-    );
+    await primaryPool.end();
   };
 
   return { close, db, getConnectionPoolStats, primaryDb };
 }
 
-const replicaUrls =
-  process.env.DATABASE_FRA_URL &&
-  process.env.DATABASE_SJC_URL &&
-  process.env.DATABASE_IAD_URL
-    ? {
-        fra: process.env.DATABASE_FRA_URL,
-        sjc: process.env.DATABASE_SJC_URL,
-        iad: process.env.DATABASE_IAD_URL,
-      }
-    : undefined;
 const defaultClient = createDatabaseClient({
   primaryUrl: process.env.DATABASE_PRIMARY_URL!,
-  replicaUrls,
-  region: process.env.FLY_REGION,
-  instance: process.env.FLY_ALLOC_ID,
   isDevelopment: process.env.NODE_ENV === "development",
 });
 

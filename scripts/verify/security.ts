@@ -211,6 +211,11 @@ export const SECRET_EXCEPTIONS: {
     reason: "synthetic verification provider stub",
   },
   {
+    path: "scripts/verify/lib.ts",
+    value: "invoicewise-verify-ops-token-0123456789abcdef",
+    reason: "synthetic verification operator metrics token",
+  },
+  {
     path: "scripts/verify/verify-selftest.test.ts",
     value: "re_testabcdefghijklmnopqrst",
     reason: "synthetic scanner positive control (contains 'test')",

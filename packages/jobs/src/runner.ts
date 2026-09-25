@@ -2,12 +2,17 @@ import {
   type WorkflowJob,
   claimWorkflowJobs,
   completeWorkflowJob,
+  countProviderCallsSince,
   failWorkflowJob,
   heartbeatWorkflowJob,
+  recordProviderUsage,
+  releaseWorkflowJob,
   retryWorkflowJob,
 } from "@invoicewise/db/queries";
+import { observeTypeSafeCalls } from "@invoicewise/documents";
 import { Config, Context, Effect, Either, Layer, Schema } from "effect";
 import { reconcileDeliveries } from "./delivery";
+import { observeNangoCalls } from "./nango";
 import { publishDeliveryFailureById } from "./webhooks";
 import {
   WorkflowDatabase,
@@ -31,7 +36,18 @@ export class WorkflowRepository extends Context.Tag(
       workerId: string,
       limit: number,
       leaseMs: number,
+      excludeNames?: readonly string[],
     ) => Effect.Effect<WorkflowJob[], WorkflowQueueError>;
+    /** Returns a job this worker still holds to the queue (shutdown drain). */
+    readonly release: (
+      id: string,
+      workerId: string,
+    ) => Effect.Effect<void, WorkflowQueueError>;
+    /** Calls recorded for one provider since the start of `since`'s hour. */
+    readonly providerCallsSince: (
+      provider: string,
+      since: Date,
+    ) => Effect.Effect<number, WorkflowQueueError>;
     readonly heartbeat: (
       id: string,
       workerId: string,
@@ -67,6 +83,12 @@ export class WorkflowRunnerSettings extends Context.Tag(
     readonly leaseMs: number;
     readonly retryBaseMs: number;
     readonly retryMaxMs: number;
+    /**
+     * TypeSafe calls allowed per UTC day. Once spent, document processing
+     * stays queued until the next day (other workflows keep running). Unset
+     * or 0 means no ceiling.
+     */
+    readonly typeSafeDailyCallLimit?: number;
   }
 >() {}
 
@@ -92,10 +114,25 @@ export const WorkflowRepositoryLive = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* WorkflowDatabase;
     return {
-      claim: (workerId: string, limit: number, leaseMs: number) =>
+      claim: (
+        workerId: string,
+        limit: number,
+        leaseMs: number,
+        excludeNames?: readonly string[],
+      ) =>
         queueAttempt(
-          () => claimWorkflowJobs(db, { workerId, limit, leaseMs }),
+          () =>
+            claimWorkflowJobs(db, { workerId, limit, leaseMs, excludeNames }),
           "Unable to claim workflows",
+        ),
+      release: (id: string, workerId: string) =>
+        queueAttempt(async () => {
+          await releaseWorkflowJob(db, { id, workerId });
+        }, "Unable to release workflow"),
+      providerCallsSince: (provider: string, since: Date) =>
+        queueAttempt(
+          () => countProviderCallsSince(db, provider, since),
+          "Unable to read provider usage",
         ),
       heartbeat: (id: string, workerId: string, leaseMs: number) =>
         ownedUpdate(
@@ -182,6 +219,9 @@ export const WorkflowRunnerSettingsLive = Layer.effect(
     retryMaxMs: Config.integer("WORKFLOW_RETRY_MAX_MS").pipe(
       Config.withDefault(60_000),
     ),
+    typeSafeDailyCallLimit: Config.integer("TYPESAFE_DAILY_CALL_LIMIT").pipe(
+      Config.withDefault(0),
+    ),
   }).pipe(
     Effect.map((config) => ({
       concurrency: Math.max(1, config.concurrency),
@@ -189,6 +229,7 @@ export const WorkflowRunnerSettingsLive = Layer.effect(
       leaseMs: Math.max(3000, config.leaseMs),
       retryBaseMs: Math.max(10, config.retryBaseMs),
       retryMaxMs: Math.max(10, config.retryBaseMs, config.retryMaxMs),
+      typeSafeDailyCallLimit: Math.max(0, config.typeSafeDailyCallLimit),
       workerId: crypto.randomUUID(),
     })),
   ),
@@ -278,15 +319,92 @@ const runClaimedWorkflow = (job: WorkflowJob) =>
         error: error.reason,
       }),
     );
-  }).pipe(Effect.scoped);
+  }).pipe(
+    Effect.scoped,
+    // Shutdown (a deploy or restart) interrupts in-flight work: hand the job
+    // straight back so the next runner claims it without waiting for the
+    // lease to expire and without spending one of its attempts.
+    Effect.onInterrupt(() =>
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const settings = yield* WorkflowRunnerSettings;
+        yield* repository.release(job.id, settings.workerId);
+        yield* Effect.logWarning("workflow_run_released").pipe(
+          Effect.annotateLogs({
+            event: "workflow_run_released",
+            workflowId: job.id,
+            workflow: job.name,
+            attempt: job.attempts,
+          }),
+        );
+      }).pipe(
+        Effect.catchAll((error) =>
+          Effect.logError("workflow_release_failed").pipe(
+            Effect.annotateLogs({
+              event: "workflow_release_failed",
+              workflowId: job.id,
+              workflow: job.name,
+              error: error.reason,
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+
+/** Workflows that spend TypeSafe calls; held back once the daily budget is spent. */
+export const PROVIDER_BUDGETED_WORKFLOWS = ["process-attachment"] as const;
+
+let providerBudgetExhausted = false;
+
+const startOfUtcDay = (now: Date) => {
+  const day = new Date(now);
+  day.setUTCHours(0, 0, 0, 0);
+  return day;
+};
+
+/**
+ * The workflows to leave queued this round. Reading usage fails open: a
+ * database error here also fails the claim itself, so nothing is held back
+ * on a guess.
+ */
+const providerBudgetExclusions = Effect.gen(function* () {
+  const repository = yield* WorkflowRepository;
+  const settings = yield* WorkflowRunnerSettings;
+  const limit = settings.typeSafeDailyCallLimit ?? 0;
+  if (limit <= 0) return [] as readonly string[];
+
+  const calls = yield* repository
+    .providerCallsSince("typesafe", startOfUtcDay(new Date()))
+    .pipe(Effect.orElseSucceed(() => 0));
+  const exhausted = calls >= limit;
+  if (exhausted !== providerBudgetExhausted) {
+    providerBudgetExhausted = exhausted;
+    yield* (exhausted ? Effect.logWarning : Effect.logInfo)(
+      exhausted ? "provider_budget_exhausted" : "provider_budget_available",
+    ).pipe(
+      Effect.annotateLogs({
+        event: exhausted
+          ? "provider_budget_exhausted"
+          : "provider_budget_available",
+        provider: "typesafe",
+        calls,
+        limit,
+      }),
+    );
+  }
+  return exhausted ? PROVIDER_BUDGETED_WORKFLOWS : ([] as readonly string[]);
+});
 
 export const runWorkflowBatch = Effect.gen(function* () {
   const repository = yield* WorkflowRepository;
   const settings = yield* WorkflowRunnerSettings;
+  const excludeNames = yield* providerBudgetExclusions;
   const jobs = yield* repository.claim(
     settings.workerId,
     settings.concurrency,
     settings.leaseMs,
+    excludeNames,
   );
   yield* Effect.forEach(
     jobs,
@@ -366,9 +484,51 @@ export const runWorkflows = Effect.gen(function* () {
   );
 });
 
+/**
+ * Records every TypeSafe and Nango call this process makes into
+ * `provider_usage` (counts, tokens and timings only). A failed write is
+ * dropped: metering never blocks or fails the work it measures.
+ */
+export const ProviderMeteringLive = Layer.scopedDiscard(
+  Effect.gen(function* () {
+    const { db } = yield* WorkflowDatabase;
+    const record = (event: Parameters<typeof recordProviderUsage>[1]) => {
+      recordProviderUsage(db, event).catch(() => undefined);
+    };
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        observeTypeSafeCalls((call) =>
+          record({
+            provider: "typesafe",
+            operation: "systemone",
+            outcome: call.outcome,
+            durationMs: call.durationMs,
+            inputTokens: call.inputTokens,
+            outputTokens: call.outputTokens,
+          }),
+        );
+        observeNangoCalls((call) =>
+          record({
+            provider: "nango",
+            operation: call.operation,
+            outcome: call.outcome,
+            durationMs: call.durationMs,
+          }),
+        );
+      }),
+      () =>
+        Effect.sync(() => {
+          observeTypeSafeCalls(undefined);
+          observeNangoCalls(undefined);
+        }),
+    );
+  }),
+);
+
 export const WorkflowRuntimeLive = Layer.mergeAll(
   WorkflowRepositoryLive,
   WorkflowHandlerLive,
   WorkflowRunnerSettingsLive,
   DeliveryReconcilerLive,
+  ProviderMeteringLive,
 ).pipe(Layer.provide(WorkflowInfrastructureLive));

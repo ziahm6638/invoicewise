@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# InvoiceWise operator monitor: one pass for one environment.
+#   invoicewise-monitor production|staging
+# Run every two minutes by invoicewise-monitor@<env>.timer on a host other
+# than the one serving that environment, so a dead host still alerts.
+#
+# Checks public readiness (API) and the sign-in page (dashboard), then reads
+# the alerts the API computes at /ops/metrics with the operator token. New,
+# repeating (every REPEAT_SECONDS) and resolved alerts are mailed to the
+# operator in one message per pass; a daily status mail after DIGEST_HOUR UTC
+# proves the monitor itself is alive. Mail carries alert keys, workflow and
+# provider names and numbers only, never invoice contents.
+#
+# Configuration: /etc/invoicewise-monitor/<env>.env (0600, written by
+# ops/monitor/install.sh from Infisical) and the SMTP login in
+# /etc/invoicewise-monitor/<env>.netrc, so no secret is ever on a command line.
+# See docs/operations.md#alerts.
+set -euo pipefail
+
+env_name=${1:?usage: invoicewise-monitor production|staging}
+config_dir=${MONITOR_CONFIG_DIR:-/etc/invoicewise-monitor}
+state_dir=${MONITOR_STATE_DIR:-/var/lib/invoicewise-monitor}/$env_name
+# shellcheck source=/dev/null
+. "$config_dir/$env_name.env"
+: "${API_URL:?}" "${APP_URL:?}" "${OPS_TOKEN:?}" "${SMTP_URL:?}" "${SMTP_USER:?}"
+: "${ALERT_FROM:?}" "${ALERT_TO:?}"
+repeat_seconds=${REPEAT_SECONDS:-21600}
+digest_hour=${DIGEST_HOUR:-08}
+netrc="$config_dir/$env_name.netrc"
+
+mkdir -p "$state_dir"
+exec 9>"$state_dir/lock"
+flock -n 9 || exit 0
+
+now=$(date -u +%s)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# key<TAB>severity<TAB>summary, one line per currently firing alert.
+current="$work/current"
+: >"$current"
+fire() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >>"$current"; }
+
+status_of() {
+  curl --silent --output "$2" --write-out '%{http_code}' --max-time 20 \
+    ${3:+--config "$3"} "$1" || true
+}
+
+ready=$(status_of "$API_URL/health/ready" "$work/ready")
+[ "$ready" = 200 ] ||
+  fire api_unready critical "API readiness returned HTTP ${ready:-none}: the API is down or cannot reach its database."
+
+app=$(status_of "$APP_URL/login" "$work/app")
+[ "$app" = 200 ] ||
+  fire app_unavailable critical "Dashboard sign-in page returned HTTP ${app:-none}."
+
+# The token goes to curl through a 0600 config file, not argv.
+printf 'header = "Authorization: Bearer %s"\n' "$OPS_TOKEN" >"$work/auth"
+chmod 600 "$work/auth"
+metrics_status=$(status_of "$API_URL/ops/metrics" "$work/metrics" "$work/auth")
+if [ "$metrics_status" = 200 ] && jq -e '.alerts | type == "array"' "$work/metrics" >/dev/null 2>&1; then
+  jq -r '.alerts[] | [.key, .severity, .summary] | @tsv' "$work/metrics" >>"$current"
+elif [ "$ready" = 200 ]; then
+  fire metrics_unavailable warning "Operator metrics returned HTTP ${metrics_status:-none}; alert rules could not be evaluated."
+fi
+
+# Previous state: key<TAB>severity<TAB>first_seen<TAB>last_notified<TAB>summary
+previous="$state_dir/firing"
+touch "$previous"
+next="$work/next"
+: >"$next"
+changes="$work/changes"
+: >"$changes"
+notify=false
+
+while IFS=$'\t' read -r key severity summary; do
+  [ -n "$key" ] || continue
+  prior=$(awk -F'\t' -v k="$key" '$1 == k' "$previous" | head -1)
+  if [ -z "$prior" ]; then
+    printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$severity" "$now" "$now" "$summary" >>"$next"
+    printf 'NEW      %-8s %s\n         %s\n' "$severity" "$key" "$summary" >>"$changes"
+    notify=true
+    continue
+  fi
+  first=$(printf '%s' "$prior" | cut -f3)
+  last=$(printf '%s' "$prior" | cut -f4)
+  old_severity=$(printf '%s' "$prior" | cut -f2)
+  if [ "$severity" != "$old_severity" ] || [ $((now - last)) -ge "$repeat_seconds" ]; then
+    last=$now
+    printf 'FIRING   %-8s %s (since %s)\n         %s\n' "$severity" "$key" \
+      "$(date -u -d "@$first" '+%Y-%m-%d %H:%M UTC')" "$summary" >>"$changes"
+    notify=true
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$severity" "$first" "$last" "$summary" >>"$next"
+done <"$current"
+
+while IFS=$'\t' read -r key severity first _last _summary; do
+  [ -n "$key" ] || continue
+  if ! cut -f1 "$current" | grep -qxF "$key"; then
+    printf 'RESOLVED %-8s %s (fired %s)\n' "$severity" "$key" \
+      "$(date -u -d "@$first" '+%Y-%m-%d %H:%M UTC')" >>"$changes"
+    notify=true
+  fi
+done <"$previous"
+
+send() {
+  local subject=$1 body=$2
+  {
+    printf 'From: %s\r\n' "$ALERT_FROM"
+    printf 'To: %s\r\n' "$ALERT_TO"
+    printf 'Subject: %s\r\n' "$subject"
+    printf 'Date: %s\r\n' "$(date -R)"
+    printf 'Content-Type: text/plain; charset=utf-8\r\n\r\n'
+    sed 's/$/\r/' "$body"
+  } >"$work/message"
+  curl --silent --show-error --max-time 60 --ssl-reqd --url "$SMTP_URL" \
+    --netrc-file "$netrc" --mail-from "$SMTP_USER" --mail-rcpt "$ALERT_TO" \
+    --upload-file "$work/message"
+}
+
+footer() {
+  printf '\nEnvironment: %s\nAPI: %s\nRunbook: docs/operations.md#alerts\n' \
+    "$env_name" "$API_URL"
+}
+
+firing_count=$(grep -c . "$current" || true)
+if $notify; then
+  {
+    cat "$changes"
+    footer
+  } >"$work/body"
+  subject="[InvoiceWise $env_name] $firing_count alert(s) firing"
+  [ "$firing_count" -gt 0 ] || subject="[InvoiceWise $env_name] all clear"
+  # State only advances once the operator has been told.
+  send "$subject" "$work/body"
+fi
+mv "$next" "$previous"
+
+# Daily status after DIGEST_HOUR UTC: a missing one means the monitor or its
+# host is down.
+today=$(date -u +%F)
+if [ "$(date -u +%H)" -ge "$digest_hour" ] &&
+  [ "$(cat "$state_dir/digest" 2>/dev/null || true)" != "$today" ]; then
+  {
+    printf 'Daily status, %s: %s alert(s) firing.\n\n' "$today" "$firing_count"
+    cut -f1,2 "$current" | sed 's/^/  /'
+    if [ "$metrics_status" = 200 ]; then
+      jq -r '
+        "Version \(.version), up \(.process.uptimeSeconds / 3600 | floor) h, RSS \(.process.rssBytes / 1048576 | floor) MiB",
+        "Queue: \([.queue[].due] | add // 0) due, \([.queue[].running] | add // 0) running, \([.queue[].failedLastHour] | add // 0) failed in the last hour",
+        "Intake p50/p95 (24 h): \(.latency.extraction.p50Seconds // "-") / \(.latency.extraction.p95Seconds // "-") s over \(.latency.extraction.count) document(s)",
+        "Intake to delivery p95 (24 h): \(.latency.delivery.p95Seconds // "-") s over \(.latency.delivery.count)",
+        "TypeSafe today: \(.budget.typesafe.callsToday) of \(.budget.typesafe.dailyLimit) calls, \(.cost.typesafe.inputTokensToday) in / \(.cost.typesafe.outputTokensToday) out tokens",
+        "Database \(.database.sizeBytes / 1048576 | floor) MiB; storage \(if .storage.freeBytes then "\(.storage.freeBytes / 1073741824 | floor) GiB free" else .storage.backend end)"
+      ' "$work/metrics" | sed 's/^/  /'
+    fi
+    footer
+  } >"$work/digest"
+  send "[InvoiceWise $env_name] daily status: $firing_count alert(s)" "$work/digest"
+  printf '%s' "$today" >"$state_dir/digest"
+fi

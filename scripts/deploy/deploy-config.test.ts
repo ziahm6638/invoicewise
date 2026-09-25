@@ -1,8 +1,10 @@
 /**
- * Production deploy wiring (config/deploy.yml, .kamal/secrets and the role
+ * Deploy wiring (config/deploy.yml, the staging destination
+ * config/deploy.staging.yml, .kamal/secrets{,.staging} and the role
  * entrypoints' preflight) must stay in step: a secret named in the Kamal
- * config but absent from .kamal/secrets fails the deploy, and a setting the
+ * config but absent from the secrets file fails the deploy, and a setting the
  * preflight requires but Kamal never provides stops a release from booting.
+ * Staging must share nothing stateful with production.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -15,11 +17,28 @@ const PREFLIGHT = join(ROOT, "scripts/deploy/require-env.sh");
 
 type EnvBlock = { clear?: Record<string, unknown>; secret?: string[] };
 type DeployConfig = {
+  service: string;
   env: EnvBlock;
-  servers: Record<string, { env?: EnvBlock }>;
+  volumes: string[];
+  builder: { remote?: string; args?: Record<string, string> };
+  servers: Record<
+    string,
+    {
+      hosts: string[];
+      env?: EnvBlock;
+      options?: Record<string, string>;
+      proxy: { host: string; healthcheck?: { path?: string } };
+    }
+  >;
   accessories: Record<
     string,
-    { env?: EnvBlock; port?: string; options?: Record<string, string> }
+    {
+      host: string;
+      env?: EnvBlock;
+      port?: string;
+      options?: Record<string, string>;
+      directories?: string[];
+    }
   >;
 };
 
@@ -28,22 +47,58 @@ type DeployConfig = {
 const secretSource = (entry: string) => entry.split(":").pop()!;
 const secretName = (entry: string) => entry.split(":")[0]!;
 
-const config = YAML.parse(
-  readFileSync(join(ROOT, "config/deploy.yml"), "utf8"),
-) as DeployConfig;
+const readYaml = (path: string) =>
+  YAML.parse(readFileSync(join(ROOT, path), "utf8")) as Record<string, unknown>;
 
-const kamalSecrets = readFileSync(join(ROOT, ".kamal/secrets"), "utf8")
-  .split("\n")
-  .filter((line) => line.trim() && !line.startsWith("#"))
-  .map((line) => line.split("=")[0]);
+/** Kamal's destination merge: hashes merge key by key, anything else replaces. */
+const deepMerge = (
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+): Record<string, unknown> => {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const current = merged[key];
+    merged[key] =
+      isHash(current) && isHash(value) ? deepMerge(current, value) : value;
+  }
+  return merged;
+};
+const isHash = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const config = readYaml("config/deploy.yml") as unknown as DeployConfig;
+const staging = deepMerge(
+  readYaml("config/deploy.yml"),
+  readYaml("config/deploy.staging.yml"),
+) as unknown as DeployConfig;
+
+const readSecrets = (path: string) =>
+  readFileSync(join(ROOT, path), "utf8")
+    .split("\n")
+    .filter((line) => line.trim() && !line.startsWith("#"))
+    .map((line) => line.split("=")[0]);
+const kamalSecrets = readSecrets(".kamal/secrets");
+const stagingSecrets = readSecrets(".kamal/secrets.staging");
+
+const namedSecrets = (deploy: DeployConfig) =>
+  new Set<string>(
+    [
+      ...(deploy.env.secret ?? []),
+      ...Object.values(deploy.servers).flatMap((s) => s.env?.secret ?? []),
+      ...Object.values(deploy.accessories).flatMap((a) => a.env?.secret ?? []),
+    ].map(secretSource),
+  );
 
 // Synthetic stand-ins; the test asserts none of them is ever printed.
 const SECRET_VALUE = "synthetic-secret-value-must-not-print";
 const ENCRYPTION_KEY = "ab".repeat(32);
 
 /** The environment Kamal gives a role's container, with synthetic secrets. */
-function roleEnv(role: string): Record<string, string> {
-  const blocks = [config.env, config.servers[role]?.env ?? {}];
+function roleEnv(
+  role: string,
+  deploy: DeployConfig = config,
+): Record<string, string> {
+  const blocks = [deploy.env, deploy.servers[role]?.env ?? {}];
   const env: Record<string, string> = {};
   for (const block of blocks) {
     for (const [key, value] of Object.entries(block.clear ?? {})) {
@@ -75,16 +130,22 @@ describe("deploy config", () => {
   });
 
   test(".kamal/secrets lists exactly the secrets the config names", () => {
-    const named = new Set<string>(
-      [
-        ...(config.env.secret ?? []),
-        ...Object.values(config.servers).flatMap((s) => s.env?.secret ?? []),
-        ...Object.values(config.accessories).flatMap(
-          (a) => a.env?.secret ?? [],
-        ),
-      ].map(secretSource),
+    expect([...kamalSecrets].sort()).toEqual([...namedSecrets(config)].sort());
+  });
+
+  test(".kamal/secrets.staging lists exactly the staging secrets", () => {
+    expect([...stagingSecrets].sort()).toEqual(
+      [...namedSecrets(staging)].sort(),
     );
-    expect([...kamalSecrets].sort()).toEqual([...named].sort());
+  });
+
+  test("bounds every role's memory and gates the API on readiness", () => {
+    expect(config.servers.web?.options?.memory).toBe("1g");
+    expect(config.servers.api?.options?.memory).toBe("2g");
+    expect(config.servers.api?.proxy.healthcheck?.path).toBe("/health/ready");
+    expect(config.servers.api?.env?.secret).toContain("OPS_TOKEN");
+    expect(roleEnv("api").DATABASE_POOL_MAX).toBe("8");
+    expect(Number(roleEnv("api").TYPESAFE_DAILY_CALL_LIMIT)).toBeGreaterThan(0);
   });
 
   test("never sets a secret in clear", () => {
@@ -95,6 +156,73 @@ describe("deploy config", () => {
       for (const key of Object.keys(block.clear ?? {})) {
         expect(kamalSecrets).not.toContain(key);
       }
+    }
+  });
+});
+
+describe("staging destination", () => {
+  const productionHosts = new Set([
+    ...Object.values(config.servers).flatMap((server) => server.hosts),
+    ...Object.values(config.accessories).map((accessory) => accessory.host),
+  ]);
+
+  test("runs on its own host, service, storage and data directories", () => {
+    expect(staging.service).not.toBe(config.service);
+    for (const server of Object.values(staging.servers)) {
+      for (const host of server.hosts) {
+        expect(productionHosts.has(host)).toBe(false);
+      }
+    }
+    for (const [name, accessory] of Object.entries(staging.accessories)) {
+      expect(productionHosts.has(accessory.host)).toBe(false);
+      for (const directory of accessory.directories ?? []) {
+        expect(config.accessories[name]?.directories ?? []).not.toContain(
+          directory,
+        );
+      }
+    }
+    expect(staging.volumes).not.toEqual(config.volumes);
+    expect(staging.builder.remote).not.toBe(config.builder.remote);
+  });
+
+  test("serves only staging origins and names its cookies apart", () => {
+    for (const role of ["web", "api"]) {
+      const env = roleEnv(role, staging);
+      expect(env.INVOICEWISE_ENVIRONMENT).toBe("staging");
+      expect(env.BETTER_AUTH_COOKIE_PREFIX).toBeTruthy();
+      for (const [key, value] of Object.entries(env)) {
+        // Every InvoiceWise origin is a staging one (providers stay as-is).
+        if (!/^https:\/\/[^/]*invoicewise\.uk/.test(value)) continue;
+        expect(`${key}=${value}`).toContain("staging");
+      }
+      expect(env.REDIS_URL).toContain("invoicewise-staging-redis");
+    }
+    expect(roleEnv("api", staging).NANGO_BASE_URL).toBe(
+      "http://invoicewise-staging-nango:3003",
+    );
+    expect(Object.values(staging.builder.args ?? {}).join(" ")).not.toContain(
+      "//app.invoicewise.uk",
+    );
+    expect(staging.servers.web?.proxy.host).toBe("staging.invoicewise.uk");
+    expect(staging.servers.api?.proxy.host).toBe("api-staging.invoicewise.uk");
+  });
+
+  for (const role of ["web", "api"]) {
+    test(`${role}: the staging config satisfies the preflight`, () => {
+      const result = preflight(role, roleEnv(role, staging));
+      expect(result.output).toBe("");
+      expect(result.exitCode).toBe(0);
+    });
+  }
+
+  test("refuses staging with production's cookie names", () => {
+    for (const prefix of ["", "better-auth"]) {
+      const result = preflight("web", {
+        ...roleEnv("web", staging),
+        BETTER_AUTH_COOKIE_PREFIX: prefix,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain("BETTER_AUTH_COOKIE_PREFIX");
     }
   });
 });
@@ -187,6 +315,34 @@ describe("production preflight", () => {
     expect(result.exitCode).toBe(1);
     expect(result.output).toContain("MIDDAY_ENCRYPTION_KEY");
     expect(result.output).not.toContain(badKey);
+  });
+
+  test("refuses malformed bounds, plain-http origins and a short ops token", () => {
+    for (const [name, value, message] of [
+      ["DATABASE_POOL_MAX", "0", "DATABASE_POOL_MAX must be a positive"],
+      [
+        "WORKFLOW_CONCURRENCY",
+        "four",
+        "WORKFLOW_CONCURRENCY must be a positive",
+      ],
+      [
+        "TYPESAFE_DAILY_CALL_LIMIT",
+        "1e3",
+        "TYPESAFE_DAILY_CALL_LIMIT must be a positive",
+      ],
+      [
+        "BETTER_AUTH_URL",
+        "http://app.invoicewise.uk",
+        "BETTER_AUTH_URL must be an https URL",
+      ],
+      ["OPS_TOKEN", "short-synthetic", "OPS_TOKEN must be at least 32"],
+      ["INVOICEWISE_ENVIRONMENT", "prod", "INVOICEWISE_ENVIRONMENT must be"],
+    ] as const) {
+      const result = preflight("api", { ...roleEnv("api"), [name]: value });
+      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain(message);
+      expect(result.output).not.toContain("short-synthetic");
+    }
   });
 
   test("rejects an unknown role", () => {

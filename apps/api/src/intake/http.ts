@@ -21,10 +21,14 @@ export type BoundedFormResult =
   | { ok: true; formData: ParsedForm }
   | { ok: false; code: "too_large" | "malformed"; message: string };
 
-const json = (body: unknown, status: number) =>
+const json = (
+  body: unknown,
+  status: number,
+  headers: Record<string, string> = {},
+) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
   });
 
 const tooLargeBody = () => {
@@ -129,9 +133,14 @@ export async function handleInvoiceIntake(
 ): Promise<Response> {
   const parsed = await readBoundedFormData(request, MAX_INTAKE_REQUEST_BYTES);
   if (!parsed.ok) {
+    // The rest of the body may still be arriving. Closing the connection
+    // stops a reverse proxy (kamal-proxy) from reusing it for another
+    // client's request, which would otherwise stall behind the unread bytes
+    // and fail with a 502.
     return json(
       { error: parsed.message, code: parsed.code },
       parsed.code === "too_large" ? 413 : 400,
+      { connection: "close" },
     );
   }
 
@@ -150,6 +159,11 @@ export async function handleInvoiceIntake(
   });
 
   if (result.status === "rejected") {
+    if (result.code === "queue_full") {
+      return json({ error: result.message, code: result.code }, 429, {
+        "retry-after": "120",
+      });
+    }
     const status =
       result.code === "too_large" || result.code === "image_too_large"
         ? 413

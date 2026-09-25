@@ -608,6 +608,61 @@ suite("document intake ownership over real HTTP", () => {
     expect(afterReplay.length).toBe(invoicePdf.byteLength);
   }, 60_000);
 
+  test("a full processing queue refuses new documents with a retryable 429", async () => {
+    const owner = await createUser("intake-backpressure");
+    const teamId = owner.personalTeamId;
+    const first = await upload(
+      owner.cookie,
+      invoicePdf,
+      "invoice.pdf",
+      "application/pdf",
+    );
+    expect(first.status).toBe(200);
+
+    const previous = process.env.INTAKE_MAX_PENDING_PER_WORKSPACE;
+    process.env.INTAKE_MAX_PENDING_PER_WORKSPACE = "1";
+    try {
+      // One job is pending for this workspace, so a new document waits.
+      const refused = await fetch(`${BASE}/api/storage/upload`, {
+        method: "POST",
+        headers: { origin: BASE, cookie: owner.cookie },
+        body: (() => {
+          const form = new FormData();
+          form.set(
+            "file",
+            new File([Buffer.from(buildPdf(2))], "next.pdf", {
+              type: "application/pdf",
+            }),
+          );
+          return form;
+        })(),
+      });
+      expect(refused.status).toBe(429);
+      expect(refused.headers.get("retry-after")).toBe("120");
+      expect(((await refused.json()) as { code?: string }).code).toBe(
+        "queue_full",
+      );
+      expect(await inboxRowsFor(teamId)).toHaveLength(1);
+      expect(await workflowJobsFor(teamId)).toHaveLength(1);
+
+      // A replay of an accepted document is still answered, not refused.
+      const replay = await upload(
+        owner.cookie,
+        invoicePdf,
+        "invoice.pdf",
+        "application/pdf",
+      );
+      expect(replay.status).toBe(200);
+      expect(replay.body?.id).toBe(first.body?.id);
+    } finally {
+      if (previous === undefined) {
+        Reflect.deleteProperty(process.env, "INTAKE_MAX_PENDING_PER_WORKSPACE");
+      } else {
+        process.env.INTAKE_MAX_PENDING_PER_WORKSPACE = previous;
+      }
+    }
+  }, 60_000);
+
   test("a second workspace cannot process, sign, read or delete another workspace document", async () => {
     const ownerA = await createUser("intake-owner-a");
     const ownerB = await createUser("intake-owner-b");
@@ -937,7 +992,7 @@ suite("document intake ownership over real HTTP", () => {
     }[] = [];
 
     const slowly = async <T>(stage: string, work: () => Promise<T>) => {
-      const { active } = narrow.getConnectionPoolStats().pools.primary!;
+      const { active } = narrow.getConnectionPoolStats();
       const probe = await Promise.race([
         narrow.primaryDb.execute(orm.sql`select 1`).then(() => "ran" as const),
         // Generous guard: a free connection answers in milliseconds even on a
@@ -1419,6 +1474,8 @@ suite("document intake ownership over real HTTP", () => {
       storage: intakeStorage(),
     });
     expect(response.status).toBe(413);
+    // The unread remainder must not stay on a connection a proxy reuses.
+    expect(response.headers.get("connection")).toBe("close");
     expect(await inboxRowsFor(teamId)).toHaveLength(0);
     expect(await workflowJobsFor(teamId)).toHaveLength(0);
   }, 60_000);

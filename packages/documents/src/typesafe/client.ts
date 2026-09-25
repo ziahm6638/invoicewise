@@ -107,60 +107,139 @@ const responseError = (status: number): TypeSafeError =>
     retryable: status === 429 || status >= 500,
   });
 
+/**
+ * One finished TypeSafe call: timing, outcome and token usage only. The
+ * request and response bodies are never part of the event.
+ */
+export type TypeSafeCallEvent = {
+  durationMs: number;
+  outcome: "ok" | "failed" | "throttled";
+  status?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+};
+
+export type TypeSafeCallObserver = (event: TypeSafeCallEvent) => void;
+
+let processCallObserver: TypeSafeCallObserver | undefined;
+
+/**
+ * Registers the process-wide observer every TypeSafe client reports to (the
+ * workflow runner records provider usage with it). Pass `undefined` to stop.
+ */
+export const observeTypeSafeCalls = (
+  observer: TypeSafeCallObserver | undefined,
+) => {
+  processCallObserver = observer;
+};
+
+const notify = (
+  observer: TypeSafeCallObserver | undefined,
+  event: TypeSafeCallEvent,
+) => {
+  if (!observer) return;
+  try {
+    observer(event);
+  } catch {
+    // Metering must never change the outcome of the call it measures.
+  }
+};
+
 export const makeTypeSafe = (config: {
   apiKey: string;
   baseUrl: string;
   model: string;
   fetch?: typeof fetch;
+  /** Defaults to the process-wide observer from `observeTypeSafeCalls`. */
+  onCall?: TypeSafeCallObserver;
 }): TypeSafe["Type"] => ({
-  evaluate: ({ state, questions }) =>
-    Effect.tryPromise({
-      try: async () => {
-        const response = await (config.fetch ?? fetch)(
-          `${config.baseUrl.replace(/\/$/, "")}/v1/systemone`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${config.apiKey}`,
-              Accept: "application/json",
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ state, model: config.model, questions }),
-            signal: AbortSignal.timeout(30_000),
-          },
-        );
-        if (!response.ok) throw responseError(response.status);
-        return response.json() as Promise<unknown>;
-      },
-      catch: (error) =>
-        error instanceof TypeSafeError
-          ? error
-          : new TypeSafeError({
-              reason: "TypeSafe is unavailable",
-              retryable: true,
+  evaluate: (input) =>
+    Effect.suspend(() => {
+      const startedAt = performance.now();
+      const observer = config.onCall ?? processCallObserver;
+      const elapsed = () => performance.now() - startedAt;
+      return requestTypeSafe(config, input).pipe(
+        Effect.tap((response) =>
+          Effect.sync(() =>
+            notify(observer, {
+              durationMs: elapsed(),
+              outcome: "ok",
+              inputTokens: response.usage.inputTokens,
+              outputTokens: response.usage.outputTokens,
             }),
-    }).pipe(
-      Effect.flatMap((value) =>
-        Schema.decodeUnknown(WireResponse)(value).pipe(
-          Effect.mapError(
-            () =>
-              new TypeSafeError({
-                reason: "TypeSafe returned an invalid response",
-                retryable: false,
-              }),
           ),
         ),
-      ),
-      Effect.map((response) => ({
-        model: response.model,
-        answers: response.answers,
-        usage: {
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-        },
-      })),
-    ),
+        Effect.tapError((error) =>
+          Effect.sync(() =>
+            notify(observer, {
+              durationMs: elapsed(),
+              outcome: error.status === 429 ? "throttled" : "failed",
+              status: error.status,
+            }),
+          ),
+        ),
+      );
+    }),
 });
+
+const requestTypeSafe = (
+  config: {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+    fetch?: typeof fetch;
+  },
+  {
+    state,
+    questions,
+  }: { state: unknown; questions: Record<string, TypeSafeQuestion> },
+): Effect.Effect<TypeSafeResponse, TypeSafeError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const response = await (config.fetch ?? fetch)(
+        `${config.baseUrl.replace(/\/$/, "")}/v1/systemone`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ state, model: config.model, questions }),
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+      if (!response.ok) throw responseError(response.status);
+      return response.json() as Promise<unknown>;
+    },
+    catch: (error) =>
+      error instanceof TypeSafeError
+        ? error
+        : new TypeSafeError({
+            reason: "TypeSafe is unavailable",
+            retryable: true,
+          }),
+  }).pipe(
+    Effect.flatMap((value) =>
+      Schema.decodeUnknown(WireResponse)(value).pipe(
+        Effect.mapError(
+          () =>
+            new TypeSafeError({
+              reason: "TypeSafe returned an invalid response",
+              retryable: false,
+            }),
+        ),
+      ),
+    ),
+    Effect.map((response) => ({
+      model: response.model,
+      answers: response.answers,
+      usage: {
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+      },
+    })),
+  );
 
 export const TypeSafeLive = Layer.effect(
   TypeSafe,

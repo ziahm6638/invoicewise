@@ -45,3 +45,4 @@ export * from "./workflows";
 export * from "./webhooks";
 export * from "./oauth-flow";
 export * from "./oauth-applications";
+export * from "./operations";

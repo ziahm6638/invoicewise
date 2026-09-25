@@ -1518,6 +1518,38 @@ export const workflowJobs = pgTable(
 );
 
 /**
+ * Hourly totals of outbound provider calls (TypeSafe, Nango), written by the
+ * workflow runner after each call. Holds counts, tokens and timings only,
+ * never request or response content. Read by the operator metrics endpoint
+ * and by the daily provider budget that pauses extraction when spent.
+ */
+export const providerUsage = pgTable(
+  "provider_usage",
+  {
+    hour: timestamp({ withTimezone: true, mode: "string" }).notNull(),
+    provider: text().notNull(),
+    operation: text().notNull(),
+    calls: integer().default(0).notNull(),
+    failures: integer().default(0).notNull(),
+    throttled: integer().default(0).notNull(),
+    inputTokens: bigint("input_tokens", { mode: "number" })
+      .default(0)
+      .notNull(),
+    outputTokens: bigint("output_tokens", { mode: "number" })
+      .default(0)
+      .notNull(),
+    totalMs: bigint("total_ms", { mode: "number" }).default(0).notNull(),
+    maxMs: integer("max_ms").default(0).notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.hour, table.provider, table.operation],
+      name: "provider_usage_pkey",
+    }),
+  ],
+);
+
+/**
  * A provider connection captured when its workspace was deleted, so cleanup
  * can still revoke it after the workspace's own rows are gone. A mailbox keeps
  * only the encrypted refresh token, and only until it has been revoked.
