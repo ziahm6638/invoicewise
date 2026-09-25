@@ -50,7 +50,7 @@ export async function readBoundedBody(
   request: Request,
   maxBytes: number,
 ): Promise<
-  | { ok: true; bytes: Uint8Array }
+  | { ok: true; bytes: Uint8Array<ArrayBuffer> }
   | { ok: false; code: "too_large" | "malformed"; message: string }
 > {
   const declaredLength = Number(request.headers.get("content-length"));
