@@ -883,7 +883,11 @@ suite("invoice activity and operator recovery over real HTTP", () => {
 
     const view = await trpc(owner.cookie, "inbox.activity", { id: invoiceId });
     expect(
-      (view.data.entries as Json[]).find((entry) => entry.stage === "matching"),
+      (view.data.entries as Json[]).find(
+        (entry) =>
+          entry.stage === "matching" &&
+          (entry.refs as Json).jobId === matchJob!.id,
+      ),
     ).toMatchObject({
       title: "Matching to authorization sources: failed",
       status: "failed",
@@ -1002,9 +1006,15 @@ suite("invoice activity and operator recovery over real HTTP", () => {
         .from(schema.webhookDeliveries)
         .where(orm.eq(schema.webhookDeliveries.invoiceId, invoiceId))
         .then(([row]) => row);
+    // The invoice is also reconciled (no sources: unmatched), so no queued
+    // work is left on it.
     expect(
       await runWorker(
-        async () => (await deliveryRow())?.status === "succeeded",
+        async () =>
+          (await deliveryRow())?.status === "succeeded" &&
+          (await jobsFor(teamId, "reconcile-invoice")).every(
+            (job) => job.status === "succeeded",
+          ),
       ),
     ).toBe(true);
 

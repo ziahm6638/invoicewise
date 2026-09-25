@@ -56,7 +56,7 @@ import {
 } from "./reconciliation";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
 import { linkInvoiceSources, matchInvoice } from "./source-matching";
-import { required } from "./verify-support";
+import { enableXeroPosting, required, xeroConnectStub } from "./verify-support";
 
 const runBatch = () =>
   Effect.runPromise(
@@ -124,6 +124,8 @@ async function main() {
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
+      const connectCheck = xeroConnectStub(request, url);
+      if (connectCheck) return connectCheck;
       if (request.method === "GET" && url.pathname === "/connections") {
         return Response.json({
           connections: [
@@ -202,6 +204,7 @@ async function main() {
       provider: "xero",
       connectionId: "xero-connection",
     });
+    await enableXeroPosting(db, workspace);
     // Discrepancies and unresolved reconciliations are held; an invoice
     // with no source at all is still delivered.
     const policy = await saveDeliveryPolicy(db, {
