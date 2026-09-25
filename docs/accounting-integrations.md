@@ -162,13 +162,15 @@ invoice's `accounting` posting status, provider ID, error, retryability,
 revision and timestamps.
 
 A post is scheduled in the same transaction that completes processing, while
-an accounting connection is active. Its status is `queued` until it settles as
+an accounting connection is active and the workspace's
+[delivery rules](delivery.md#delivery-rules) let the invoice through. Its status is `queued` until it settles as
 `posted`, `already_posted`, `failed` (after the final attempt, or at once
 when validation blocks it; earlier failures keep it `queued` with the last
 error), `needs_review` (held as a possible duplicate, above) or `cancelled`
 (the connection was disconnected or the invoice deleted before it ran). The
 per-invoice delivery retry re-drives `failed`, `needs_review` and `cancelled`
-posts the same way this route does. Reprocessing an invoice
+posts the same way this route does; neither re-posts an invoice whose current
+revision the delivery rules hold. Reprocessing an invoice
 never posts a second bill, and a correction of a posted invoice keeps its
 bill or updates it in place (above). See
 [Processing-to-delivery handoff](delivery.md#processing-to-delivery-handoff).

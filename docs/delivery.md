@@ -435,7 +435,7 @@ through, or ends in a visible state (held, dismissed or a terminal outcome).
   role, as `POST /accounting/invoices/:id/retry` does, and for a member the
   accounting intent is left unchanged and reported as `admin_required` (see
   [permissions](permissions.md)). A retry cannot change which destinations
-  exist.
+  exist or clear a [delivery-rules](#delivery-rules) hold.
 - **Delivered state.** The dashboard shows *Held*, *Delivering*,
   *Delivered*, *Delivery failed* or *Not delivered* from the current
   revision's decision and destination outcomes: an unresolved hold is
