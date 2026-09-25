@@ -667,7 +667,7 @@ describe("manual allocations", () => {
     });
     expect(issues).toEqual([]);
     expect(allocations.map((a) => [a.sourceId, a.amount, a.basis])).toEqual([
-      ["po-55120", "2000.00", "manual"],
+      ["po-55120", "2000.00", "invoice_line"],
       ["job-1042", "1000.00", "manual"],
     ]);
   });

@@ -1228,10 +1228,9 @@ export function reconcileInvoice(input: ReconcileInput): ReconciliationResult {
         UNIT_SCALE,
       );
       const beforeAmount = parseSignedDecimal(prior?.amount ?? "0", 2) ?? 0n;
-      const beforeQuantity = parseSignedDecimal(
-        prior?.quantity ?? null,
-        UNIT_SCALE,
-      );
+      const beforeQuantity = prior
+        ? parseSignedDecimal(prior.quantity, UNIT_SCALE)
+        : 0n;
       const mineAmount = mine.some((item) => item.amount === null)
         ? null
         : mine.reduce(
@@ -1254,9 +1253,11 @@ export function reconcileInvoice(input: ReconcileInput): ReconciliationResult {
             ? beforeAmount + mineAmount
             : beforeAmount;
       const afterQuantity =
-        mineQuantity === null || authorizedQuantity === null
+        mineQuantity === null ||
+        authorizedQuantity === null ||
+        beforeQuantity === null
           ? null
-          : (beforeQuantity ?? 0n) + (counted ? mineQuantity : 0n);
+          : beforeQuantity + (counted ? mineQuantity : 0n);
       reconciled.lineBalances.push({
         reference,
         description: authorized.description,
@@ -1306,6 +1307,7 @@ export function reconcileInvoice(input: ReconcileInput): ReconciliationResult {
       if (
         mineQuantity !== null &&
         mineQuantity > 0n &&
+        beforeQuantity !== null &&
         afterQuantity !== null &&
         authorizedQuantity !== null &&
         afterQuantity - authorizedQuantity >
@@ -1314,7 +1316,7 @@ export function reconcileInvoice(input: ReconcileInput): ReconciliationResult {
         discrepancies.push(
           finding(
             "quantity_over_authorized",
-            `${label} line ${reference} (${authorized.description}) authorizes a quantity of ${units(authorizedQuantity)}; ${units(beforeQuantity ?? 0n)} was already invoiced and this invoice adds ${units(mineQuantity)}.`,
+            `${label} line ${reference} (${authorized.description}) authorizes a quantity of ${units(authorizedQuantity)}; ${units(beforeQuantity)} was already invoiced and this invoice adds ${units(mineQuantity)}.`,
             {
               ...at,
               sourceLineReference: reference,
@@ -1322,7 +1324,7 @@ export function reconcileInvoice(input: ReconcileInput): ReconciliationResult {
                 invoice: { quantity: units(mineQuantity) },
                 source: {
                   authorizedQuantity: units(authorizedQuantity),
-                  committedQuantityBefore: units(beforeQuantity ?? 0n),
+                  committedQuantityBefore: units(beforeQuantity),
                 },
               },
             },

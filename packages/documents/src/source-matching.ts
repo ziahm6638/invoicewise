@@ -1303,6 +1303,7 @@ export function manualAllocations(input: {
     }
     seen.add(key);
     let amount: string | null = null;
+    let basis: SourceAllocationBasis = "manual";
     if (
       allocation.amount !== undefined &&
       allocation.amount !== null &&
@@ -1319,6 +1320,7 @@ export function manualAllocations(input: {
     } else if (lineIndex !== null) {
       const line = asRecord((record.lineItems as unknown[])[lineIndex]);
       amount = signedAmount(input.extraction, finite(line.total));
+      basis = "invoice_line";
     }
     if (target.currency && currency && target.currency !== currency) {
       issues.push(
@@ -1332,7 +1334,7 @@ export function manualAllocations(input: {
       invoiceLineIndex: lineIndex,
       amount,
       currency,
-      basis: "manual",
+      basis,
     });
   });
   for (const target of input.targets) {

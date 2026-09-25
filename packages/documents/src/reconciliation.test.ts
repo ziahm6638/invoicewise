@@ -12,7 +12,7 @@ import {
   scopeKey,
   scopeQuestionsFor,
 } from "./reconciliation";
-import type { SourceAllocation } from "./source-matching";
+import { type SourceAllocation, manualAllocations } from "./source-matching";
 
 const PO = "source-po";
 
@@ -261,6 +261,29 @@ describe("partial and cumulative invoicing", () => {
       remainingQuantity: "0",
       remainingAmount: "0.00",
     });
+  });
+
+  test("an earlier invoice without a quantity leaves the line's quantity balance unknown", () => {
+    const result = reconcile({
+      extraction: extraction({
+        lineItems: [invoiceLine("Oak boards", 60, 20, 1000)],
+      }),
+      prior: {
+        amount: "1000.00",
+        invoices: 1,
+        uncounted: 0,
+        lines: [{ reference: "1", amount: "1000.00", quantity: null }],
+      },
+    });
+    expect(result.sources[0]!.lineBalances[0]).toMatchObject({
+      committedQuantityBefore: null,
+      invoicedQuantity: "60",
+      remainingQuantity: null,
+      remainingAmount: "0.00",
+    });
+    expect(codes(result.discrepancies)).not.toContain(
+      "quantity_over_authorized",
+    );
   });
 
   test("a third invoice past the remainder is overbilling, by amount and by quantity", () => {
@@ -547,6 +570,53 @@ describe("what is not counted or not compared", () => {
     // Unit prices printed net are not compared with gross ones.
     expect(source!.lines[0]!.rate.outcome).toBe("not_compared");
     expect(result.status).toBe("reconciled");
+  });
+
+  test("an admin's line allocation without an amount is converted like a matched line", () => {
+    const inclusive = extraction({
+      netAmount: 1000,
+      vatAmount: 200,
+      grossAmount: 1200,
+      amountsIncludeTax: true,
+      lineItems: [invoiceLine("Oak boards", 50, 24, 1200, 200)],
+    });
+    const target = {
+      link: match().links[0]!,
+      lines: terms().lines,
+      currency: "GBP",
+    };
+    const reconcileManual = (amount?: string) => {
+      const { allocations, issues } = manualAllocations({
+        extraction: inclusive,
+        targets: [target],
+        allocations: [
+          {
+            sourceId: PO,
+            sourceLineReference: "1",
+            invoiceLineIndex: 0,
+            amount,
+          },
+        ],
+      });
+      expect(issues).toEqual([]);
+      return reconcile({
+        extraction: inclusive,
+        validation: validation({ taxBasis: "inclusive" }),
+        match: match({ allocations }),
+      });
+    };
+    const copied = reconcileManual();
+    expect(copied.sources[0]!.balance).toMatchObject({
+      invoiced: "1000.00",
+      remaining: "1000.00",
+    });
+    expect(copied.status).toBe("reconciled");
+    // An amount the admin states is taken as given, in the source's basis.
+    const stated = reconcileManual("1100.00");
+    expect(stated.sources[0]!.balance).toMatchObject({
+      invoiced: "1100.00",
+      remaining: "900.00",
+    });
   });
 
   test("a line without its tax cannot be moved to a gross basis", () => {
