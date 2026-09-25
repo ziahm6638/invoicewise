@@ -637,10 +637,23 @@ export async function reconcileInvoiceOperations(
     rescheduled += 1;
   }
   for (const document of stalled) {
-    const settled = await recordInboxProcessingFailure(db, {
-      id: document.id,
-      teamId: document.teamId,
-      error: TEMPORARY_PROCESSING_FAILURE,
+    const settled = await db.transaction(async (tx) => {
+      const executor = asDatabase(tx);
+      await lockInvoiceForAction(executor, {
+        id: document.id,
+        teamId: document.teamId,
+      });
+      const [still] = await listStalledProcessing(executor, {
+        teamId: document.teamId,
+        invoiceId: document.id,
+        limit: 1,
+      });
+      if (!still) return undefined;
+      return recordInboxProcessingFailure(executor, {
+        id: document.id,
+        teamId: document.teamId,
+        error: TEMPORARY_PROCESSING_FAILURE,
+      });
     });
     if (settled) failed += 1;
   }

@@ -96,6 +96,38 @@ const retryDelivery = async (
   return result;
 };
 
+/** Why a delivery retry re-queued nothing, or null when something restarted. */
+const retryNotStartedReason = (
+  result: Awaited<ReturnType<typeof retryDelivery>>,
+) => {
+  if (
+    result.webhooks.requeued > 0 ||
+    result.accounting === "requeued" ||
+    result.billUpdate === "requeued"
+  ) {
+    return null;
+  }
+  if (
+    result.accounting === "in_progress" ||
+    result.billUpdate === "in_progress"
+  ) {
+    return "Already being sent";
+  }
+  if (
+    result.accounting === "admin_required" ||
+    result.billUpdate === "admin_required"
+  ) {
+    return "Re-sending to accounting needs an admin";
+  }
+  if (
+    result.accounting === "no_active_connection" ||
+    result.billUpdate === "no_active_connection"
+  ) {
+    return "Reconnect accounting first";
+  }
+  return "Nothing failed to retry";
+};
+
 export const inboxRouter = createTRPCRouter({
   get: workspaceProcedure
     .input(getInboxSchema.optional())
@@ -206,11 +238,20 @@ export const inboxRouter = createTRPCRouter({
           } else if (input.action === "rerun_questions") {
             await rerunQuestions(db, { teamId: teamId!, ...item });
           } else {
-            await retryDelivery(db, {
+            const retried = await retryDelivery(db, {
               teamId: teamId!,
               id: item.id,
               teamRole: teamRole ?? null,
             });
+            const notStarted = retryNotStartedReason(retried);
+            if (notStarted) {
+              results.push({
+                id: item.id,
+                ok: false as const,
+                error: notStarted,
+              });
+              continue;
+            }
           }
           results.push({ id: item.id, ok: true as const, error: null });
         } catch (error) {
