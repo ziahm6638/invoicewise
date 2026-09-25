@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { generateInboundLocalPart } from "@invoicewise/db/queries";
 import {
   inboundEmailLive,
@@ -79,7 +80,11 @@ describe("inbound headers", () => {
     const headers = await readInboundEmailHeaders(raw("Subject: hi"));
     expect(headers.messageId).toBeNull();
     expect(inboundMessageKey(headers.messageId, "ab12")).toBe("sha256:ab12");
-    expect(inboundMessageKey("<m@x>", "ab12")).toBe("mid:<m@x>");
+    const key = inboundMessageKey("<m@x>", "ab12");
+    expect(key).toBe(
+      `mid:${createHash("sha256").update("<m@x>").digest("hex")}`,
+    );
+    expect(key).not.toContain("m@x");
   });
 });
 

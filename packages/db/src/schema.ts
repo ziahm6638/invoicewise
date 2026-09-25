@@ -2301,8 +2301,10 @@ export type InboundEmailAttachmentOutcome = {
 
 /**
  * One message delivered to a workspace address. `(team_id, message_key)` is
- * the redelivery identity (the Message-ID header, else the raw bytes' hash).
- * `raw` holds the MIME source only until the message is processed.
+ * the redelivery identity (a hash of the Message-ID header, else of the raw
+ * bytes). `raw` holds the MIME source only until the message is processed,
+ * or until retention clears it from a failed one; retention also clears the
+ * header fields (docs/data-lifecycle.md).
  */
 export const inboundEmails = pgTable(
   "inbound_emails",

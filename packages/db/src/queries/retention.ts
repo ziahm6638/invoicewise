@@ -1,5 +1,6 @@
 import type { Database, PrimaryDatabase } from "@db/client";
 import {
+  inboundEmails,
   inbox,
   inboxRedeliveries,
   webhookDeliveries,
@@ -113,6 +114,77 @@ export async function clearExpiredRedeliveryReferences(
       id: inboxRedeliveries.id,
       teamId: inboxRedeliveries.teamId,
     });
+}
+
+/**
+ * Drops the MIME source a failed inbound message kept for an operator once
+ * the failed-upload period has passed. A processed message dropped it when
+ * it settled.
+ */
+export async function clearExpiredInboundEmailSources(
+  db: Db,
+  params: { before: Date; limit: number },
+) {
+  const due = and(
+    eq(inboundEmails.status, "failed"),
+    isNotNull(inboundEmails.raw),
+    lt(inboundEmails.createdAt, params.before.toISOString()),
+  );
+  const candidates = db
+    .select({ id: inboundEmails.id })
+    .from(inboundEmails)
+    .where(due)
+    .limit(params.limit);
+
+  return db
+    .update(inboundEmails)
+    .set({ raw: null })
+    .where(and(inArray(inboundEmails.id, candidates), due))
+    .returning({ id: inboundEmails.id, teamId: inboundEmails.teamId });
+}
+
+/**
+ * Clears what a settled inbound message kept from its headers once the
+ * source email period has passed. The row (recipient, size, hashes, outcome
+ * and linked invoices) stays, and redelivery is still recognised by the
+ * hashed `message_key`.
+ */
+export async function clearExpiredInboundEmailHeaders(
+  db: Db,
+  params: { before: Date; limit: number },
+) {
+  const due = and(
+    ne(inboundEmails.status, "received"),
+    lt(inboundEmails.createdAt, params.before.toISOString()),
+    or(
+      isNotNull(inboundEmails.envelopeFrom),
+      isNotNull(inboundEmails.messageId),
+      isNotNull(inboundEmails.headerFrom),
+      isNotNull(inboundEmails.subject),
+      isNotNull(inboundEmails.sentAt),
+      isNotNull(inboundEmails.authenticationResults),
+      isNotNull(inboundEmails.raw),
+    ),
+  );
+  const candidates = db
+    .select({ id: inboundEmails.id })
+    .from(inboundEmails)
+    .where(due)
+    .limit(params.limit);
+
+  return db
+    .update(inboundEmails)
+    .set({
+      envelopeFrom: null,
+      messageId: null,
+      headerFrom: null,
+      subject: null,
+      sentAt: null,
+      authenticationResults: null,
+      raw: null,
+    })
+    .where(and(inArray(inboundEmails.id, candidates), due))
+    .returning({ id: inboundEmails.id, teamId: inboundEmails.teamId });
 }
 
 const EMPTY_PAYLOAD = sql`'{}'::jsonb`;

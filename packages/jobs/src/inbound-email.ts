@@ -142,15 +142,16 @@ export async function readInboundEmailHeaders(
   };
 }
 
-const sha256 = (bytes: Uint8Array) =>
-  createHash("sha256").update(bytes).digest("hex");
+const sha256 = (data: Uint8Array | string) =>
+  createHash("sha256").update(data).digest("hex");
 
 /**
  * Redelivery identity: the Message-ID a sender's retries keep, else the raw
- * bytes. Attachment content is deduplicated by intake either way.
+ * bytes. Attachment content is deduplicated by intake either way. Both are
+ * hashes, so the key outlives the retention of the headers themselves.
  */
 export const inboundMessageKey = (messageId: string | null, rawSha: string) =>
-  messageId ? `mid:${messageId}` : `sha256:${rawSha}`;
+  messageId ? `mid:${sha256(messageId)}` : `sha256:${rawSha}`;
 
 export type AcceptInboundEmailInput = {
   recipient: string;
@@ -493,7 +494,9 @@ export async function processInboundEmail(
       displayName: email.subject || fileName,
       // Stable across redeliveries and retries, and carries the Message-ID
       // into the invoice's provenance.
-      referenceId: `email:${email.messageKey}:${index}`,
+      referenceId: `email:${
+        email.messageId ? `mid:${email.messageId}` : `sha256:${email.rawSha256}`
+      }:${index}`,
       inboundEmailId: email.id,
     });
 

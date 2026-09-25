@@ -3,6 +3,7 @@ import {
   type DataExportSummary,
   accountingConnections,
   dataExports,
+  inboundEmails,
   inbox,
   inboxAccounts,
   inboxRedeliveries,
@@ -469,6 +470,7 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     deliveries,
     jobs,
     exports,
+    receivedEmails,
   ] = await Promise.all([
     db
       .select({
@@ -648,6 +650,24 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
       .from(dataExports)
       .where(eq(dataExports.teamId, teamId))
       .orderBy(asc(dataExports.createdAt)),
+    // Never the MIME source.
+    db
+      .select({
+        id: inboundEmails.id,
+        createdAt: inboundEmails.createdAt,
+        recipient: inboundEmails.recipient,
+        envelopeFrom: inboundEmails.envelopeFrom,
+        headerFrom: inboundEmails.headerFrom,
+        subject: inboundEmails.subject,
+        status: inboundEmails.status,
+        detail: inboundEmails.detail,
+        deliveryCount: inboundEmails.deliveryCount,
+        processedAt: inboundEmails.processedAt,
+        attachments: inboundEmails.attachments,
+      })
+      .from(inboundEmails)
+      .where(eq(inboundEmails.teamId, teamId))
+      .orderBy(asc(inboundEmails.createdAt), asc(inboundEmails.id)),
   ]);
 
   return {
@@ -664,6 +684,7 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     deliveries,
     jobs,
     exports,
+    inboundEmails: receivedEmails,
   };
 }
 

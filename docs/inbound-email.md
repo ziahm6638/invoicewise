@@ -112,12 +112,15 @@ construction on both sides.
 ## Deduplication and identity
 
 - Redelivery identity is `(team_id, message_key)`, where `message_key` is
-  `mid:<Message-ID>` or, when the header is missing, `sha256:<raw bytes>`.
+  `mid:<SHA-256 of the Message-ID>` or, when the header is missing,
+  `sha256:<raw bytes>`, so it survives the retention of the headers
+  ([data lifecycle](data-lifecycle.md#retention-schedule)).
   Retries by the sending server keep their Message-ID even when trace headers
   differ. A redelivery increments `delivery_count` and `last_delivered_at` and
   never creates a second job.
 - Attachments go through `acceptIntakeUpload` with reference
-  `email:<message_key>:<attachment index>` and `inbox.inbound_email_id` set, so
+  `email:mid:<Message-ID>:<attachment index>` (`email:sha256:<raw bytes>:…`
+  without one) and `inbox.inbound_email_id` set, so
   identical bytes are one invoice per workspace (content identity, see
   [document intake](document-intake.md#identity)) and the Message-ID reaches
   downstream provenance: the webhook payload (`referenceId`,
@@ -171,7 +174,9 @@ Email lists the recent messages with their status and reasons.
 A message is never retried after it settles, so a poison message costs at most
 one job's attempts. A processed message drops its raw source (the invoices
 live on in private storage); a failed one keeps it for an operator to re-drive
-until the workspace is deleted.
+until the retention job clears it 30 days after receipt, and every settled
+message's headers go after 90 days
+([data lifecycle](data-lifecycle.md#retention-schedule)).
 
 ## Limits
 
