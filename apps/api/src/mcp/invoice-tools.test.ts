@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Invoice } from "@api/effect/public-api";
 import { Tool } from "@effect/ai";
+import { INVOICE_STATE_FILTERS } from "@invoicewise/db/queries";
 import { Context, Effect, Layer } from "effect";
 import {
   type ApiFetcher,
@@ -109,6 +110,19 @@ describe("InvoiceWise MCP tools", () => {
     });
     expect(api.calls).toEqual(["/v1/invoices?status=processed&limit=10"]);
     expect(result.encodedResult).toMatchObject({ data: [{ id: invoiceId }] });
+  });
+
+  test("accepts every state filter the REST API accepts", async () => {
+    for (const state of INVOICE_STATE_FILTERS) {
+      const api = fakeApi({
+        "/v1/invoices": [
+          200,
+          { data: [invoice], hasMore: false, nextCursor: null },
+        ],
+      });
+      await runTool(api.fetcher, "list_invoices", { state });
+      expect(api.calls).toEqual([`/v1/invoices?state=${state}`]);
+    }
   });
 
   test("reads judgments from their own endpoint", async () => {

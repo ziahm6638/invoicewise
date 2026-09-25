@@ -5,6 +5,7 @@ import {
   InvoiceList,
 } from "@api/effect/public-api";
 import { Tool, Toolkit } from "@effect/ai";
+import { INVOICE_STATE_FILTERS } from "@invoicewise/db/queries";
 import { Config, Context, Effect, Layer, Redacted, Schema } from "effect";
 
 /**
@@ -36,17 +37,7 @@ export const ListInvoices = Tool.make("list_invoices", {
       Schema.Literal("processing", "processed", "failed"),
     ),
     state: Schema.optional(
-      Schema.Literal(
-        "needs_attention",
-        "processing",
-        "failed",
-        "invalid",
-        "needs_review",
-        "delivering",
-        "delivery_failed",
-        "delivered",
-        "corrected",
-      ),
+      Schema.Literal(...INVOICE_STATE_FILTERS),
     ).annotations({
       description: "Exception state, as the dashboard shows it.",
     }),
