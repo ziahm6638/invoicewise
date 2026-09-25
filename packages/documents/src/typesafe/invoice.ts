@@ -255,10 +255,19 @@ export type PreviousInvoice = {
   supplierId?: string | null;
 };
 
+/** Wall time of each processing stage, for the operator's latency breakdown. */
+export type InvoiceStageTimings = {
+  /** Reading the text layer, or OCR of scanned pages and images. */
+  readMs: number;
+  /** TypeSafe extraction and judgment calls, with the checks between them. */
+  typesafeMs: number;
+};
+
 export type ProcessedInvoice = {
   extraction: InvoiceExtraction;
   validation: InvoiceValidation;
   judgments: InvoiceJudgment[];
+  timings: InvoiceStageTimings;
 };
 
 const ABSENT = "absent";
@@ -1538,7 +1547,9 @@ export const processInvoice = (
   request: GetDocumentRequest,
 ): Effect.Effect<ProcessedInvoice, TypeSafeError, TypeSafe> =>
   Effect.gen(function* () {
+    const startedAt = performance.now();
     const { document, textSource } = yield* readDocument(request);
+    const readAt = performance.now();
     const extraction = yield* extractInvoiceLines(
       document.lines,
       request.companyName,
@@ -1584,5 +1595,13 @@ export const processInvoice = (
         ),
       ),
     );
-    return { extraction, validation, judgments };
+    return {
+      extraction,
+      validation,
+      judgments,
+      timings: {
+        readMs: Math.round(readAt - startedAt),
+        typesafeMs: Math.round(performance.now() - readAt),
+      },
+    };
   });

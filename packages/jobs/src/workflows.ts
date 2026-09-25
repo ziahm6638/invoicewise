@@ -393,6 +393,12 @@ export const WorkflowMailerLive = Layer.effect(
   ),
 );
 
+/** How long this attempt waited between becoming due and being claimed. */
+const queueWaitMs = (job: WorkflowJob) =>
+  job.lockedAt
+    ? Math.max(0, Date.parse(job.lockedAt) - Date.parse(job.runAt))
+    : null;
+
 const makeProcessAttachment = (
   db: Database,
   storage: ReturnType<typeof createStorageClient>,
@@ -489,6 +495,13 @@ const makeProcessAttachment = (
         judgments: processed.result.judgments?.length ?? 0,
         webhooksScheduled: completion.scheduled.webhooks,
         accountingQueued: completion.scheduled.accounting,
+        // Operator latency breakdown (getPipelineLatency): the input kind and
+        // how long this attempt waited and spent in each stage.
+        textSource: processed.result.extraction.textSource,
+        timings: {
+          queueMs: queueWaitMs(job),
+          ...processed.timings,
+        },
       };
     });
 

@@ -43,7 +43,33 @@ const quiet: OpsMetrics = {
     },
   ],
   latency: {
-    extraction: { count: 4, p50Seconds: 20, p95Seconds: 40, maxSeconds: 45 },
+    extraction: { count: 4, p50Seconds: 2, p95Seconds: 50, maxSeconds: 55 },
+    intake: {
+      text: {
+        count: 3,
+        p50Seconds: 2,
+        p95Seconds: 40,
+        maxSeconds: 45,
+        stages: {
+          queueP95Seconds: 30,
+          readP95Seconds: 0.3,
+          typesafeP95Seconds: 9,
+          persistP95Seconds: 0.3,
+        },
+      },
+      scan: {
+        count: 1,
+        p50Seconds: 55,
+        p95Seconds: 55,
+        maxSeconds: 55,
+        stages: {
+          queueP95Seconds: 1,
+          readP95Seconds: 30,
+          typesafeP95Seconds: 20,
+          persistP95Seconds: 0.1,
+        },
+      },
+    },
     delivery: {
       count: 0,
       p50Seconds: null,
@@ -104,11 +130,13 @@ describe("operator alerts", () => {
       ],
       latency: {
         ...quiet.latency,
-        extraction: {
-          count: 3,
-          p50Seconds: 300,
-          p95Seconds: 700,
-          maxSeconds: 800,
+        intake: {
+          ...quiet.latency.intake,
+          text: {
+            ...quiet.latency.intake.text,
+            p95Seconds: 700,
+            maxSeconds: 800,
+          },
         },
       },
       providers: {
@@ -125,7 +153,7 @@ describe("operator alerts", () => {
       "critical:workflow_stuck:process-attachment",
       "warning:queue_age:process-attachment",
       "warning:workflow_failures:process-attachment",
-      "warning:intake_latency",
+      "warning:intake_latency:text",
       "warning:provider_throttled:typesafe/systemone",
       "warning:provider_errors:typesafe/systemone",
       "critical:provider_budget:typesafe",
@@ -134,6 +162,36 @@ describe("operator alerts", () => {
       "warning:database_pool",
       "warning:cache_unavailable",
       "warning:api_memory",
+    ]);
+  });
+
+  test("intake latency holds text PDFs to a minute and scans to three", () => {
+    const at = (text: number, scan: number) =>
+      evaluateAlerts({
+        ...quiet,
+        latency: {
+          ...quiet.latency,
+          intake: {
+            text: { ...quiet.latency.intake.text, p95Seconds: text },
+            scan: { ...quiet.latency.intake.scan, p95Seconds: scan },
+          },
+        },
+      });
+
+    expect(at(59, 179)).toEqual([]);
+    expect(at(60, 180)).toEqual([
+      {
+        key: "intake_latency:text",
+        severity: "warning",
+        summary:
+          "Text PDF intake p95 is 60 s (target 60 s) over 3 document(s) in the last 24 hours; stage p95s: queue 30 s, text/OCR 0.3 s, TypeSafe 9 s, save 0.3 s.",
+      },
+      {
+        key: "intake_latency:scan",
+        severity: "warning",
+        summary:
+          "Scanned document intake p95 is 3 min (target 3 min) over 1 document(s) in the last 24 hours; stage p95s: queue 1 s, text/OCR 30 s, TypeSafe 20 s, save 0.1 s.",
+      },
     ]);
   });
 

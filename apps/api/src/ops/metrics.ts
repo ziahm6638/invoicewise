@@ -2,6 +2,7 @@ import { statfs } from "node:fs/promises";
 import { checkHealth as checkCacheHealth } from "@invoicewise/cache/health";
 import type { Database } from "@invoicewise/db/client";
 import {
+  type IntakeLatencySummary,
   type LatencySummary,
   type ProviderUsageSummary,
   type WorkflowQueueSummary,
@@ -44,7 +45,12 @@ export type OpsMetrics = {
     totalBytes: number | null;
   };
   queue: WorkflowQueueSummary[];
-  latency: { extraction: LatencySummary; delivery: LatencySummary };
+  latency: {
+    /** Every document; `intake` splits it by input kind with stage p95s. */
+    extraction: LatencySummary;
+    intake: { text: IntakeLatencySummary; scan: IntakeLatencySummary };
+    delivery: LatencySummary;
+  };
   providers: {
     lastHour: ProviderUsageSummary[];
     today: ProviderUsageSummary[];

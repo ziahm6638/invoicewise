@@ -11,7 +11,17 @@ import {
   retryWorkflowJob,
 } from "@invoicewise/db/queries";
 import { observeTypeSafeCalls } from "@invoicewise/documents";
-import { Config, Context, Effect, Either, Layer, Schema } from "effect";
+import {
+  Cause,
+  Config,
+  Context,
+  Effect,
+  Either,
+  FiberSet,
+  Layer,
+  Queue,
+  Schema,
+} from "effect";
 import { reconcileDeliveries } from "./delivery";
 import { observeNangoCalls } from "./nango";
 import { publishDeliveryFailureById } from "./webhooks";
@@ -420,35 +430,109 @@ const providerBudgetExclusions = Effect.gen(function* () {
   return exhausted ? PROVIDER_BUDGETED_WORKFLOWS : ([] as readonly string[]);
 });
 
-export const runWorkflowBatch = Effect.gen(function* () {
-  const repository = yield* WorkflowRepository;
-  const settings = yield* WorkflowRunnerSettings;
-  const excludeNames = yield* providerBudgetExclusions;
-  const jobs = yield* repository.claim(
-    settings.workerId,
-    settings.concurrency,
-    settings.leaseMs,
-    excludeNames,
-  );
-  yield* Effect.forEach(
-    jobs,
-    (job) =>
-      runClaimedWorkflow(job).pipe(
-        Effect.catchAll((error) =>
-          Effect.logError("workflow_queue_update_failed").pipe(
+const claimDueWorkflows = (limit: number) =>
+  Effect.gen(function* () {
+    const repository = yield* WorkflowRepository;
+    const settings = yield* WorkflowRunnerSettings;
+    const excludeNames = yield* providerBudgetExclusions;
+    return yield* repository.claim(
+      settings.workerId,
+      limit,
+      settings.leaseMs,
+      excludeNames,
+    );
+  });
+
+const runLoggedWorkflow = (job: WorkflowJob) =>
+  runClaimedWorkflow(job).pipe(
+    Effect.catchAll((error) =>
+      Effect.logError("workflow_queue_update_failed").pipe(
+        Effect.annotateLogs({
+          event: "workflow_queue_update_failed",
+          workflowId: job.id,
+          workflow: job.name,
+          error: error.reason,
+        }),
+      ),
+    ),
+    Effect.catchAllCause((cause) =>
+      Cause.isInterruptedOnly(cause)
+        ? Effect.failCause(cause)
+        : Effect.logError("workflow_run_defect").pipe(
             Effect.annotateLogs({
-              event: "workflow_queue_update_failed",
+              event: "workflow_run_defect",
               workflowId: job.id,
               workflow: job.name,
-              error: error.reason,
+              error: Cause.pretty(cause),
             }),
           ),
-        ),
-      ),
-    { concurrency: settings.concurrency, discard: true },
+    ),
   );
+
+/** Claims one batch of due jobs and runs it to completion (tests, verification). */
+export const runWorkflowBatch = Effect.gen(function* () {
+  const settings = yield* WorkflowRunnerSettings;
+  const jobs = yield* claimDueWorkflows(settings.concurrency);
+  yield* Effect.forEach(jobs, runLoggedWorkflow, {
+    concurrency: settings.concurrency,
+    discard: true,
+  });
   return jobs.length;
 });
+
+/**
+ * Keeps every slot busy: claims only as many jobs as there are free slots and
+ * claims again as soon as any job finishes. A runner that waited for its whole
+ * batch held a fresh upload queued behind the slowest job in it (a ten-page
+ * scan, a slow provider call) while the other slots sat idle; see
+ * docs/operations.md#service-and-load-targets.
+ */
+export const runWorkflowSlots = Effect.scoped(
+  Effect.gen(function* () {
+    const settings = yield* WorkflowRunnerSettings;
+    // Interrupting the runner interrupts every running job, whose own
+    // interrupt handler hands it back to the queue.
+    const running = yield* FiberSet.make<void, never>();
+    const freed = yield* Queue.sliding<void>(1);
+    let busy = 0;
+    const idle = Effect.race(Queue.take(freed), Effect.sleep(settings.pollMs));
+
+    yield* Effect.forever(
+      Effect.gen(function* () {
+        const free = settings.concurrency - busy;
+        if (free <= 0) return yield* idle;
+        const jobs = yield* claimDueWorkflows(free).pipe(
+          Effect.catchAll((error) =>
+            Effect.logError("workflow_queue_poll_failed").pipe(
+              Effect.annotateLogs({
+                event: "workflow_queue_poll_failed",
+                error: error.reason,
+              }),
+              Effect.as([] as WorkflowJob[]),
+            ),
+          ),
+        );
+        for (const job of jobs) {
+          busy += 1;
+          yield* FiberSet.run(
+            running,
+            runLoggedWorkflow(job).pipe(
+              Effect.ensuring(
+                Effect.suspend(() => {
+                  busy -= 1;
+                  return Queue.offer(freed, undefined);
+                }),
+              ),
+            ),
+          );
+        }
+        // A full claim may have left more work due; otherwise wait for a
+        // finished job or the next poll.
+        if (jobs.length < free) yield* idle;
+      }),
+    );
+  }),
+);
 
 const reconcileForever = Effect.gen(function* () {
   const reconciler = yield* DeliveryReconciler;
@@ -513,22 +597,7 @@ export const runWorkflows = Effect.gen(function* () {
       leaseMs: settings.leaseMs,
     }),
   );
-  yield* Effect.forever(
-    runWorkflowBatch.pipe(
-      Effect.flatMap((count) =>
-        count === 0 ? Effect.sleep(settings.pollMs) : Effect.void,
-      ),
-      Effect.catchAll((error) =>
-        Effect.logError("workflow_queue_poll_failed").pipe(
-          Effect.annotateLogs({
-            event: "workflow_queue_poll_failed",
-            error: error.reason,
-          }),
-          Effect.zipRight(Effect.sleep(settings.pollMs)),
-        ),
-      ),
-    ),
-  );
+  yield* runWorkflowSlots;
 });
 
 /**

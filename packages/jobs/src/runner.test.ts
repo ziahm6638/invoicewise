@@ -1,11 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import type { WorkflowJob } from "@invoicewise/db/queries";
-import { Effect, Fiber, Layer, LogLevel, Logger } from "effect";
+import {
+  Effect,
+  Fiber,
+  HashMap,
+  Layer,
+  LogLevel,
+  Logger,
+  Option,
+} from "effect";
 import {
   WorkflowRepository,
   WorkflowRunnerSettings,
   retryDelayMs,
   runWorkflowBatch,
+  runWorkflowSlots,
 } from "./runner";
 import { WorkflowExecutionError, WorkflowHandler } from "./workflows";
 
@@ -178,5 +187,132 @@ describe("Effect workflow runner", () => {
     await run(3);
 
     expect(claims).toEqual([[], ["process-attachment"], []]);
+  });
+
+  test("claims into a free slot while a slow job still runs", async () => {
+    // Production counterfactual (issue #102): a text PDF uploaded two seconds
+    // after a ten-page scan waited 24 s for the scan to finish although three
+    // of four slots were free.
+    const slow = { ...job, id: "00000000-0000-0000-0000-00000000000a" };
+    const fast = { ...job, id: "00000000-0000-0000-0000-00000000000b" };
+    const due = [[slow], [fast]];
+    const completed: string[] = [];
+    const released: string[] = [];
+    const fastDone = Promise.withResolvers<void>();
+    const repository = Layer.succeed(WorkflowRepository, {
+      claim: (_workerId, limit) =>
+        Effect.sync(() => (due.shift() ?? []).slice(0, limit)),
+      heartbeat: () => Effect.void,
+      complete: (id) =>
+        Effect.sync(() => {
+          completed.push(id);
+          if (id === fast.id) fastDone.resolve();
+        }),
+      retry: () => Effect.void,
+      fail: () => Effect.void,
+      release: (id) => Effect.sync(() => released.push(id)).pipe(Effect.asVoid),
+      providerCallsSince: () => Effect.succeed(0),
+    });
+    const handler = Layer.succeed(WorkflowHandler, {
+      handle: (claimed) =>
+        claimed.id === slow.id ? Effect.never : Effect.succeed({}),
+    });
+    const twoSlots = Layer.succeed(WorkflowRunnerSettings, {
+      workerId: "test-worker",
+      concurrency: 2,
+      pollMs: 5,
+      leaseMs: 60_000,
+      retryBaseMs: 100,
+      retryMaxMs: 1000,
+    });
+
+    const fiber = Effect.runFork(
+      runWorkflowSlots.pipe(
+        Effect.provide(Layer.mergeAll(repository, handler, twoSlots)),
+        Effect.provide(Logger.minimumLogLevel(LogLevel.None)),
+      ),
+    );
+    const outcome = await Promise.race([
+      fastDone.promise.then(() => "fast finished"),
+      Bun.sleep(2000).then(() => "fast still queued"),
+    ]);
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(outcome).toBe("fast finished");
+    expect(completed).toEqual([fast.id]);
+    // Shutdown still hands the unfinished job back to the queue.
+    expect(released).toEqual([slow.id]);
+  });
+
+  test("logs a dying job and keeps claiming further jobs", async () => {
+    const dying = { ...job, id: "00000000-0000-0000-0000-00000000000c" };
+    const next = { ...job, id: "00000000-0000-0000-0000-00000000000d" };
+    const due = [[dying], [next]];
+    const completed: string[] = [];
+    const defects: unknown[] = [];
+    const nextDone = Promise.withResolvers<void>();
+    const repository = Layer.succeed(WorkflowRepository, {
+      claim: (_workerId, limit) =>
+        Effect.sync(() => (due.shift() ?? []).slice(0, limit)),
+      heartbeat: () => Effect.void,
+      complete: (id) =>
+        Effect.sync(() => {
+          completed.push(id);
+          if (id === next.id) nextDone.resolve();
+        }),
+      retry: () => Effect.void,
+      fail: () => Effect.void,
+      release: () => Effect.void,
+      providerCallsSince: () => Effect.succeed(0),
+    });
+    const handler = Layer.succeed(WorkflowHandler, {
+      handle: (claimed) =>
+        claimed.id === dying.id
+          ? Effect.sync(() => {
+              throw new Error("handler bug");
+            })
+          : Effect.succeed({}),
+    });
+    const oneSlot = Layer.succeed(WorkflowRunnerSettings, {
+      workerId: "test-worker",
+      concurrency: 1,
+      pollMs: 5,
+      leaseMs: 60_000,
+      retryBaseMs: 100,
+      retryMaxMs: 1000,
+    });
+    const capture = Logger.replace(
+      Logger.defaultLogger,
+      Logger.make(({ annotations }) => {
+        if (
+          HashMap.get(annotations, "event").pipe(Option.getOrUndefined) ===
+          "workflow_run_defect"
+        ) {
+          defects.push(Object.fromEntries(annotations));
+        }
+      }),
+    );
+
+    const fiber = Effect.runFork(
+      runWorkflowSlots.pipe(
+        Effect.provide(Layer.mergeAll(repository, handler, oneSlot, capture)),
+      ),
+    );
+    const outcome = await Promise.race([
+      nextDone.promise.then(() => "next finished"),
+      Bun.sleep(2000).then(() => "runner stalled"),
+    ]);
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(outcome).toBe("next finished");
+    expect(completed).toEqual([next.id]);
+    expect(defects).toEqual([
+      expect.objectContaining({
+        event: "workflow_run_defect",
+        workflowId: dying.id,
+        workflow: dying.name,
+        error: expect.stringContaining("handler bug"),
+      }),
+    ]);
   });
 });

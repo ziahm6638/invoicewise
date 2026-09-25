@@ -48,7 +48,7 @@ export class InvoiceProcessor {
       );
     }
 
-    const { extraction, validation, judgments } = exit.value;
+    const { extraction, validation, judgments, timings } = exit.value;
     const taxRate =
       extraction.taxRate ??
       (extraction.netAmount && extraction.vatAmount !== null
@@ -69,6 +69,7 @@ export class InvoiceProcessor {
       extraction,
       validation,
       judgments,
+      timings,
       metadata: {
         invoice_number: extraction.invoiceNumber,
         invoice_date: extraction.invoiceDate,

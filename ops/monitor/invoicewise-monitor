@@ -148,7 +148,7 @@ if [ "$(date -u +%H)" -ge "$digest_hour" ] &&
       jq -r '
         "Version \(.version), up \(.process.uptimeSeconds / 3600 | floor) h, RSS \(.process.rssBytes / 1048576 | floor) MiB",
         "Queue: \([.queue[].due] | add // 0) due, \([.queue[].running] | add // 0) running, \([.queue[].failedLastHour] | add // 0) failed in the last hour",
-        "Intake p50/p95 (24 h): \(.latency.extraction.p50Seconds // "-") / \(.latency.extraction.p95Seconds // "-") s over \(.latency.extraction.count) document(s)",
+        "Intake p50/p95 (24 h): text PDFs \(.latency.intake.text.p50Seconds // "-") / \(.latency.intake.text.p95Seconds // "-") s over \(.latency.intake.text.count), scans \(.latency.intake.scan.p50Seconds // "-") / \(.latency.intake.scan.p95Seconds // "-") s over \(.latency.intake.scan.count)",
         "Intake to delivery p95 (24 h): \(.latency.delivery.p95Seconds // "-") s over \(.latency.delivery.count)",
         "TypeSafe today: \(.budget.typesafe.callsToday) of \(.budget.typesafe.dailyLimit) calls, \(.cost.typesafe.inputTokensToday) in / \(.cost.typesafe.outputTokensToday) out tokens",
         "Database \(.database.sizeBytes / 1048576 | floor) MiB; storage \(if .storage.freeBytes then "\(.storage.freeBytes / 1073741824 | floor) GiB free" else .storage.backend end)"

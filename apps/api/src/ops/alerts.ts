@@ -1,3 +1,4 @@
+import type { IntakeStageSummary } from "@invoicewise/db/queries";
 import type { OpsMetrics } from "./metrics";
 
 /**
@@ -19,7 +20,8 @@ export type OpsAlert = {
 export type AlertThresholds = {
   queueAgeSeconds: number;
   failuresPerHour: number;
-  intakeP95Seconds: number;
+  intakeTextP95Seconds: number;
+  intakeScanP95Seconds: number;
   providerFailureRatio: number;
   providerMinCalls: number;
   budgetWarnRatio: number;
@@ -32,7 +34,10 @@ export type AlertThresholds = {
 export const DEFAULT_ALERT_THRESHOLDS: AlertThresholds = {
   queueAgeSeconds: 15 * 60,
   failuresPerHour: 3,
-  intakeP95Seconds: 10 * 60,
+  // docs/operations.md#service-and-load-targets: a text PDF within a minute,
+  // a scan within three.
+  intakeTextP95Seconds: 60,
+  intakeScanP95Seconds: 3 * 60,
   providerFailureRatio: 0.25,
   providerMinCalls: 4,
   budgetWarnRatio: 0.8,
@@ -45,7 +50,8 @@ export const DEFAULT_ALERT_THRESHOLDS: AlertThresholds = {
 const ENV_THRESHOLDS: Record<keyof AlertThresholds, string> = {
   queueAgeSeconds: "OPS_ALERT_QUEUE_AGE_SECONDS",
   failuresPerHour: "OPS_ALERT_FAILURES_PER_HOUR",
-  intakeP95Seconds: "OPS_ALERT_INTAKE_P95_SECONDS",
+  intakeTextP95Seconds: "OPS_ALERT_INTAKE_TEXT_P95_SECONDS",
+  intakeScanP95Seconds: "OPS_ALERT_INTAKE_SCAN_P95_SECONDS",
   providerFailureRatio: "OPS_ALERT_PROVIDER_FAILURE_RATIO",
   providerMinCalls: "OPS_ALERT_PROVIDER_MIN_CALLS",
   budgetWarnRatio: "OPS_ALERT_BUDGET_WARN_RATIO",
@@ -73,6 +79,21 @@ export const alertThresholdsFromEnv = (
 };
 
 const minutes = (seconds: number) => `${Math.round(seconds / 60)} min`;
+const duration = (seconds: number) =>
+  seconds < 120 ? `${Math.round(seconds)} s` : minutes(seconds);
+const stageSummary = (stages: IntakeStageSummary) =>
+  (
+    [
+      ["queue", stages.queueP95Seconds],
+      ["text/OCR", stages.readP95Seconds],
+      ["TypeSafe", stages.typesafeP95Seconds],
+      ["save", stages.persistP95Seconds],
+    ] as const
+  )
+    .map(([stage, seconds]) =>
+      seconds === null ? `${stage} -` : `${stage} ${seconds} s`,
+    )
+    .join(", ");
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 const percent = (ratio: number) => `${Math.round(ratio * 100)}%`;
 
@@ -106,16 +127,19 @@ export function evaluateAlerts(
     }
   }
 
-  const extraction = metrics.latency.extraction;
-  if (
-    extraction.p95Seconds !== null &&
-    extraction.p95Seconds >= thresholds.intakeP95Seconds
-  ) {
-    alerts.push({
-      key: "intake_latency",
-      severity: "warning",
-      summary: `Intake p95 is ${minutes(extraction.p95Seconds)} over ${extraction.count} document(s) in the last 24 hours.`,
-    });
+  const intakeTargets = [
+    ["text", "Text PDF", thresholds.intakeTextP95Seconds],
+    ["scan", "Scanned document", thresholds.intakeScanP95Seconds],
+  ] as const;
+  for (const [kind, label, target] of intakeTargets) {
+    const intake = metrics.latency.intake[kind];
+    if (intake.p95Seconds !== null && intake.p95Seconds >= target) {
+      alerts.push({
+        key: `intake_latency:${kind}`,
+        severity: "warning",
+        summary: `${label} intake p95 is ${duration(intake.p95Seconds)} (target ${duration(target)}) over ${intake.count} document(s) in the last 24 hours; stage p95s: ${stageSummary(intake.stages)}.`,
+      });
+    }
   }
 
   for (const usage of metrics.providers.lastHour) {

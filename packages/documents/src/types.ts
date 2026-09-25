@@ -2,6 +2,7 @@ import type {
   InvoiceExtraction,
   InvoiceJudgment,
   InvoiceJudgmentQuestion,
+  InvoiceStageTimings,
   JudgmentHistoryScope,
   PreviousInvoice,
 } from "./typesafe/invoice";
@@ -42,6 +43,7 @@ export type GetInvoiceResponse = {
   extraction: InvoiceExtraction;
   validation: InvoiceValidation;
   judgments: InvoiceJudgment[];
+  timings: InvoiceStageTimings;
 };
 
 export interface Attachment {
