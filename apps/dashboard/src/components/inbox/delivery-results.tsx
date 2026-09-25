@@ -375,6 +375,13 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
   const providerName = accounting?.provider
     ? (PROVIDER_NAME[accounting.provider] ?? "Accounting connection")
     : "Accounting connection";
+  // Xero calls a supplier credit a credit note, QuickBooks a vendor credit.
+  const record =
+    accounting?.entity !== "vendor_credit"
+      ? "bill"
+      : accounting.provider === "xero"
+        ? "credit note"
+        : "vendor credit";
   const hasDestinations = data.webhooks.length > 0 || accounting !== null;
   const decision = data.decision;
   // A held post is sent by a release, never by a retry.
@@ -434,14 +441,16 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
             <Outcome
               label={
                 accounting.entity === "vendor_credit"
-                  ? "Accounting vendor credit"
+                  ? accounting.provider === "xero"
+                    ? "Accounting draft credit note"
+                    : "Accounting vendor credit"
                   : accounting.provider === "quickbooks"
                     ? "Accounting bill (open, unpaid)"
                     : "Accounting draft bill"
               }
               detail={
                 accounting.providerId
-                  ? `${providerName} · ${accounting.entity === "vendor_credit" ? "vendor credit" : "bill"} ${accounting.providerId}`
+                  ? `${providerName} · ${record} ${accounting.providerId}`
                   : providerName
               }
               status={accounting.status ?? "queued"}
@@ -457,7 +466,7 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
           {accounting?.providerId && accounting.attachmentStatus && (
             <Outcome
               label="Source document attachment"
-              detail={`${providerName} · attached separately from the ${accounting.entity === "vendor_credit" ? "vendor credit" : "bill"}`}
+              detail={`${providerName} · attached separately from the ${record}`}
               status={
                 accounting.attachmentStatus === "attached"
                   ? "succeeded"
