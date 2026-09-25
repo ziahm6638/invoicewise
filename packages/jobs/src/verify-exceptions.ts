@@ -751,7 +751,7 @@ async function main() {
     check(
       "a correction queues matching to authorization sources for its revision",
       matchJobs.length === 2 &&
-        matchJobs.every((status) => status === "completed"),
+        matchJobs.every((status) => status === "succeeded"),
       matchJobs,
     );
 
