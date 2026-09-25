@@ -453,6 +453,30 @@ async function main() {
       )) === "conflict",
     );
 
+    // Reading a processed invoice again and failing keeps the saved reading.
+    typeSafeUp(false);
+    await retryIntakeProcessing(database.primaryDb, {
+      teamId,
+      inboxId: scanned,
+      expectedRevision: reextracted.processingRevision,
+    });
+    await drain(db, workspace);
+    const failedReread = await read(scanned);
+    typeSafeUp(true);
+    check(
+      "a failed re-extraction keeps the previous reading and records the reason",
+      failedReread.processingError === TEMPORARY_PROCESSING_FAILURE &&
+        failedReread.status === "pending" &&
+        failedReread.processingRevision === reextracted.processingRevision &&
+        JSON.stringify(failedReread.extraction) ===
+          JSON.stringify(reextracted.extraction) &&
+        JSON.stringify(failedReread.validation) ===
+          JSON.stringify(reextracted.validation) &&
+        JSON.stringify(failedReread.judgments) ===
+          JSON.stringify(reextracted.judgments),
+      failedReread,
+    );
+
     // A worker that died after its final attempt without recording the
     // failure: the document would read as processing for ever.
     await db
