@@ -403,6 +403,8 @@ export function buildExportRecords(
     questions: data.questions,
     questionRuns: data.questionRuns,
     questionAnswers: data.questionAnswers,
+    deliveryPolicies: data.deliveryPolicies,
+    deliveryDecisions: data.deliveryDecisions,
     inboundEmails,
     audit,
   };
@@ -770,6 +772,16 @@ export async function buildDataExport(
         path: "question-answers.json",
         records: records.questionAnswers.length,
         content: json(records.questionAnswers),
+      },
+      {
+        path: "delivery-policies.json",
+        records: records.deliveryPolicies.length,
+        content: json(records.deliveryPolicies),
+      },
+      {
+        path: "delivery-decisions.json",
+        records: records.deliveryDecisions.length,
+        content: json(records.deliveryDecisions),
       },
       {
         path: "inbound-emails.json",

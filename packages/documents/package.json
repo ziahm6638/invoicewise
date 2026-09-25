@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./authorization-source": "./src/authorization-source.ts",
     "./correction": "./src/correction.ts",
+    "./delivery-policy": "./src/delivery-policy.ts",
     "./embed": "./src/embed/embed.ts",
     "./utils": "./src/utils.ts"
   },

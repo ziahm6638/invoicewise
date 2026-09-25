@@ -1,3 +1,4 @@
+import { heldDeliverySchema } from "@api/schemas/delivery-rules";
 import {
   bulkInvoiceActionSchema,
   correctInboxSchema,
@@ -19,12 +20,17 @@ import {
   getInvoiceDeliveryStatus,
   getInvoiceOriginalExtraction,
   getLatestBillUpdate,
+  listDeliveryDecisions,
   listInvoiceCorrections,
   updateInbox,
 } from "@invoicewise/db/queries";
 import { signedUrl } from "@invoicewise/db/storage";
 import { providerBillUrl } from "@invoicewise/jobs/accounting";
-import { retryInvoiceDelivery } from "@invoicewise/jobs/delivery";
+import {
+  dismissHeldDelivery,
+  releaseHeldDelivery,
+  retryInvoiceDelivery,
+} from "@invoicewise/jobs/delivery";
 import {
   InvoiceActionError,
   correctInvoice,
@@ -308,17 +314,25 @@ export const inboxRouter = createTRPCRouter({
     .query(async ({ ctx: { db, teamId }, input }) => {
       const item = await getInboxById(db, { id: input.id, teamId: teamId! });
       if (!item) return null;
-      const [webhooks, accounting, billUpdate] = await Promise.all([
+      const [webhooks, accounting, billUpdate, decisions] = await Promise.all([
         getInvoiceDeliveryStatus(db, { invoiceId: item.id, teamId: teamId! }),
         getInvoiceAccountingStatus(db, {
           invoiceId: item.id,
           teamId: teamId!,
         }),
         getLatestBillUpdate(db, { invoiceId: item.id, teamId: teamId! }),
+        listDeliveryDecisions(db, { invoiceId: item.id, teamId: teamId! }),
       ]);
       return {
         revision: item.processingRevision,
         summary: item.delivery,
+        // The current revision's decision, and every earlier one with how
+        // its hold was resolved and by whom.
+        decision:
+          decisions.find(
+            (decision) => decision.revision === item.processingRevision,
+          ) ?? null,
+        decisions,
         webhooks: webhooks.filter(
           (delivery) =>
             delivery.revision === item.processingRevision &&
@@ -353,6 +367,44 @@ export const inboxRouter = createTRPCRouter({
         teamId: teamId!,
         id: input.id,
         teamRole: teamRole ?? null,
+      }),
+    ),
+
+  /**
+   * Sends an invoice the delivery rules held, at the revision the user saw,
+   * recording who released it and why. Owner or admin only.
+   */
+  releaseDelivery: workspaceProcedure
+    .input(heldDeliverySchema)
+    .mutation(async ({ ctx: { db, teamId, teamRole, session }, input }) =>
+      releaseHeldDelivery(db, {
+        invoiceId: input.id,
+        teamId: teamId!,
+        actorId: session.user.id,
+        teamRole: teamRole ?? null,
+        expectedRevision: input.revision,
+        reason: input.reason,
+      }).catch((error) => {
+        throw asTRPCError(error);
+      }),
+    ),
+
+  /**
+   * Decides a held invoice is not delivered, recording who decided and why.
+   * Owner or admin only.
+   */
+  dismissDelivery: workspaceProcedure
+    .input(heldDeliverySchema)
+    .mutation(async ({ ctx: { db, teamId, teamRole, session }, input }) =>
+      dismissHeldDelivery(db, {
+        invoiceId: input.id,
+        teamId: teamId!,
+        actorId: session.user.id,
+        teamRole: teamRole ?? null,
+        expectedRevision: input.revision,
+        reason: input.reason,
+      }).catch((error) => {
+        throw asTRPCError(error);
       }),
     ),
 

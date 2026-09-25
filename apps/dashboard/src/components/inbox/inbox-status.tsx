@@ -12,6 +12,8 @@ const styles: Record<InvoiceState, string> = {
     "border-blue-300/70 bg-blue-50 text-blue-800 dark:bg-blue-950/30 dark:text-blue-300",
   judged:
     "border-violet-300/70 bg-violet-50 text-violet-800 dark:bg-violet-950/30 dark:text-violet-300",
+  held: "border-orange-300/70 bg-orange-50 text-orange-800 dark:bg-orange-950/30 dark:text-orange-300",
+  dismissed: "border-border bg-muted text-muted-foreground",
   delivering:
     "border-sky-300/70 bg-sky-50 text-sky-800 dark:bg-sky-950/30 dark:text-sky-300",
   delivery_failed: "border-destructive/40 bg-destructive/5 text-destructive",

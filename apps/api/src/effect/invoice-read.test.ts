@@ -95,6 +95,29 @@ const invoice = {
     reason: null,
     decidedAt: "2026-09-21T10:00:00.000Z",
   },
+  deliveryDecision: {
+    id: "7f4c2b2e-2a51-4a0a-8f0e-4f7a4d2b9c10",
+    revision: 1,
+    policyVersion: 0,
+    rulesVersion: 1,
+    outcome: "hold",
+    reasons: [
+      {
+        code: "invalid_financials",
+        rule: "invalid_financials",
+        message:
+          "Net 100.00 + VAT 20.00 = 120.00, but the gross total is 125.50.",
+        locked: true,
+      },
+    ],
+    accounting: "held",
+    webhooks: "held",
+    resolution: null,
+    resolutionReason: null,
+    resolvedAt: null,
+    resolvedBy: null,
+    createdAt: "2026-09-25T10:00:00.000Z",
+  },
   processingError: null,
   processingRevision: 1,
   delivery: {
@@ -242,6 +265,7 @@ describe("Effect invoice read HTTP slice", () => {
           supplierId: invoice.supplierId,
           supplierChecks: invoice.supplierChecks,
           sourceMatch: invoice.sourceMatch,
+          deliveryDecision: invoice.deliveryDecision,
           processingError: null,
           inboundEmail: invoice.inboundEmail,
           transaction: null,
@@ -339,6 +363,7 @@ describe("Effect invoice read HTTP slice", () => {
     expect(detail.validation).toEqual(invoice.validation);
     expect(detail.supplierChecks).toEqual(invoice.supplierChecks);
     expect(detail.sourceMatch).toEqual(invoice.sourceMatch);
+    expect(detail.deliveryDecision).toEqual(invoice.deliveryDecision);
 
     const [header, row] = (
       await (await request("/invoices/export.csv")).text()

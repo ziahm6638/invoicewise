@@ -61,6 +61,17 @@ export const canManageWorkspaceSettings = (role: TeamRole | null | undefined) =>
 export const canPostToAccounting = (role: TeamRole | null | undefined) =>
   roleAtLeast(role, "admin");
 
+/**
+ * The workspace's delivery rules decide what reaches accounting and webhooks
+ * without a person, and releasing or dismissing an invoice those rules held
+ * overrides them, so both are admin decisions. Everyone may read the rules.
+ */
+export const canManageDeliveryRules = (role: TeamRole | null | undefined) =>
+  roleAtLeast(role, "admin");
+
+export const canResolveHeldDeliveries = (role: TeamRole | null | undefined) =>
+  roleAtLeast(role, "admin");
+
 /** Ownership transfer, workspace deletion and billing stay with the owner. */
 export const canManageBilling = (role: TeamRole | null | undefined) =>
   roleAtLeast(role, "owner");
@@ -99,6 +110,8 @@ export const getTeamCapabilities = (role: TeamRole | null | undefined) => ({
   transferOwnership: canTransferOwnership(role),
   exportData: canExportData(role),
   manageAuthorizationSources: canManageAuthorizationSources(role),
+  manageDeliveryRules: canManageDeliveryRules(role),
+  resolveHeldDeliveries: canResolveHeldDeliveries(role),
 });
 
 /**

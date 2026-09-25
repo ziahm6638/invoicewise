@@ -29,7 +29,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { Effect, Logger } from "effect";
 import { completeAccountingConnection } from "./accounting";
 import { InvoiceActionError } from "./action-error";
-import { retryInvoiceDelivery } from "./delivery";
+import { releaseHeldDelivery, retryInvoiceDelivery } from "./delivery";
 import {
   TEMPORARY_PROCESSING_FAILURE,
   TEMPORARY_RERUN_FAILURE,
@@ -40,7 +40,11 @@ import {
 import { acceptIntakeUpload, retryIntakeProcessing } from "./intake";
 import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
-import { required, startTypeSafeStub } from "./verify-support";
+import {
+  deliverPossibleDuplicates,
+  required,
+  startTypeSafeStub,
+} from "./verify-support";
 
 const runBatch = () =>
   Effect.runPromise(
@@ -277,6 +281,9 @@ async function main() {
       actorId: await person("Ada Admin"),
       teamRole: "admin" as const,
     };
+    // Its invoices share a date and total; the delivery rules have their own
+    // proof (verify-delivery-rules).
+    await deliverPossibleDuplicates(db, workspace);
     const member = {
       actorId: await person("Max Member"),
       teamRole: "member" as const,
@@ -612,14 +619,25 @@ async function main() {
     await drain(db, workspace);
     const blocked = await accounting(invalid);
     const invalidRead = await read(invalid);
+    const invalidDecision = invalidRead.deliveryDecision as {
+      outcome?: string;
+      accounting?: string;
+      reasons?: { code?: string; locked?: boolean }[];
+    } | null;
     check(
-      "an invoice whose totals do not reconcile is not sent",
+      "an invoice whose totals do not reconcile is held by the delivery rules, not sent",
       invalidRead.validation?.status === "invalid" &&
-        blocked?.status === "failed" &&
-        blocked.lastError?.startsWith("Not sent to Xero:") === true &&
+        invalidDecision?.outcome === "hold" &&
+        invalidDecision.accounting === "held" &&
+        invalidDecision.reasons?.some(
+          (reason) => reason.code === "invalid_financials" && reason.locked,
+        ) === true &&
+        (blocked?.status ?? null) === null &&
         !providerCalls.some((call) => call.number === "EXC-TOTAL") &&
+        !received.some((delivery) => delivery.body.invoiceId === invalid) &&
         (await listed("invalid")).includes(invalid) &&
-        (await listed("delivery_failed")).includes(invalid) &&
+        (await listed("held")).includes(invalid) &&
+        (await listed("needs_attention")).includes(invalid) &&
         (await getInbox(db, { teamId, q: "EXC-TOTAL" })).data.some(
           (row) => row.id === invalid,
         ),
@@ -712,7 +730,8 @@ async function main() {
       postedAfterCorrection,
     );
 
-    // A member's correction of a blocked invoice waits for an admin retry.
+    // A member's correction of a held invoice waits for an admin's release:
+    // neither the correction nor a retry sends it.
     const memberCase = await processed("EXC-MEMBER", 150);
     await drain(db, workspace);
     const memberCorrection = await correctInvoice(db, {
@@ -728,21 +747,39 @@ async function main() {
       teamId,
       teamRole: "member",
     });
-    const adminRetry = await retryInvoiceDelivery(db, {
+    const release = {
       invoiceId: memberCase,
       teamId,
-      teamRole: "admin",
+      expectedRevision: memberCorrection.revision,
+      reason: "Checked the corrected gross against the PDF",
+    };
+    const memberRelease = await refusal(
+      releaseHeldDelivery(db, { ...release, ...member }),
+    );
+    await drain(db, workspace);
+    const heldAfterCorrection = await read(memberCase);
+    const adminRelease = await releaseHeldDelivery(db, {
+      ...release,
+      ...admin,
     });
     await drain(db, workspace);
     check(
-      "re-posting after a member's correction needs an admin, then posts once",
-      memberCorrection.accounting === "admin_required" &&
-        memberRetry?.accounting === "admin_required" &&
-        adminRetry?.accounting === "requeued" &&
+      "a member's correction of a held invoice needs an admin's release, then posts once",
+      memberCorrection.accounting === "held" &&
+        memberRetry?.accounting === "not_scheduled" &&
+        memberRelease === "forbidden" &&
+        heldAfterCorrection.delivery?.state === "held" &&
+        (
+          heldAfterCorrection.deliveryDecision as {
+            reasons?: { code?: string }[];
+          }
+        )?.reasons?.some((reason) => reason.code === "awaiting_approval") ===
+          true &&
+        adminRelease.accounting === "queued" &&
         (await accounting(memberCase))?.status === "posted" &&
         providerCalls.filter((call) => call.number === "EXC-MEMBER").length ===
           1,
-      { memberCorrection, memberRetry, adminRetry },
+      { memberCorrection, memberRetry, memberRelease, adminRelease },
     );
 
     // A correction is a new revision: it is matched to authorization sources

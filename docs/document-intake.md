@@ -476,9 +476,12 @@ posted as a draft bill. The draft-bill contract (Xero and QuickBooks alike)
 requires `documentType` (invoice), supplier name, invoice number, invoice
 date, currency and gross total (`ACCOUNTING_REQUIRED_FIELDS`); every error is
 a blocker, and a credit note is `credit_note_unsupported` because a draft
-bill cannot represent a credit. The accounting job checks this before calling
-the provider; a blocked invoice is not posted and its accounting status is
-`failed` with `Not sent to <provider>: <reasons>`. Webhooks, REST, MCP and
+bill cannot represent a credit. The workspace's
+[delivery rules](delivery.md#delivery-rules) hold an invoice with any error
+before a bill is scheduled, with the errors as its reasons. The accounting
+job checks again before calling the provider, so a copy that reached it
+anyway (processed before its original) is not posted and its accounting
+status is `failed` with `Not sent to <provider>: <reasons>`. Webhooks, REST, MCP and
 CSV deliver the validation alongside the extraction, and judgments receive it
 as `currentInvoiceValidation`. A record stored before validation existed is
 validated at posting time from its extraction.
