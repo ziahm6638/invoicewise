@@ -101,12 +101,6 @@ export function SupplierHistory({ inboxId }: { inboxId: string }) {
       description: error.message,
     });
 
-  const recheck = useMutation(
-    trpc.suppliers.recheck.mutationOptions({
-      onSuccess: done("Supplier checks re-run"),
-      onError: fail("Supplier checks could not be re-run"),
-    }),
-  );
   const assign = useMutation(
     trpc.suppliers.assignInvoice.mutationOptions({
       onSuccess: done("Supplier changed"),
@@ -125,11 +119,7 @@ export function SupplierHistory({ inboxId }: { inboxId: string }) {
       onError: fail("The change could not be undone"),
     }),
   );
-  const busy =
-    recheck.isPending ||
-    assign.isPending ||
-    merge.isPending ||
-    revert.isPending;
+  const busy = assign.isPending || merge.isPending || revert.isPending;
 
   if (isLoading) return <Skeleton className="mt-3 h-24 w-full" />;
   if (!data) return null;
@@ -149,16 +139,8 @@ export function SupplierHistory({ inboxId }: { inboxId: string }) {
         onOpenInvoice={(id) => setParams({ inboxId: id })}
         formatDate={format}
       />
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy}
-          onClick={() => recheck.mutate({ inboxId })}
-        >
-          Re-run supplier checks
-        </Button>
-        {data.canCorrect && (
+      {data.canCorrect && (
+        <div className="mt-3 flex flex-wrap gap-2">
           <Button
             size="sm"
             variant="outline"
@@ -167,8 +149,8 @@ export function SupplierHistory({ inboxId }: { inboxId: string }) {
           >
             Correct supplier
           </Button>
-        )}
-      </div>
+        </div>
+      )}
 
       <Dialog open={correcting} onOpenChange={setCorrecting}>
         <DialogContent className="max-w-lg">

@@ -690,12 +690,3 @@ export async function revertSupplierChange(
     return { eventId: revert.id };
   });
 }
-
-/** Re-runs one invoice's deterministic checks against its current supplier. */
-export const recheckInvoiceSupplier = (
-  db: Database,
-  input: { teamId: string; inboxId: string },
-) =>
-  inTransaction(db, input.teamId, (tx) =>
-    reevaluateDocument(tx, { teamId: input.teamId, documentId: input.inboxId }),
-  );

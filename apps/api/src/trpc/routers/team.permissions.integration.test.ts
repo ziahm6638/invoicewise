@@ -335,8 +335,7 @@ suite("workspace permissions (integration)", () => {
         member.suppliers.revert({ eventId: crypto.randomUUID() }),
       ).rejects.toThrow();
 
-      // A member reads the evidence and may re-run the checks.
-      await member.suppliers.recheck({ inboxId });
+      // A member reads the evidence.
       const read = await member.suppliers.forInvoice({ inboxId });
       expect(read?.canCorrect).toBe(false);
       expect(read?.checks).toMatchObject({

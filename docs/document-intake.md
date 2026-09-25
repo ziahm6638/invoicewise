@@ -548,8 +548,8 @@ message and the earlier documents it cites:
 An identical file received again is not a separate document (see
 [Identity](#identity)). Stored results keep the supplier, the rules version,
 the time they ran and every earlier document they used, so they stay
-explainable after later invoices arrive; **Re-run supplier checks** (any
-member) recomputes one against the current history. Bank details appear in
+explainable after later invoices arrive; only processing and a correction
+record them. Bank details appear in
 results only as their kind and last four characters, and validation messages
 mask an IBAN the same way, so neither logs nor notifications carry them.
 
@@ -559,7 +559,7 @@ kept supplier and keep their own identifiers). Each change is a
 `supplier_events` row with who made it and what it replaced, and can be
 undone exactly unless a later change built on it. Later invoices, and the
 invoice corrected, are checked against the chosen supplier; other stored
-results stay as recorded until re-run. A manual assignment survives
+results stay as recorded. A manual assignment survives
 reprocessing. The dashboard shows all of this in the invoice's **Supplier
 history**; REST and MCP return `supplierId` and `supplierChecks`.
 

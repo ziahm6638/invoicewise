@@ -39,7 +39,6 @@ import {
   loadJudgmentHistory,
   mergeSuppliers,
   reassignInvoiceSupplier,
-  recheckInvoiceSupplier,
   revertSupplierChange,
 } from "./suppliers";
 
@@ -454,7 +453,6 @@ async function main() {
       eventId: merged.eventId,
       actorId: userId,
     });
-    await recheckInvoiceSupplier(db, { teamId: teamA, inboxId: other.id });
     const afterUnmerge = await checksOf(other.id);
     assert(
       afterUnmerge.supplier.supplierId === supplierTwo &&

@@ -22,7 +22,6 @@ import {
   SupplierCorrectionError,
   mergeSuppliers,
   reassignInvoiceSupplier,
-  recheckInvoiceSupplier,
   revertSupplierChange,
 } from "@invoicewise/jobs/suppliers";
 import { TRPCError } from "@trpc/server";
@@ -120,13 +119,6 @@ export const suppliersRouter = createTRPCRouter({
         canCorrect: roleAtLeast(teamRole, "admin"),
       };
     }),
-
-  /** Re-runs an invoice's deterministic checks against its current supplier. */
-  recheck: workspaceProcedure
-    .input(supplierInvoiceSchema)
-    .mutation(({ ctx: { db, teamId }, input }) =>
-      recheckInvoiceSupplier(db, { teamId: teamId!, inboxId: input.inboxId }),
-    ),
 
   assignInvoice: adminProcedure
     .input(assignInvoiceSupplierSchema)
