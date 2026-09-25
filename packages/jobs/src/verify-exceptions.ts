@@ -1049,11 +1049,9 @@ async function main() {
       },
     );
 
-    // A re-extraction starts a new reading: the cancelled update of the
-    // replaced correction is recorded as superseded when it is requested,
-    // stops deciding the delivery state and is never sent (not even by a
-    // retry while the document is read again), and the bill keeps its
-    // provider ID.
+    // A re-extraction starts a new reading once it is saved: until then a
+    // retry never re-sends the correction's bill update, and a re-read that
+    // fails replaces nothing, so the update stays a retryable failure.
     await retryIntakeProcessing(database.primaryDb, {
       teamId,
       inboxId: invalid,
@@ -1075,7 +1073,7 @@ async function main() {
     check(
       "a retry while the document is read again never re-sends the replaced correction's bill update",
       requestedEntry?.id === cancelledEntry?.id &&
-        requestedEntry?.updateStatus === "superseded" &&
+        requestedEntry?.updateStatus === "cancelled" &&
         retryWhileReading?.billUpdate === "not_needed" &&
         !billJobsWhileReading.some(
           (status) => status === "queued" || status === "running",
@@ -1086,6 +1084,42 @@ async function main() {
         billJobsWhileReading,
       },
     );
+    await drain(db, workspace);
+    const billRereadFailed = await read(invalid);
+    const [keptEntry] = await listInvoiceCorrections(db, {
+      invoiceId: invalid,
+      teamId,
+    });
+    const retryAfterFailedReread = await retryInvoiceDelivery(db, {
+      invoiceId: invalid,
+      teamId,
+      teamRole: "member",
+    });
+    check(
+      "a re-read that fails leaves the correction's bill update a retryable delivery failure",
+      billRereadFailed.processingError !== null &&
+        billRereadFailed.processingRevision ===
+          cancelledUpdate.processingRevision &&
+        keptEntry?.id === cancelledEntry?.id &&
+        keptEntry?.updateStatus === "cancelled" &&
+        billRereadFailed.delivery?.state === "failed" &&
+        (await listed("needs_attention")).includes(invalid) &&
+        retryAfterFailedReread?.billUpdate === "admin_required",
+      {
+        processingError: billRereadFailed.processingError,
+        update: keptEntry?.updateStatus,
+        delivery: billRereadFailed.delivery,
+        retryAfterFailedReread,
+      },
+    );
+
+    // A re-read that is saved supersedes the unsent update: it stops deciding
+    // the delivery state and is never sent, and the bill keeps its provider ID.
+    await retryIntakeProcessing(database.primaryDb, {
+      teamId,
+      inboxId: invalid,
+      expectedRevision: billRereadFailed.processingRevision,
+    });
     await saveProcessedDocument(db, {
       id: invalid,
       teamId,

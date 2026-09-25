@@ -30,7 +30,6 @@ import {
   recordInboxRedelivery,
   recordIntakeRemovalFailure,
   reserveInboxIntake,
-  supersedeBillUpdates,
   updateInbox,
 } from "@invoicewise/db/queries";
 import {
@@ -646,10 +645,6 @@ export async function retryIntakeProcessing(
       teamId: params.teamId,
       status: "processing",
       processingError: null,
-    });
-    await supersedeBillUpdates(executor as unknown as Database, {
-      invoiceId: binding.id,
-      teamId: params.teamId,
     });
 
     const enqueued = await enqueueWorkflowJob(executor, {
