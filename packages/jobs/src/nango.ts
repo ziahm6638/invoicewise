@@ -106,25 +106,64 @@ const parseBody = async (response: Response) => {
   }
 };
 
+/**
+ * One finished Nango call: which integration, whether it went through the
+ * provider proxy, timing and outcome. Never the request or response body.
+ */
+export type NangoCallEvent = {
+  operation: string;
+  durationMs: number;
+  outcome: "ok" | "failed" | "throttled";
+};
+
+let nangoCallObserver: ((event: NangoCallEvent) => void) | undefined;
+
+/** Registers the process-wide observer for Nango calls (provider metering). */
+export const observeNangoCalls = (
+  observer: ((event: NangoCallEvent) => void) | undefined,
+) => {
+  nangoCallObserver = observer;
+};
+
 export const nangoRequest = async (
   config: NangoConfig,
   path: string,
   init: RequestInit,
 ) => {
-  const response = await fetch(`${config.baseUrl}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${config.secretKey}`,
-      ...init.headers,
-    },
-  });
+  const startedAt = performance.now();
+  const report = (outcome: NangoCallEvent["outcome"]) => {
+    try {
+      nangoCallObserver?.({
+        operation: `${path.startsWith("/proxy") ? "proxy" : "api"}:${config.integrationId}`,
+        durationMs: performance.now() - startedAt,
+        outcome,
+      });
+    } catch {
+      // Metering never changes the call's outcome.
+    }
+  };
+  let response: Response;
+  try {
+    response = await fetch(`${config.baseUrl}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${config.secretKey}`,
+        ...init.headers,
+      },
+    });
+  } catch (error) {
+    report("failed");
+    throw error;
+  }
   const body = await parseBody(response);
   if (!response.ok) {
+    report(response.status === 429 ? "throttled" : "failed");
     throw new NangoRequestError(
       errorMessage(body, response.status),
       response.status,
     );
   }
+  report("ok");
   return body;
 };
 

@@ -9,6 +9,7 @@ import {
   isNull,
   lt,
   lte,
+  notInArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -62,7 +63,13 @@ export async function enqueueWorkflowJob(
 
 export async function claimWorkflowJobs(
   db: Database,
-  params: { workerId: string; limit: number; leaseMs: number },
+  params: {
+    workerId: string;
+    limit: number;
+    leaseMs: number;
+    /** Workflows left queued this round (for example while a provider budget is spent). */
+    excludeNames?: readonly string[];
+  },
 ) {
   return db.transaction(async (tx) => {
     const now = new Date();
@@ -94,6 +101,9 @@ export async function claimWorkflowJobs(
       .where(
         and(
           lt(workflowJobs.attempts, workflowJobs.maxAttempts),
+          params.excludeNames?.length
+            ? notInArray(workflowJobs.name, [...params.excludeNames])
+            : undefined,
           or(
             and(
               eq(workflowJobs.status, "queued"),
@@ -144,6 +154,40 @@ export async function heartbeatWorkflowJob(
       heartbeatAt: now.toISOString(),
       leaseExpiresAt: new Date(now.getTime() + params.leaseMs).toISOString(),
       updatedAt: now.toISOString(),
+    })
+    .where(
+      and(
+        eq(workflowJobs.id, params.id),
+        eq(workflowJobs.status, "running"),
+        eq(workflowJobs.lockedBy, params.workerId),
+      ),
+    )
+    .returning({ id: workflowJobs.id });
+  return job;
+}
+
+/**
+ * Hands a claimed job back to the queue when its worker shuts down before the
+ * job finished (a deploy or restart). The interrupted attempt is not counted,
+ * so a drained job keeps its full retry budget and the next runner claims it
+ * at once instead of waiting for the lease to expire.
+ */
+export async function releaseWorkflowJob(
+  db: Database,
+  params: { id: string; workerId: string },
+) {
+  const now = new Date().toISOString();
+  const [job] = await db
+    .update(workflowJobs)
+    .set({
+      status: "queued",
+      runAt: now,
+      attempts: sql`greatest(${workflowJobs.attempts} - 1, 0)`,
+      lockedBy: null,
+      lockedAt: null,
+      heartbeatAt: null,
+      leaseExpiresAt: null,
+      updatedAt: now,
     })
     .where(
       and(

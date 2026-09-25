@@ -39,6 +39,7 @@ import {
   Verification,
   VerificationAborted,
   assertDisposableDatabaseName,
+  assertHealthContract,
   assertLoopbackUrl,
   assertSyntheticEnvironment,
   createIsolatedWorkspace,
@@ -737,16 +738,12 @@ async function runtimeSmoke() {
     if (healthBody.status !== "ok") {
       throw new Error(`/health returned ${JSON.stringify(healthBody)}`);
     }
-    const healthDb = await fetch(`${origin}/health/db`);
-    const dbBody = (await healthDb.json()) as { status?: string };
-    if (healthDb.status !== 200 || dbBody.status !== "healthy") {
-      throw new Error(`/health/db returned ${JSON.stringify(dbBody)}`);
-    }
+    await assertHealthContract(origin);
     const openapi = await fetch(`${origin}/openapi`);
     if (openapi.status !== 200) {
       throw new Error(`/openapi returned ${openapi.status}`);
     }
-    return "compiled API executable served health, database and OpenAPI routes";
+    return "compiled API executable served readiness, liveness, operator metrics and OpenAPI routes";
   });
 
   await v.runStep("start:api-delivery-verifier", {

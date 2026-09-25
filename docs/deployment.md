@@ -2,7 +2,10 @@
 
 InvoiceWise runs on `hp-slice`, deployed with Kamal 2 from `config/deploy.yml`.
 This is the operator runbook: what runs where, where secrets live, and how to
-deploy, check migrations and roll back. The marketing site at `invoicewise.uk`
+deploy, check migrations and roll back. Staging (`iw-staging-app.zzapp.uk`) is
+the `staging` Kamal destination on hostinger; see [Staging](#staging). Service
+targets, capacity and spend ceilings, alerts and the drain/rollback model are
+in [operations.md](operations.md). The marketing site at `invoicewise.uk`
 is `apps/website`, deployed as a separate Vercel project rather than with Kamal.
 
 ## Shape
@@ -14,7 +17,7 @@ api.invoicewise.uk ─┴─CNAME─▶ Cloudflare Tunnel 7a0344f4… (cloudflar
 kamal-proxy (shared, 127.0.0.1:3010, TLS terminates at Cloudflare)
   ├─ invoicewise-web-<version>  Next.js dashboard, :3000, health /login
   │                             (serves Better Auth at /api/auth and uploads)
-  ├─ invoicewise-api-<version>  Bun API + workflow runner, :3003, health /health
+  ├─ invoicewise-api-<version>  Bun API + workflow runner, :3003, health /health/ready
   │                             (applies migrations on boot, then serves)
   ├─ invoicewise-db             pgvector/pgvector:0.8.1-pg17, kamal network only,
   │                             data in /mnt/ssd/invoicewise/postgres
@@ -36,17 +39,25 @@ nango-connect.invoicewise.uk ┴─▶ invoicewise-nango    nangohq/nango-server
   a dirty tree gets an `_uncommitted_…` version that matches no commit.
 - Document storage is local (`STORAGE_BACKEND=local`) in
   `/mnt/ssd/invoicewise/storage`, mounted into both roles at `/data/storage`.
-- `/health` on the API checks the database; `/login` on the dashboard renders
-  the sign-in page. kamal-proxy only switches traffic to a new container once
-  its health check passes.
+- `/health/ready` on the API checks the database and answers only
+  `{"status":"ok"}` or `{"status":"unavailable"}`; `/login` on the dashboard
+  renders the sign-in page. kamal-proxy only switches traffic to a new
+  container once its health check passes. Operator diagnostics are at
+  `/ops/metrics` behind `OPS_TOKEN` ([operations.md#health-and-diagnostics](operations.md#health-and-diagnostics)).
+- The web container is capped at 1 GiB and the api container at 2 GiB
+  (`options.memory`); pools, concurrency, queue and TypeSafe spend bounds are
+  set in `config/deploy.yml` ([operations.md#capacity-and-spend-ceilings](operations.md#capacity-and-spend-ceilings)).
 
 ## Configuration and the startup preflight
 
 Each role's entrypoint (`scripts/deploy/web.sh`, `scripts/deploy/api.sh`) first
 runs `scripts/deploy/require-env.sh <role>`. It refuses to start the container
 when a required setting is missing or empty, when `NODE_ENV` is not
-`production`, or when `MIDDAY_ENCRYPTION_KEY` is not 64 hex characters. It
-prints only variable names, never values. Several of these settings would
+`production`, when `MIDDAY_ENCRYPTION_KEY` is not 64 hex characters, when a
+pool, concurrency, queue or spend bound is not a positive whole number, when a
+public URL is not https, when `OPS_TOKEN` is shorter than 32 characters, or
+when a staging container would use production's cookie names. It prints only
+variable names, never values. Several of these settings would
 otherwise fail only on first use (extraction, signed document links, encrypted
 columns) or fall back to a development default (documents in the container's
 `/tmp`). The application itself also refuses to boot in production without
@@ -75,6 +86,8 @@ line is `NAME=$NAME` from the environment `infisical run` injects.
 | `STORAGE_SIGNING_SECRET` | web, api | signed document links |
 | `MIDDAY_ENCRYPTION_KEY` | web, api | 32-byte hex key for encrypted columns |
 | `TYPESAFE_API_KEY` | api | invoice extraction and judgments (workflow runner) |
+| `OPS_TOKEN` | api | bearer token for `/ops/metrics`, read by `ops/monitor` |
+| `OPS_ALERT_TO` | monitor only | operator address for alerts; written to the monitor host by `ops/monitor/install.sh`, not deployed |
 | `NANGO_SECRET_KEY` | api, nango accessory | the Nango `prod` environment secret key (`NANGO_SECRET_KEY_PROD` in Nango) |
 | `NANGO_ENCRYPTION_KEY` | nango accessory | encrypts provider tokens in the Nango database; never change it |
 | `NANGO_DB_PASSWORD` | nango, nango-db accessories | the Nango database password |
@@ -124,7 +137,7 @@ First-time setup of a fresh host (accessories, proxy registration) is
 
 ```bash
 infisical run --env prod -- kamal app version        # should print the main SHA
-curl -fsS https://api.invoicewise.uk/health          # {"status":"ok"}
+curl -fsS https://api.invoicewise.uk/health/ready    # {"status":"ok"}
 curl -fsS -o /dev/null -w '%{http_code}\n' https://app.invoicewise.uk/login   # 200
 ```
 
@@ -221,11 +234,17 @@ ssh root@100.90.24.83 docker exec -i invoicewise-nango-db \
 ```bash
 infisical run --env prod -- kamal app containers     # lists deployed versions
 infisical run --env prod -- kamal rollback <version>
+infisical run --env prod -- kamal app version        # confirms the running version
+curl -fsS https://api.invoicewise.uk/health/ready
 ```
 
-Rollback swaps the `web` and `api` containers back to an earlier image. It does
-not undo migrations: the earlier release runs against the newer schema, which
-is why migrations stay additive. Emergency stop:
+Rollback swaps the `web` and `api` containers back to an earlier image (the
+last five are retained on the host) through the same health-gated proxy
+switch as a deploy; the api being replaced drains its workflow jobs back to
+the queue. It does not undo migrations: the earlier release runs against the
+newer schema, which is why migrations stay additive. When the earlier release
+cannot run against the newer schema, recover forward (fix, commit, deploy)
+instead. The drill is rehearsed on staging (below). Emergency stop:
 `infisical run --env prod -- kamal app stop`.
 
 ## Logs
@@ -248,3 +267,109 @@ serves other sites too, so the restart briefly interrupts them. All four
 hostnames are proxied CNAMEs to
 `7a0344f4-eee4-4222-acc7-b884164dd249.cfargotunnel.com` in the `invoicewise.uk`
 Cloudflare zone.
+
+## Staging
+
+Staging is the same image and topology as production on a different host with
+its own data: `config/deploy.staging.yml` is merged over `config/deploy.yml`
+(`kamal <command> -d staging`) and changes only what must differ.
+
+- Host: hostinger (`31.97.116.107`, also on Tailscale as `100.115.84.97`),
+  behind the shared kamal-proxy already running there (`127.0.0.1:18090`).
+  Service `invoicewise-staging`: containers `invoicewise-staging-web-staging-<version>`
+  and `…-api-staging-<version>`, accessories `invoicewise-staging-db`, `-redis`,
+  `-nango-db` and `-nango`, all data under `/srv/invoicewise-staging`.
+- Domains: `iw-staging-app.zzapp.uk` (dashboard) and
+  `iw-staging-api.zzapp.uk` (API): proxied CNAMEs in the `zzapp.uk` zone to the remotely managed
+  Cloudflare Tunnel `invoicewise-staging` (`322d1f96-…`), whose ingress (set in
+  Cloudflare, not in this repo) sends both to the host's kamal-proxy at
+  `127.0.0.1:18090` with a 404 catch-all. Its connector runs as the
+  `cloudflared` accessory (host network) with `CLOUDFLARE_TUNNEL_TOKEN` from
+  Infisical `staging`; TLS terminates at Cloudflare, as in production, on
+  the free `*.zzapp.uk` edge certificate (hence single-level hostnames: it does
+  not cover a deeper subdomain). Staging cookies are scoped to `.zzapp.uk`, a
+  domain production does not share, so browsers never send a production
+  session to staging or the reverse; the preflight refuses a staging cookie
+  domain that covers `app.invoicewise.uk` or `api.invoicewise.uk`.
+- Secrets: Infisical `staging`, all generated for staging (database, auth,
+  signing, encryption, ops token, Nango) except the Purelymail sender password
+  and the TypeSafe key, which are the same accounts as production. Staging's
+  TypeSafe ceiling is 300 calls a day. Staging Nango is internal only:
+  accounting connections are not exercised on staging.
+- Data: synthetic only. The load-test account is a staging-only user; no
+  production dump is ever restored here.
+
+### Deploying staging
+
+CI deploys every push to `main` (`.github/workflows/deploy-staging.yml`): the
+GitHub `staging` environment only admits `main`, the job signs in to Infisical
+with GitHub OIDC as `github-invoicewise-staging` (no project role; one
+additional privilege to read the `staging` environment) and gets the deploy
+SSH key (`KAMAL_SSH_KEY_B64`, authorised on hostinger as
+`invoicewise-staging-ci`), deploys with Kamal building on hostinger, and then
+checks readiness, the sign-in page and that `/ops/metrics` reports the pushed
+commit. By hand, from a clean checkout:
+
+```bash
+infisical run --env staging -- kamal deploy -d staging
+infisical run --env staging -- kamal accessory boot all -d staging   # first time only
+```
+
+### Drills
+
+Run on staging, never on production:
+
+```bash
+# Load and hostile inputs (spends TypeSafe calls from the staging budget).
+LOAD_EMAIL=… LOAD_PASSWORD=… OPS_TOKEN=… bun --no-env-file scripts/ops/load-test.ts \
+  --app https://iw-staging-app.zzapp.uk --api https://iw-staging-api.zzapp.uk
+
+# Worker interruption: SIGKILL the api container mid-extraction (no drain).
+# `docker kill` counts as a manual stop, so the container stays down until
+# started: the monitor mails api_unready, then RESOLVED once it is back and
+# the orphaned jobs are reclaimed from their expired leases.
+ssh root@31.97.116.107 'docker kill $(docker ps -qf name=invoicewise-staging-api-staging)'
+ssh root@31.97.116.107 'docker start $(docker ps -aqf name=invoicewise-staging-api-staging --latest)'
+
+# Rollback drill: back to the retained previous image, then forward again.
+infisical run --env staging -- kamal app containers -d staging
+infisical run --env staging -- kamal rollback <previous-version> -d staging
+infisical run --env staging -- kamal rollback <current-version> -d staging
+```
+
+The test account's credentials are `LOAD_TEST_EMAIL`/`LOAD_TEST_PASSWORD` in
+Infisical `staging`; the load test also accepts `--via http://127.0.0.1:<port>`
+to reach the host's kamal-proxy through an SSH tunnel before DNS exists.
+
+### Drill evidence (2026-09-25)
+
+Run against builds of the change that introduced staging (the short hashes are
+those staging builds, before the change was squashed onto `main`).
+
+- **Rollback.** With `5218c127` live and `4dca8bd1` retained,
+  `kamal rollback 4dca8bd1 -d staging` took 22 s and `kamal rollback 5218c127`
+  23 s; `/ops/metrics` reported each version afterwards. A probe polling API
+  readiness and the dashboard sign-in page every 0.5 s through both swaps saw
+  147 of 147 samples answer 200.
+- **Worker interruption.** Eight synthetic invoices were uploaded and the api
+  container was SIGKILLed with four extractions running. Two jobs were left
+  leased by the dead worker. The staging monitor mailed `api_unready`
+  (critical) on its next pass; once the container was started the two jobs
+  were reclaimed on their second attempt and succeeded, all eight invoices
+  completed, and the next pass mailed the recovery.
+- **Load and hostile inputs** (public URLs through Cloudflare, 30 distinct
+  synthetic invoices at concurrency 10): all 30 accepted, upload p50 1.1 s and
+  p95 1.2 s; the processing queue peaked at 18 due with the oldest waiting
+  5 s, drained with no failures, extraction p50 4 s, API peak RSS 461 MiB of
+  its 2 GiB limit, 90 TypeSafe calls (about 3 per invoice), no alerts. An
+  oversized upload, an 8 MB chunked body with no length, PNG bytes declared as
+  PDF, a truncated PDF, a 60-page PDF, a 20000 × 20000 PNG header and a HEIC
+  photo were each refused with 400 or 413. The run found that the request
+  after an unread oversized body could fail with a 502 through kamal-proxy's
+  shared upstream connection; intake now closes the connection on those
+  refusals, and a rerun on `3bdc7a82` (10 invoices plus every hostile input)
+  passed with no failures.
+- **Private storage.** Documents live on the host volume only; unsigned
+  requests for a stored document's path are refused (401 from the API, 404
+  from the dashboard proxy), and downloads go through signed capability URLs.
+

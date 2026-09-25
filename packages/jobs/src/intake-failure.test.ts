@@ -7,6 +7,8 @@ describe("intake failure classification", () => {
     // neither proves anything about the document, so the delivery retries.
     expect(isTransientIntakeFailure("storage_unavailable")).toBe(true);
     expect(isTransientIntakeFailure("temporarily_unavailable")).toBe(true);
+    // A full processing queue holds new work back; the caller retries later.
+    expect(isTransientIntakeFailure("queue_full")).toBe(true);
 
     // Everything else is permanent for this content and is acknowledged.
     for (const code of [

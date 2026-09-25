@@ -1,0 +1,88 @@
+# Staging: iw-staging-app.zzapp.uk and iw-staging-api.zzapp.uk on hostinger.
+# Merged over config/deploy.yml by `kamal <command> -d staging`; secrets come
+# from the Infisical `staging` environment through .kamal/secrets.staging.
+# Its own host, database, cache, storage, Nango and secrets; synthetic data
+# only. Deployed from main by .github/workflows/deploy-staging.yml.
+# See docs/deployment.md#staging.
+service: invoicewise-staging
+
+servers:
+  web:
+    hosts:
+      - 31.97.116.107 # hostinger, public address (reachable from CI)
+    proxy:
+      host: iw-staging-app.zzapp.uk
+  api:
+    hosts:
+      - 31.97.116.107
+    env:
+      clear:
+        NANGO_BASE_URL: http://invoicewise-staging-nango:3003
+        NANGO_PUBLIC_URL: https://iw-staging-nango.zzapp.uk
+        # A small spend ceiling: staging only ever processes synthetic invoices.
+        TYPESAFE_DAILY_CALL_LIMIT: 300
+    proxy:
+      host: iw-staging-api.zzapp.uk
+
+builder:
+  remote: ssh://root@31.97.116.107
+  # Public origins are compiled into the dashboard bundle, so the staging
+  # image is built with the staging origins.
+  args:
+    NEXT_PUBLIC_URL: https://iw-staging-app.zzapp.uk
+    NEXT_PUBLIC_API_URL: https://iw-staging-api.zzapp.uk
+
+volumes:
+  - /srv/invoicewise-staging/storage:/data/storage
+
+env:
+  clear:
+    INVOICEWISE_ENVIRONMENT: staging
+    BETTER_AUTH_URL: https://iw-staging-app.zzapp.uk
+    NEXT_PUBLIC_URL: https://iw-staging-app.zzapp.uk
+    NEXT_PUBLIC_API_URL: https://iw-staging-api.zzapp.uk
+    ALLOWED_API_ORIGINS: https://iw-staging-app.zzapp.uk
+    # A domain production does not share, so browsers never send one
+    # environment's session cookies to the other.
+    BETTER_AUTH_COOKIE_DOMAIN: .zzapp.uk
+    STORAGE_PUBLIC_URL: https://iw-staging-api.zzapp.uk
+    REDIS_URL: redis://invoicewise-staging-redis:6379
+    AUTH_EMAIL_FROM: InvoiceWise Staging <auth@invoicewise.uk>
+
+accessories:
+  db:
+    host: 31.97.116.107
+    directories:
+      - /srv/invoicewise-staging/postgres:/var/lib/postgresql/data
+  redis:
+    host: 31.97.116.107
+    directories:
+      - /srv/invoicewise-staging/redis:/data
+  nango-db:
+    host: 31.97.116.107
+    directories:
+      - /srv/invoicewise-staging/nango-postgres:/var/lib/postgresql/data
+  nango:
+    host: 31.97.116.107
+    # Loopback only and not published through the tunnel: accounting
+    # connections are not exercised on staging.
+    port: 127.0.0.1:3520:3003
+    options:
+      publish: 127.0.0.1:3521:3009
+    env:
+      clear:
+        NANGO_SERVER_URL: https://iw-staging-nango.zzapp.uk
+        NANGO_PUBLIC_CONNECT_URL: https://iw-staging-nango-connect.zzapp.uk
+        NANGO_DB_HOST: invoicewise-staging-nango-db
+  # Connector for the remotely-managed Cloudflare Tunnel "invoicewise-staging":
+  # iw-staging-app.zzapp.uk and iw-staging-api.zzapp.uk -> the shared
+  # kamal-proxy on 127.0.0.1:18090 (hence host networking). TLS terminates at
+  # Cloudflare, as in production. Ingress lives in Cloudflare, not here.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    host: 31.97.116.107
+    cmd: tunnel --no-autoupdate run
+    network: host
+    env:
+      secret:
+        - TUNNEL_TOKEN:CLOUDFLARE_TUNNEL_TOKEN

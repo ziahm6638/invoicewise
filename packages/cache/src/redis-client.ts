@@ -22,16 +22,14 @@ export class RedisCache {
       throw new Error("REDIS_URL environment variable is required");
     }
 
-    // Fly's private network is IPv6-only; everywhere else (Docker networks,
-    // local development) let the resolver pick the address family.
-    const isFly = Boolean(process.env.FLY_APP_NAME);
-    const isProduction = process.env.NODE_ENV === "production" || isFly;
+    const isProduction = process.env.NODE_ENV === "production";
 
+    // One connection per cache namespace; the resolver picks the address
+    // family (Docker networks and local development).
     this.redis = createClient({
       url: redisUrl,
-      pingInterval: 4 * 60 * 1000, // Your proven 4-minute ping interval
+      pingInterval: 4 * 60 * 1000,
       socket: {
-        family: isFly ? 6 : 0,
         connectTimeout: isProduction ? 15000 : 5000,
       },
     });

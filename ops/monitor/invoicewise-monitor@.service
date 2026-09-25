@@ -1,0 +1,10 @@
+[Unit]
+Description=InvoiceWise %i monitor pass (readiness, alerts, operator mail)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/invoicewise-monitor %i
+TimeoutStartSec=5min
+Nice=10

@@ -63,7 +63,11 @@ const SYNTHETIC_SECRETS = {
   TYPESAFE_API_KEY: "ts_verify_stub",
   NANGO_SECRET_KEY: "nango_verify_stub",
   STORAGE_S3_SECRET_ACCESS_KEY: LOCAL_MINIO_SECRET_KEY,
+  OPS_TOKEN: "invoicewise-verify-ops-token-0123456789abcdef",
 } as const;
+
+/** Operator token the verification API processes accept at /ops/metrics. */
+export const VERIFY_OPS_TOKEN = SYNTHETIC_SECRETS.OPS_TOKEN;
 
 /**
  * Provider/telemetry keys that must be defined-but-empty for verification
@@ -888,4 +892,49 @@ export function createIsolatedWorkspace(
     skippedEnvFiles: skippedEnvFiles.sort(),
     linkedEntries,
   };
+}
+
+/**
+ * The public health contract and operator diagnostics of a running API:
+ * readiness and liveness answer only `{"status":"ok"}`, the inherited pool
+ * and database diagnostics are gone, and `/ops/metrics` refuses anonymous
+ * callers but serves real aggregates to the operator token.
+ */
+export async function assertHealthContract(origin: string) {
+  for (const path of ["/health", "/health/ready", "/health/live"]) {
+    const response = await fetch(`${origin}${path}`);
+    const body = await response.text();
+    if (response.status !== 200 || body !== '{"status":"ok"}') {
+      throw new Error(`${path} returned ${response.status} ${body}`);
+    }
+  }
+  for (const path of ["/health/db", "/health/pools"]) {
+    const response = await fetch(`${origin}${path}`);
+    const body = await response.text();
+    if (response.status < 400 || /pool|timing|region/i.test(body)) {
+      throw new Error(`${path} is still public (${response.status})`);
+    }
+  }
+  const anonymous = await fetch(`${origin}/ops/metrics`);
+  if (anonymous.status !== 401) {
+    throw new Error(
+      `/ops/metrics without a token returned ${anonymous.status}`,
+    );
+  }
+  const operator = await fetch(`${origin}/ops/metrics`, {
+    headers: { authorization: `Bearer ${VERIFY_OPS_TOKEN}` },
+  });
+  const metrics = (await operator.json().catch(() => null)) as {
+    database?: { ok?: boolean };
+    queue?: unknown;
+    alerts?: unknown;
+  } | null;
+  if (
+    operator.status !== 200 ||
+    metrics?.database?.ok !== true ||
+    !Array.isArray(metrics.queue) ||
+    !Array.isArray(metrics.alerts)
+  ) {
+    throw new Error(`/ops/metrics returned ${operator.status}`);
+  }
 }

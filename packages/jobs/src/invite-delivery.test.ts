@@ -84,6 +84,8 @@ const memoryQueue = (jobs: WorkflowJob[]) => {
         job.status = "failed";
         job.lastError = error;
       }),
+    release: () => Effect.void,
+    providerCallsSince: () => Effect.succeed(0),
   } as WorkflowRepository["Type"]);
   return repository;
 };

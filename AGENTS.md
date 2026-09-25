@@ -72,6 +72,7 @@ bun db:migrate             # apply packages/db/migrations forward
 bun jobs:worker            # standalone Effect workflow runner
 bun jobs:status            # inspect queued/running/stuck jobs
 bun jobs:resume-deletions  # re-queue failed account/workspace deletion cleanup (docs/offboarding.md)
+bun scripts/ops/load-test.ts  # staging-only load and hostile-input test (docs/operations.md)
 # tesseract must be installed locally for the scanned-invoice OCR test (CI and the image install it)
 bun typecheck
 bun lint
@@ -108,12 +109,17 @@ The app runs at `app.invoicewise.uk` (dashboard) and `api.invoicewise.uk` (API) 
 deployed with Kamal (`config/deploy.yml`) using secrets from the self-hosted Infisical
 project `invoicewise` (`prod`). Migrations apply when the API container boots. Deploy with
 `infisical run --env prod -- kamal deploy`; the full procedure is in `docs/deployment.md`.
-A new required production setting goes in Infisical, `config/deploy.yml`, `.kamal/secrets` and
-`scripts/deploy/require-env.sh` together; `scripts/deploy/deploy-config.test.ts` checks they agree.
+A new required production setting goes in Infisical (`prod` and `staging`), `config/deploy.yml`,
+`.kamal/secrets` and `.kamal/secrets.staging` and `scripts/deploy/require-env.sh` together; `scripts/deploy/deploy-config.test.ts` checks they agree.
 Behind the proxy a dashboard request's own origin is the internal `https://localhost:3000`, so
 absolute dashboard URLs (redirects, provider return URLs) come from `getPublicUrl`
 (`apps/dashboard/src/utils/environment.ts`), never `request.url`.
 Transactional mail is Purelymail SMTP as `auth@invoicewise.uk`, never Resend.
+Staging (`iw-staging-app.zzapp.uk`, `iw-staging-api.zzapp.uk`, own cookie domain) is the Kamal `staging` destination
+on hostinger (`config/deploy.staging.yml`, Infisical `staging`), deployed by CI from `main`; drills
+(rollback, worker kill, load) run there, never on production. Service targets, capacity/spend
+ceilings, `/ops/metrics` (behind `OPS_TOKEN`) and the alert runbook are in `docs/operations.md`;
+public `/health*` responses must stay `{"status":…}` only.
 Nango runs as the `nango`/`nango-db` Kamal accessories (never restarted by `kamal deploy`); the
 InvoiceWise and Nango databases are dumped nightly by `ops/backup` (see `docs/deployment.md`).
 

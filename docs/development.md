@@ -39,9 +39,8 @@ failed `--wait`. The migration command applies
 `packages/db/migrations` to the database configured by `DATABASE_PRIMARY_URL`.
 There is no product-data seed in this repository.
 
-Local development sets only `DATABASE_PRIMARY_URL`. Leave
-`DATABASE_FRA_URL`, `DATABASE_SJC_URL`, and `DATABASE_IAD_URL` unset so
-`packages/db` uses its single-database path without creating replica pools.
+Local development sets only `DATABASE_PRIMARY_URL`; `packages/db` opens one
+bounded pool per process (`DATABASE_POOL_MAX`, default 8 in development).
 
 ## Run the API
 

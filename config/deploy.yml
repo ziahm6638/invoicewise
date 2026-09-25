@@ -1,7 +1,16 @@
 # Kamal deployment for app.invoicewise.uk and api.invoicewise.uk on hp-slice.
+# Staging (iw-staging-app.zzapp.uk, hostinger) is the `staging` destination:
+# config/deploy.staging.yml is merged over this file by `kamal ... -d staging`.
 # Read docs/deployment.md before changing anything here.
 service: invoicewise
 image: invoicewise
+
+# kamal-proxy stops routing to an old container, then waits this long for its
+# in-flight requests before the container gets SIGTERM. The API then hands
+# unfinished workflow jobs back to the queue (docs/operations.md#deploys).
+drain_timeout: 30
+# Earlier release containers kept on the host for `kamal rollback`.
+retain_containers: 5
 
 servers:
   # Next.js dashboard. Serves Better Auth (/api/auth) and document uploads.
@@ -9,6 +18,9 @@ servers:
     hosts:
       - 100.90.24.83 # hp-slice over Tailscale
     cmd: /app/scripts/deploy/web.sh
+    # Hard memory ceiling (docs/operations.md#capacity); observed ~250 MB.
+    options:
+      memory: 1g
     proxy:
       host: app.invoicewise.uk
       app_port: 3000
@@ -22,9 +34,20 @@ servers:
     hosts:
       - 100.90.24.83
     cmd: /app/scripts/deploy/api.sh
+    # Hard memory ceiling for the API, the workflow runner and its bounded
+    # PDF/OCR child processes (2 x 320 MB RSS budget); observed ~450 MB idle.
+    options:
+      memory: 2g
     env:
       clear:
         PORT: 3003
+        # Workflow jobs run at once, and TypeSafe calls allowed per UTC day
+        # before document processing waits for tomorrow (the spend ceiling).
+        WORKFLOW_CONCURRENCY: 4
+        TYPESAFE_DAILY_CALL_LIMIT: 2000
+        # Queued document processing beyond which intake answers 429.
+        INTAKE_MAX_PENDING_PER_WORKSPACE: 200
+        INTAKE_MAX_PENDING_TOTAL: 1000
         TYPESAFE_BASE_URL: https://api.typesafe.ai
         # Self-hosted Nango (the nango accessory below). The API reaches it on
         # the kamal network; browsers reach its public host, and Nango returns
@@ -39,12 +62,15 @@ servers:
         # The Nango prod environment secret key (NANGO_SECRET_KEY_PROD on the
         # nango accessory): connect sessions, connections and proxied calls.
         - NANGO_SECRET_KEY
+        # Bearer token for /ops/metrics, read by ops/monitor.
+        - OPS_TOKEN
     proxy:
       host: api.invoicewise.uk
       app_port: 3003
       ssl: false
+      # Readiness: the database answers. Returns only ok/unavailable.
       healthcheck:
-        path: /health
+        path: /health/ready
         interval: 5
         timeout: 10
 
@@ -69,6 +95,11 @@ volumes:
 env:
   clear:
     NODE_ENV: production
+    INVOICEWISE_ENVIRONMENT: production
+    # Connections per database pool. The api process holds three pools
+    # (requests, invoice reads, workflow runner) and web one: at most 32 of
+    # Postgres' 100 connections.
+    DATABASE_POOL_MAX: 8
     BETTER_AUTH_URL: https://app.invoicewise.uk
     NEXT_PUBLIC_URL: https://app.invoicewise.uk
     NEXT_PUBLIC_API_URL: https://api.invoicewise.uk

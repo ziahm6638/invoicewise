@@ -9,15 +9,7 @@ import {
   isValidDocumentBinding,
 } from "@invoicewise/db/queries";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
-import {
-  Config,
-  Context,
-  Effect,
-  Layer,
-  Option,
-  Redacted,
-  Schema,
-} from "effect";
+import { Config, Context, Effect, Layer, Redacted, Schema } from "effect";
 
 const Transaction = Schema.Struct({
   id: Schema.String,
@@ -245,41 +237,21 @@ class StorageClient extends Context.Tag("invoicewise/StorageClient")<
   { readonly client: ReturnType<typeof createStorageClientFromEnv> }
 >() {}
 
-const optionalRedacted = (name: string) => Config.option(Config.redacted(name));
-
 const DatabaseLive = Layer.scoped(
   InvoiceDatabase,
   Effect.acquireRelease(
     Config.all({
       primaryUrl: Config.redacted("DATABASE_PRIMARY_URL"),
-      fraUrl: optionalRedacted("DATABASE_FRA_URL"),
-      sjcUrl: optionalRedacted("DATABASE_SJC_URL"),
-      iadUrl: optionalRedacted("DATABASE_IAD_URL"),
-      region: Config.option(Config.string("FLY_REGION")),
-      instance: Config.option(Config.string("FLY_ALLOC_ID")),
       environment: Config.string("NODE_ENV").pipe(
         Config.withDefault("production"),
       ),
     }).pipe(
-      Effect.map((config) => {
-        const replicaUrls =
-          Option.isSome(config.fraUrl) &&
-          Option.isSome(config.sjcUrl) &&
-          Option.isSome(config.iadUrl)
-            ? {
-                fra: Redacted.value(config.fraUrl.value),
-                sjc: Redacted.value(config.sjcUrl.value),
-                iad: Redacted.value(config.iadUrl.value),
-              }
-            : undefined;
-        return createDatabaseClient({
+      Effect.map((config) =>
+        createDatabaseClient({
           primaryUrl: Redacted.value(config.primaryUrl),
-          replicaUrls,
-          region: Option.getOrUndefined(config.region),
-          instance: Option.getOrUndefined(config.instance),
           isDevelopment: config.environment === "development",
-        });
-      }),
+        }),
+      ),
     ),
     (client) => Effect.promise(() => client.close()),
   ).pipe(Effect.map((client) => ({ db: client.db }))),

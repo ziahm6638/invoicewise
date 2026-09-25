@@ -28,6 +28,7 @@ import {
   ManagedProcess,
   ROOT,
   type Verification,
+  assertHealthContract,
   executablePath,
   waitForHttp,
 } from "./lib";
@@ -263,12 +264,8 @@ export async function runProductionE2E(v: Verification, context: E2EContext) {
       (r) => r.status === 200,
       "API /health",
     );
-    const db = await fetch(`${API_ORIGIN}/health/db`);
-    const body = (await db.json()) as { status?: string };
-    if (db.status !== 200 || body.status !== "healthy") {
-      throw new Error(`API /health/db not healthy: ${JSON.stringify(body)}`);
-    }
-    return `built API executable served /health and /health/db from ${API_ORIGIN}`;
+    await assertHealthContract(API_ORIGIN);
+    return `built API executable served the public health contract and operator metrics from ${API_ORIGIN}`;
   });
 
   const dashboard = await ManagedProcess.start(v, "e2e:dashboard-production", {
