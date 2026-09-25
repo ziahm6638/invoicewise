@@ -30,6 +30,7 @@ export function useTeamPermissions() {
       deleteWorkspace: false,
       transferOwnership: false,
       exportData: false,
+      manageAuthorizationSources: false,
     }
   );
 }

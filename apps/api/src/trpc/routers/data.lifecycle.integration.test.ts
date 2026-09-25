@@ -53,6 +53,7 @@ suite("data lifecycle (integration)", () => {
   let exportRoute: typeof import("@api/storage/export-route");
   let runner: typeof import("@invoicewise/jobs/runner");
   let supplierJobs: typeof import("@invoicewise/jobs/suppliers");
+  let sourceJobs: typeof import("@invoicewise/jobs/authorization-sources");
   let effect: typeof import("effect");
   let caller: (ctx: any) => Record<string, any>;
   let storageRoot: string;
@@ -83,6 +84,7 @@ suite("data lifecycle (integration)", () => {
     exportRoute = await import("@api/storage/export-route");
     runner = await import("@invoicewise/jobs/runner");
     supplierJobs = await import("@invoicewise/jobs/suppliers");
+    sourceJobs = await import("@invoicewise/jobs/authorization-sources");
     effect = await import("effect");
     const { appRouter } = await import("@api/trpc/routers/_app");
     const { createCallerFactory } = await import("@api/trpc/init");
@@ -402,6 +404,48 @@ suite("data lifecycle (integration)", () => {
       fileName: "again.pdf",
     });
 
+    // An amended purchase order with its signed copy, and one in the
+    // neighbour's workspace that must not leak.
+    const purchaseOrder = await caller(
+      ctx(owner, teamId),
+    ).authorizationSources.create({
+      source: {
+        type: "purchase_order",
+        reference: "PO-EXPORT-1",
+        currency: "GBP",
+        authorizedTotal: "100",
+      },
+    });
+    await caller(ctx(owner, teamId)).authorizationSources.amend({
+      id: purchaseOrder.sourceId,
+      source: {
+        type: "purchase_order",
+        reference: "PO-EXPORT-1",
+        currency: "GBP",
+        authorizedTotal: "150",
+      },
+    });
+    const signedCopy = Buffer.from("%PDF-1.4\nsigned purchase order\n%%EOF\n");
+    await sourceJobs.attachAuthorizationSourceDocument(
+      db,
+      {
+        teamId,
+        actorId: owner.id,
+        sourceId: purchaseOrder.sourceId,
+        bytes: new Uint8Array(signedCopy),
+        fileName: "signed-po.pdf",
+      },
+      storage,
+    );
+    await caller(
+      ctx(neighbourOwner, neighbourTeam),
+    ).authorizationSources.create({
+      source: {
+        type: "contract",
+        reference: "Neighbour Secret Contract",
+        authorizedTotal: "1",
+      },
+    });
     const received = await seedInboundEmail(teamId, {
       status: "processed",
       subject: "Invoice from Acme",
@@ -480,7 +524,8 @@ suite("data lifecycle (integration)", () => {
       workspaceId: teamId,
       counts: {
         invoices: 5,
-        documents: 3,
+        // Three invoice originals and the purchase order's signed copy.
+        documents: 4,
         missingDocuments: 2,
         suppliers: 3,
         judgments: 8,
@@ -589,6 +634,33 @@ suite("data lifecycle (integration)", () => {
         (file: { path: string }) => file.path === "inbound-emails.json",
       ),
     ).toMatchObject({ records: 2 });
+    const sources = JSON.parse(
+      entries.get("authorization-sources.json")!.toString(),
+    );
+    expect(sources).toHaveLength(1);
+    expect(sources[0]).toMatchObject({
+      id: purchaseOrder.sourceId,
+      reference: "PO-EXPORT-1",
+      currentVersion: 2,
+    });
+    expect(
+      sources[0].versions.map(
+        (version: { version: number; authorizedTotal: string }) => [
+          version.version,
+          version.authorizedTotal,
+        ],
+      ),
+    ).toEqual([
+      [1, "100.00"],
+      [2, "150.00"],
+    ]);
+    const [sourceDocument] = sources[0].documents;
+    expect(sourceDocument).toMatchObject({
+      status: "included",
+      sha256: sha256(new Uint8Array(signedCopy)),
+    });
+    expect(entries.get(sourceDocument.path)?.equals(signedCopy)).toBe(true);
+    expect(manifest.counts.authorizationSources).toBe(1);
     const judgments = JSON.parse(entries.get("judgments.json")!.toString());
     expect(judgments.map((judgment: { id: string }) => judgment.id)).toContain(
       `${invoices[0]!.id}:known_supplier`,
@@ -611,6 +683,7 @@ suite("data lifecycle (integration)", () => {
     expect(everything).not.toContain("Neighbour Secret Subject");
     expect(everything).not.toContain(failedEmail.raw.toString());
     expect(everything).not.toContain(failedEmail.messageId);
+    expect(everything).not.toContain("Neighbour Secret Contract");
     for (const invoice of excluded) {
       expect(everything).not.toContain(invoice.id);
     }

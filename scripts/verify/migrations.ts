@@ -24,7 +24,7 @@ import {
 } from "./lib";
 
 const PRIOR_SCHEMA_THROUGH = 6;
-const TOTAL_MIGRATIONS = 26;
+const TOTAL_MIGRATIONS = 27;
 
 const PRIOR_SCHEMA_BASELINE = join(
   ROOT,
@@ -374,6 +374,10 @@ export async function runMigrationVerification(
       ["inbound_emails", "message_key"],
       ["data_exports", "status"],
       ["data_exports", "expires_at"],
+      ["authorization_sources", "reference_key"],
+      ["authorization_source_versions", "content_hash"],
+      ["authorization_source_documents", "sha256"],
+      ["authorization_source_imports", "errors"],
       ["inbox", "extraction_original"],
       ["inbox", "judgments_rerun_status"],
       ["invoice_corrections", "update_status"],

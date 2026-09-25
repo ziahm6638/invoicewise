@@ -46,10 +46,13 @@ const tooLargeBody = () => {
  * the stream is counted as it is read, and the reader is cancelled as soon as
  * the bound is crossed.
  */
-export async function readBoundedFormData(
+export async function readBoundedBody(
   request: Request,
   maxBytes: number,
-): Promise<BoundedFormResult> {
+): Promise<
+  | { ok: true; bytes: Uint8Array<ArrayBuffer> }
+  | { ok: false; code: "too_large" | "malformed"; message: string }
+> {
   const declaredLength = Number(request.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     return tooLargeBody();
@@ -82,12 +85,22 @@ export async function readBoundedFormData(
     }
   }
 
-  const buffered = new Uint8Array(total);
+  const bytes = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {
-    buffered.set(chunk, offset);
+    bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
+  return { ok: true, bytes };
+}
+
+export async function readBoundedFormData(
+  request: Request,
+  maxBytes: number,
+): Promise<BoundedFormResult> {
+  const read = await readBoundedBody(request, maxBytes);
+  if (!read.ok) return read;
+  const buffered = read.bytes;
 
   const contentType = request.headers.get("content-type");
   if (!contentType) {

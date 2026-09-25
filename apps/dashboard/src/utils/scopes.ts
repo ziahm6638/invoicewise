@@ -9,6 +9,16 @@ export const RESOURCES = [
     ],
   },
   {
+    key: "sources",
+    name: "Authorization sources",
+    description:
+      "Jobs, purchase orders and contracts invoices are checked against",
+    scopes: [
+      { scope: "sources.read", type: "read", label: "Read" },
+      { scope: "sources.write", type: "write", label: "Write" },
+    ],
+  },
+  {
     key: "teams",
     name: "Teams",
     description: "Access to team data",

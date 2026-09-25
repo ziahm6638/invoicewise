@@ -415,7 +415,8 @@ disposable local stack:
   invoice and queued-work rows, and an injected migration failure with the
   documented forward recovery;
 - the existing verifiers: `apps/api` delivery, `packages/jobs` workflows,
-  accounting and handoff fault injection, the local and MinIO-backed storage
+  accounting and handoff fault injection, supplier identity, authorization
+  sources ([authorization sources](authorization-sources.md#proof)), the local and MinIO-backed storage
   adapters, the #32/#34 security and intake HTTP regression suites
   (including the concurrency, content-hash and request-body bound checks), and
   the data lifecycle export and retention suite

@@ -185,6 +185,8 @@ suite("workspace permissions (integration)", () => {
       expect(queries.clampScopesForRole("owner", ["apis.all"])).toEqual([
         "inbox.read",
         "inbox.write",
+        "sources.read",
+        "sources.write",
         "teams.read",
         "teams.write",
         "users.read",
@@ -211,14 +213,26 @@ suite("workspace permissions (integration)", () => {
 
     test("aliases expand before the role intersection", () => {
       expect(queries.clampScopesForRole("member", ["apis.all"]).sort()).toEqual(
-        ["inbox.read", "inbox.write", "teams.read", "users.read"],
+        [
+          "inbox.read",
+          "inbox.write",
+          "sources.read",
+          "teams.read",
+          "users.read",
+        ],
       );
 
       expect(
         queries
           .clampScopesForRole("admin", ["apis.read", "teams.write"])
           .sort(),
-      ).toEqual(["inbox.read", "teams.read", "teams.write", "users.read"]);
+      ).toEqual([
+        "inbox.read",
+        "sources.read",
+        "teams.read",
+        "teams.write",
+        "users.read",
+      ]);
 
       // A member can never hold team or user management writes.
       expect(
@@ -393,6 +407,121 @@ suite("workspace permissions (integration)", () => {
       await expect(
         admin.suppliers.revert({ eventId: assigned.eventId, inboxId }),
       ).rejects.toThrow();
+    });
+
+    test("only an admin writes authorization sources; members read them; other workspaces see nothing", async () => {
+      const member = caller(ctx(ids.memberA, ids.teamA));
+      const admin = caller(ctx(ids.adminA, ids.teamA));
+      const otherOwner = caller(ctx(ids.ownerB, ids.teamB));
+      const source = {
+        type: "purchase_order",
+        reference: "PO-PERM-1",
+        currency: "GBP",
+        taxBasis: "exclusive",
+        authorizedTotal: "500",
+      };
+      const csv =
+        "source_type,reference,authorized_total\njob,JOB-PERM-1,100\n";
+
+      // A member can neither create, import, amend, close nor link.
+      await expect(
+        member.authorizationSources.create({ source }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        member.authorizationSources.import({ csv, dryRun: false }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(member.authorizationSources.imports()).rejects.toMatchObject(
+        { code: "FORBIDDEN" },
+      );
+
+      const created = await admin.authorizationSources.create({ source });
+      expect(created).toMatchObject({ outcome: "created", version: 1 });
+      const id = created.sourceId!;
+
+      await expect(
+        member.authorizationSources.amend({
+          id,
+          source: { ...source, authorizedTotal: "999" },
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        member.authorizationSources.setStatus({ id, status: "cancelled" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        member.authorizationSources.linkSupplier({
+          id,
+          supplierId: crypto.randomUUID(),
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      // A member reads the list, the source and each version.
+      const listed = await member.authorizationSources.list({});
+      expect(listed.data.map((row: { id: string }) => row.id)).toContain(id);
+      const read = await member.authorizationSources.get({ id });
+      expect(read.canManage).toBe(false);
+      expect(
+        read.current.gaps.map((gap: { code: string }) => gap.code),
+      ).toEqual(["unknown_supplier"]);
+
+      // The admin amends it; the original stays readable.
+      await admin.authorizationSources.amend({
+        id,
+        source: {
+          ...source,
+          authorizedTotal: "750",
+          effectiveFrom: "2026-01-01",
+        },
+      });
+      expect(
+        (await member.authorizationSources.version({ id, version: 1 }))
+          .authorizedTotal,
+      ).toBe("500.00");
+      expect(
+        (
+          await member.authorizationSources.effective({
+            id,
+            on: "2026-06-01",
+          })
+        )?.version,
+      ).toBe(2);
+      expect((await admin.authorizationSources.get({ id })).canManage).toBe(
+        true,
+      );
+
+      // Another workspace neither reads nor changes it, even by id.
+      await expect(
+        otherOwner.authorizationSources.get({ id }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        otherOwner.authorizationSources.version({ id, version: 1 }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(
+        await otherOwner.authorizationSources.effective({
+          id,
+          on: "2026-06-01",
+        }),
+      ).toBeNull();
+      await expect(
+        otherOwner.authorizationSources.amend({ id, source }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        otherOwner.authorizationSources.setStatus({ id, status: "cancelled" }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(
+        (await otherOwner.authorizationSources.list({})).data.map(
+          (row: { id: string }) => row.id,
+        ),
+      ).not.toContain(id);
+
+      // An admin of the owning workspace imports; a duplicate create conflicts.
+      const imported = await admin.authorizationSources.import({
+        csv,
+        dryRun: false,
+      });
+      expect(imported).toMatchObject({ status: "applied" });
+      await expect(
+        admin.authorizationSources.create({ source }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
     test("invoice corrections follow the workspace and the accounting role", async () => {

@@ -71,6 +71,15 @@ export const canDeleteWorkspace = (role: TeamRole | null | undefined) =>
 export const canTransferOwnership = (role: TeamRole | null | undefined) =>
   roleAtLeast(role, "owner");
 
+/**
+ * Jobs, purchase orders and contracts are the commitments invoices are
+ * checked against, so creating, importing, amending, closing or cancelling
+ * them is kept away from the members who process the invoices.
+ */
+export const canManageAuthorizationSources = (
+  role: TeamRole | null | undefined,
+) => roleAtLeast(role, "admin");
+
 /** A full export carries every member's data and the workspace's documents. */
 export const canExportData = (role: TeamRole | null | undefined) =>
   roleAtLeast(role, "owner");
@@ -89,6 +98,7 @@ export const getTeamCapabilities = (role: TeamRole | null | undefined) => ({
   deleteWorkspace: canDeleteWorkspace(role),
   transferOwnership: canTransferOwnership(role),
   exportData: canExportData(role),
+  manageAuthorizationSources: canManageAuthorizationSources(role),
 });
 
 /**
@@ -169,12 +179,14 @@ export const isReadScope = (scope: string) => scope.endsWith(".read");
 
 /**
  * Scopes a member may hold on a credential. Members use invoice features and
- * read their workspace, but never manage the workspace or its integrations;
- * those surfaces are additionally gated by role on the route itself.
+ * read their workspace and its authorization sources, but never manage the
+ * workspace, its integrations or its authorization sources; those surfaces
+ * are additionally gated by role on the route itself.
  */
 export const MEMBER_SCOPES: readonly ResourceScope[] = [
   "inbox.read",
   "inbox.write",
+  "sources.read",
   "teams.read",
   "users.read",
 ];

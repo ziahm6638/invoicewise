@@ -908,6 +908,8 @@ suite("workspace permissions over real HTTP", () => {
       [
         "inbox.read",
         "inbox.write",
+        "sources.read",
+        "sources.write",
         "teams.read",
         "teams.write",
         "users.read",
@@ -1758,5 +1760,207 @@ suite("workspace permissions over real HTTP", () => {
       ((await adminRest.json()) as { accounting: string }).accounting,
     ).toBe("requeued");
     expect(await postStatus(memberRestInvoice)).toBe("queued");
+  });
+
+  test("authorization sources: scoped API keys, admin-only writes, versions and workspace isolation", async () => {
+    const owner = await createUser("sources-owner");
+    const member = await createUser("sources-member");
+    const outsider = await createUser("sources-outsider");
+
+    const teamResult = await trpc(
+      owner.cookie,
+      "team.create",
+      { name: "Sources Team", baseCurrency: "GBP", switchTeam: true },
+      "mutation",
+    );
+    const teamId = teamResult.data as string;
+    created.teamIds.push(teamId);
+    await joinTeam(owner, member, "member");
+    expect((await switchTeam(member.cookie, teamId)).error).toBeNull();
+
+    const key = async (cookie: string, scopes: string[]) => {
+      const result = await trpc(
+        cookie,
+        "apiKeys.upsert",
+        { name: `Sources ${scopes.join(" ")}`, scopes },
+        "mutation",
+      );
+      expect(result.error).toBeNull();
+      return {
+        Authorization: `Bearer ${(result.data as { key: string }).key}`,
+      };
+    };
+    const send = (
+      path: string,
+      headers: Record<string, string>,
+      body: unknown,
+    ) =>
+      fetch(`${BASE}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+
+    const inboxOnly = await key(owner.cookie, ["inbox.read", "inbox.write"]);
+    const readOnly = await key(owner.cookie, ["sources.read"]);
+    const writer = await key(owner.cookie, ["sources.read", "sources.write"]);
+
+    const sources = [
+      {
+        type: "job",
+        reference: "JOB-7",
+        currency: "GBP",
+        authorizedTotal: "4200",
+      },
+      {
+        type: "purchase_order",
+        reference: "PO-7",
+        currency: "GBP",
+        taxBasis: "exclusive",
+        issuedOn: "2026-09-01",
+        lines: [
+          { description: "Oak boards", quantity: 120, unitPrice: "18.5" },
+        ],
+      },
+      { type: "contract", reference: "CT-7", authorizedTotal: "14400" },
+    ];
+
+    // Scopes decide the surface: no sources scope, read only, read and write.
+    expect((await get("/authorization-sources", inboxOnly)).status).toBe(403);
+    expect(
+      (await send("/authorization-sources", inboxOnly, { sources })).status,
+    ).toBe(403);
+    expect((await get("/authorization-sources", readOnly)).status).toBe(200);
+    expect(
+      (await send("/authorization-sources", readOnly, { sources })).status,
+    ).toBe(403);
+
+    // An invalid batch is refused whole, with each problem located.
+    const invalid = await send("/authorization-sources", writer, {
+      sources: [
+        ...sources,
+        { type: "job", reference: "JOB-8", currency: "££" },
+      ],
+    });
+    expect(invalid.status).toBe(422);
+    const invalidBody = (await invalid.json()) as {
+      errors: { index: number; field: string }[];
+    };
+    expect(
+      invalidBody.errors.map((error) => [error.index, error.field]),
+    ).toEqual([
+      [3, "currency"],
+      [3, "authorizedTotal"],
+    ]);
+    expect(
+      (
+        (await (await get("/authorization-sources", readOnly)).json()) as {
+          data: unknown[];
+        }
+      ).data,
+    ).toEqual([]);
+
+    // Import a job, a purchase order and a contract; amend the purchase order.
+    const applied = await send("/authorization-sources", writer, { sources });
+    expect(applied.status).toBe(200);
+    const appliedBody = (await applied.json()) as {
+      summary: { created: number };
+      results: { sourceId: string; reference: string }[];
+    };
+    expect(appliedBody.summary.created).toBe(3);
+    const poId = appliedBody.results[1]!.sourceId;
+
+    const amended = await send("/authorization-sources", writer, {
+      sources: [
+        {
+          ...sources[1],
+          effectiveFrom: "2026-09-15",
+          changeReason: "Extra boards",
+          lines: [
+            { description: "Oak boards", quantity: 140, unitPrice: "18.5" },
+          ],
+        },
+      ],
+    });
+    expect(amended.status).toBe(200);
+    expect(
+      (
+        (await amended.json()) as {
+          results: { outcome: string; version: number }[];
+        }
+      ).results[0],
+    ).toMatchObject({ outcome: "amended", version: 2 });
+
+    const original = await get(
+      `/authorization-sources/${poId}/versions/1`,
+      readOnly,
+    );
+    expect(
+      ((await original.json()) as { authorizedTotal: string }).authorizedTotal,
+    ).toBe("2220.00");
+    const effective = await get(
+      `/authorization-sources/${poId}/effective?on=2026-09-20`,
+      readOnly,
+    );
+    expect(((await effective.json()) as { version: number }).version).toBe(2);
+    const detail = (await (
+      await get(`/authorization-sources/${poId}`, readOnly)
+    ).json()) as {
+      current: { authorizedTotal: string };
+      versions: { version: number }[];
+    };
+    expect(detail.current.authorizedTotal).toBe("2590.00");
+    expect(detail.versions.map((version) => version.version)).toEqual([2, 1]);
+
+    // CSV import through the same scoped API.
+    const csv = await fetch(
+      `${BASE}/authorization-sources/import?dryRun=true`,
+      {
+        method: "POST",
+        headers: { "content-type": "text/csv", ...writer },
+        body: "source_type,reference,authorized_total\njob,JOB-9,10\n",
+      },
+    );
+    expect(csv.status).toBe(200);
+    expect(((await csv.json()) as { status: string }).status).toBe("validated");
+
+    // A member's session reads but never writes, whatever the scopes.
+    expect(
+      (await get(`/authorization-sources/${poId}`, { cookie: member.cookie }))
+        .status,
+    ).toBe(200);
+    const memberWrite = await post(
+      "/authorization-sources",
+      { sources },
+      member.cookie,
+    );
+    expect(memberWrite.status).toBe(403);
+
+    // Another workspace's credential cannot see it.
+    const outsiderTeam = await trpc(
+      outsider.cookie,
+      "team.create",
+      { name: "Outsider Sources Team", baseCurrency: "GBP", switchTeam: true },
+      "mutation",
+    );
+    created.teamIds.push(outsiderTeam.data as string);
+    const outsiderKey = await key(outsider.cookie, [
+      "sources.read",
+      "sources.write",
+    ]);
+    expect(
+      (await get(`/authorization-sources/${poId}`, outsiderKey)).status,
+    ).toBe(404);
+    expect(
+      (await get(`/authorization-sources/${poId}/versions/1`, outsiderKey))
+        .status,
+    ).toBe(404);
+    expect(
+      (
+        (await (await get("/authorization-sources", outsiderKey)).json()) as {
+          data: unknown[];
+        }
+      ).data,
+    ).toEqual([]);
   });
 });

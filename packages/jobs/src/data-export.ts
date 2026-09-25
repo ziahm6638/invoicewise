@@ -5,9 +5,11 @@ import { join } from "node:path";
 import type { Database } from "@invoicewise/db/client";
 import {
   type WorkspaceExportData,
+  authorizationDocumentBindingIssue,
   beginDataExport,
   completeDataExport,
   documentBindingIssue,
+  getAuthorizationSourcesForExport,
   getWorkspaceExportData,
   recordDataExportObject,
   recordDataExportProgress,
@@ -424,6 +426,102 @@ export async function removeStaleExportTempFiles(
 }
 
 /**
+ * Authorization sources with every version and their retained documents,
+ * which are added to the archive under `authorization-sources/`. A document
+ * whose stored path is not the source's own is listed as withheld, never read.
+ */
+async function exportAuthorizationSources(
+  deps: DataExportDeps,
+  teamId: string,
+  writer: ZipFileWriter,
+) {
+  const data = await getAuthorizationSourcesForExport(deps.db, teamId);
+  let included = 0;
+  let missing = 0;
+  const documents = new Map<string, Record<string, unknown>[]>();
+  for (const document of data.documents) {
+    const base = {
+      id: document.id,
+      versionId: document.versionId,
+      fileName: document.fileName,
+      contentType: document.contentType,
+      uploadedBy: document.uploadedBy,
+      createdAt: document.createdAt,
+      recordedSha256: document.sha256,
+    };
+    let entry: Record<string, unknown>;
+    const bindingIssue = authorizationDocumentBindingIssue(document);
+    if (bindingIssue) {
+      entry = { ...base, path: null, status: "withheld", reason: bindingIssue };
+    } else {
+      let bytes: Uint8Array | null = null;
+      try {
+        const blob = await deps.storage.download({
+          bucket: VAULT_BUCKET,
+          path: [...document.filePath],
+        });
+        bytes = new Uint8Array(await blob.arrayBuffer());
+      } catch (error) {
+        if (!isMissingObject(error)) {
+          throw new DataExportError(
+            `Unable to read authorization source document ${document.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            true,
+            "A temporary storage problem stopped the export. It will be retried.",
+          );
+        }
+      }
+      if (bytes) {
+        const path = `authorization-sources/${document.sourceId}/${document.id}-${archiveFileName(
+          document.fileName,
+          document.contentType,
+        )}`;
+        await writer.addFile(path, bytes, new Date(document.createdAt));
+        entry = {
+          ...base,
+          path,
+          status: "included",
+          size: bytes.byteLength,
+          sha256: sha256(bytes),
+        };
+      } else {
+        entry = { ...base, path: null, status: "missing" };
+      }
+    }
+    if (entry.status === "included") included += 1;
+    else missing += 1;
+    documents.set(document.sourceId, [
+      ...(documents.get(document.sourceId) ?? []),
+      entry,
+    ]);
+  }
+  const records = data.sources.map((source) => ({
+    id: source.id,
+    type: source.sourceType,
+    reference: source.reference,
+    status: source.status,
+    currentVersion: source.currentVersion,
+    supplierId: source.supplierId,
+    createdBy: source.createdBy,
+    createdAt: source.createdAt,
+    updatedAt: source.updatedAt,
+    versions: data.versions
+      .filter((version) => version.sourceId === source.id)
+      .map(
+        ({
+          teamId: _team,
+          sourceId: _source,
+          contentHash: _hash,
+          ...version
+        }) => version,
+      ),
+    documents: documents.get(source.id) ?? [],
+  }));
+  return { records, included, missing };
+}
+
+/**
  * Builds one workspace export archive and publishes it.
  *
  * The archive is written to a private temporary file (removed in every case)
@@ -577,6 +675,11 @@ export async function buildDataExport(
       }
     }
 
+    const sources = await exportAuthorizationSources(
+      deps,
+      params.teamId,
+      writer,
+    );
     const records = buildExportRecords(data, documents);
     const dataFiles: { path: string; records: number; content: string }[] = [
       { path: "workspace.json", records: 1, content: json(records.workspace) },
@@ -606,6 +709,11 @@ export async function buildDataExport(
         content: json(records.corrections),
       },
       {
+        path: "authorization-sources.json",
+        records: sources.records.length,
+        content: json(sources.records),
+      },
+      {
         path: "questions.json",
         records: records.questions.length,
         content: json(records.questions),
@@ -632,9 +740,10 @@ export async function buildDataExport(
     );
     const summary: DataExportSummary = {
       invoices: records.invoices.length,
-      documents: documentList.length - missing.length,
-      missingDocuments: missing.length,
+      documents: documentList.length - missing.length + sources.included,
+      missingDocuments: missing.length + sources.missing,
       suppliers: records.suppliers.length,
+      authorizationSources: sources.records.length,
       judgments: records.judgments.length,
       auditEvents: records.audit.length,
     };
@@ -661,6 +770,8 @@ export async function buildDataExport(
         supplier:
           "InvoiceWise supplier id (UUID) from the workspace's supplier records, stable across exports; a merged supplier names the one it was merged into in mergedIntoId",
         supplierEvent: "InvoiceWise supplier event id (UUID)",
+        authorizationSource:
+          "InvoiceWise authorization source id (UUID) with every immutable version (id and number); its retained documents are authorization-sources/<source id>/<document id>-<file name>, with their SHA-256",
         judgment: "<invoice id>:<question id>",
         inboundEmail:
           "InvoiceWise received-message id (UUID); invoiceIds name the invoices its attachments became",

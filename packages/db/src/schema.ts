@@ -1650,6 +1650,8 @@ export type DataExportSummary = {
   documents: number;
   missingDocuments: number;
   suppliers: number;
+  /** Absent on exports built before authorization sources existed. */
+  authorizationSources?: number;
   judgments: number;
   auditEvents: number;
 };
@@ -2702,6 +2704,222 @@ export const inboxRedeliveries = pgTable(
       foreignColumns: [inbox.id],
       name: "inbox_redeliveries_inbox_id_fkey",
     }).onDelete("cascade"),
+  ],
+);
+
+// Authorized work invoices are checked against: a job, purchase order or
+// contract, identified by the workspace's own stable reference. The row holds
+// the current version's headline values for listing and search; the terms
+// themselves live in immutable `authorization_source_versions`. See
+// docs/authorization-sources.md.
+export const authorizationSources = pgTable(
+  "authorization_sources",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    sourceType: text("source_type").notNull(),
+    reference: text("reference").notNull(),
+    referenceKey: text("reference_key").notNull(),
+    currentVersionId: uuid("current_version_id"),
+    currentVersion: integer("current_version").notNull(),
+    status: text("status").notNull(),
+    title: text("title"),
+    supplierId: uuid("supplier_id"),
+    supplierName: text("supplier_name"),
+    currency: text("currency"),
+    authorizedTotal: numeric("authorized_total", {
+      precision: 16,
+      scale: 2,
+    }).notNull(),
+    effectiveFrom: date("effective_from", { mode: "string" }).notNull(),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("authorization_sources_team_type_reference_key").on(
+      table.teamId,
+      table.sourceType,
+      table.referenceKey,
+    ),
+    index("authorization_sources_team_updated_at_idx").on(
+      table.teamId,
+      table.updatedAt,
+    ),
+    index("authorization_sources_team_supplier_idx")
+      .on(table.teamId, table.supplierId)
+      .where(sql`${table.supplierId} IS NOT NULL`),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "authorization_sources_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.supplierId],
+      foreignColumns: [suppliers.id],
+      name: "authorization_sources_supplier_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.createdBy],
+      foreignColumns: [users.id],
+      name: "authorization_sources_created_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+// One version of a source's terms. A version is never edited (a database
+// trigger refuses it); an amendment, status change or supplier link is a new
+// version, so a comparison that cited a version stays explainable.
+export const authorizationSourceVersions = pgTable(
+  "authorization_source_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    version: integer("version").notNull(),
+    status: text("status").notNull(),
+    title: text("title"),
+    scope: text("scope"),
+    supplierId: uuid("supplier_id"),
+    supplierName: text("supplier_name"),
+    supplierVatNumber: text("supplier_vat_number"),
+    supplierCompanyNumber: text("supplier_company_number"),
+    supplierResolution: jsonb("supplier_resolution")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    currency: text("currency"),
+    taxBasis: text("tax_basis"),
+    issuedOn: date("issued_on", { mode: "string" }),
+    startsOn: date("starts_on", { mode: "string" }),
+    endsOn: date("ends_on", { mode: "string" }),
+    effectiveFrom: date("effective_from", { mode: "string" }).notNull(),
+    authorizedTotal: numeric("authorized_total", {
+      precision: 16,
+      scale: 2,
+    }).notNull(),
+    lineItems: jsonb("line_items").$type<Record<string, unknown>[]>().notNull(),
+    changeReason: text("change_reason"),
+    origin: text("origin").notNull(),
+    importId: uuid("import_id"),
+    contentHash: text("content_hash").notNull(),
+    actorId: uuid("actor_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("authorization_source_versions_source_version_key").on(
+      table.sourceId,
+      table.version,
+    ),
+    index("authorization_source_versions_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "authorization_source_versions_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.sourceId],
+      foreignColumns: [authorizationSources.id],
+      name: "authorization_source_versions_source_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.supplierId],
+      foreignColumns: [suppliers.id],
+      name: "authorization_source_versions_supplier_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.actorId],
+      foreignColumns: [users.id],
+      name: "authorization_source_versions_actor_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+// A retained source document (the signed PO, the contract PDF) attached as
+// evidence to the version that was current when it arrived.
+export const authorizationSourceDocuments = pgTable(
+  "authorization_source_documents",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    versionId: uuid("version_id").notNull(),
+    filePath: text("file_path").array().notNull(),
+    fileName: text("file_name").notNull(),
+    contentType: text("content_type").notNull(),
+    size: bigint("size", { mode: "number" }).notNull(),
+    sha256: text("sha256").notNull(),
+    uploadedBy: uuid("uploaded_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("authorization_source_documents_source_sha256_key").on(
+      table.sourceId,
+      table.sha256,
+    ),
+    index("authorization_source_documents_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "authorization_source_documents_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.sourceId],
+      foreignColumns: [authorizationSources.id],
+      name: "authorization_source_documents_source_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.versionId],
+      foreignColumns: [authorizationSourceVersions.id],
+      name: "authorization_source_documents_version_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.uploadedBy],
+      foreignColumns: [users.id],
+      name: "authorization_source_documents_uploaded_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+// Every applied or rejected batch (CSV or API), with its per-source outcomes
+// or row errors. A rejected batch changed nothing.
+export const authorizationSourceImports = pgTable(
+  "authorization_source_imports",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    actorId: uuid("actor_id"),
+    origin: text("origin").notNull(),
+    fileName: text("file_name"),
+    status: text("status").notNull(),
+    summary: jsonb("summary").$type<Record<string, unknown>>().notNull(),
+    errors: jsonb("errors").$type<Record<string, unknown>[]>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("authorization_source_imports_team_created_at_idx").on(
+      table.teamId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "authorization_source_imports_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.actorId],
+      foreignColumns: [users.id],
+      name: "authorization_source_imports_actor_id_fkey",
+    }).onDelete("set null"),
   ],
 );
 

@@ -769,13 +769,18 @@ suite("dedicated receiving address over real HTTP", () => {
       to: address,
       from,
       subject: "Genuine",
+      // Cloudflare's receipt block as observed in production
+      // (docs/inbound-email.md, live proof step 7).
       extraHeaders: [
+        "Received: from mail-sor-f41.google.com (209.85.220.41) by cloudflare-email.net (cloudflare) id AuYfoj6x77E4",
+        "ARC-Authentication-Results: i=1; mx.cloudflare.net; dkim=pass header.d=google.com header.s=20230601",
+        "Received-SPF: pass (mx.cloudflare.net: domain of forwarding-noreply@google.com designates 209.85.220.41 as permitted sender)",
         "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=google.com header.s=20230601",
-        "Received: from mail-sor-f41.google.com by mx.cloudflare.net",
+        "X-CF-SpamH-Score: 0",
       ],
     });
     // Spoofed From with no authentication, and with a forged google.com pass
-    // below the receiving hop's Received header, where the sender put it.
+    // after Cloudflare's own results, where a sender's headers land.
     const unsigned = buildMessage({
       to: address,
       from,
@@ -787,8 +792,10 @@ suite("dedicated receiving address over real HTTP", () => {
       from,
       subject: "Forged",
       extraHeaders: [
+        "Received: from mx.evil.example (203.0.113.9) by cloudflare-email.net (cloudflare) id Q1w2e3r4t5y6",
+        "ARC-Authentication-Results: i=1; mx.cloudflare.net; dkim=pass header.d=evil.example",
         "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=evil.example",
-        "Received: from mx.evil.example by mx.cloudflare.net",
+        "X-CF-SpamH-Score: 0",
         "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=google.com",
         "ARC-Authentication-Results: i=1; mx.cloudflare.net; dkim=pass header.d=google.com",
       ],
