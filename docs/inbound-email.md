@@ -190,7 +190,7 @@ message's headers go after 90 days
 
 ## Cloudflare setup
 
-The Worker source (`apps/inbound-email/src/worker.ts`), its Wrangler config
+The Worker source (`apps/inbound-email/src/handler.ts`, entry `src/worker.ts`), its Wrangler config
 (`apps/inbound-email/wrangler.toml`) and the routing state
 (`apps/inbound-email/cloudflare-routing.json`) live in this repository and are
 applied by an operator with access to the `invoicewise.uk` Cloudflare account;
@@ -278,7 +278,7 @@ Settings → Email once to provision the address, then read it with
 
 ## Tests
 
-- `apps/inbound-email/src/worker.test.ts` — signing, permanent vs temporary
+- `apps/inbound-email/src/handler.test.ts` and `worker.test.ts` — the entry exports only the default handler (workerd rejects other named exports), signing, permanent vs temporary
   answers, size cap, retries.
 - `apps/api/src/inbound-email/http.test.ts` — signature, clock window, body
   bound (declared or chunked), cheap refusals before the body is read,

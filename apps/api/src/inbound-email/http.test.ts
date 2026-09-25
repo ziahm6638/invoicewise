@@ -5,7 +5,7 @@ import {
   type InboundMessage,
   REJECTIONS,
   handleEmail,
-} from "../../../inbound-email/src/worker";
+} from "../../../inbound-email/src/handler";
 import {
   INBOUND_HEADERS,
   type InboundEmailHttpDeps,

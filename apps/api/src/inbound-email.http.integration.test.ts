@@ -145,7 +145,7 @@ suite("dedicated receiving address over real HTTP", () => {
   let superjson: typeof import("superjson").default;
   let client: typeof import("@invoicewise/db/client");
   let inbound: typeof import("@invoicewise/jobs/inbound-email");
-  let worker: typeof import("../../inbound-email/src/worker");
+  let worker: typeof import("../../inbound-email/src/handler");
   let server: ReturnType<typeof Bun.serve>;
   let runBatch: () => Promise<void>;
   let reconcile: () => Promise<{ rescheduled: number; failed: number }>;
@@ -311,7 +311,7 @@ suite("dedicated receiving address over real HTTP", () => {
     superjson = (await import("superjson")).default;
     client = await import("@invoicewise/db/client");
     inbound = await import("@invoicewise/jobs/inbound-email");
-    worker = await import("../../inbound-email/src/worker");
+    worker = await import("../../inbound-email/src/handler");
 
     const { OpenAPIHono } = await import("@hono/zod-openapi");
     const { trpcServer } = await import("@hono/trpc-server");
