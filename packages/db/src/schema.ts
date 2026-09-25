@@ -1544,6 +1544,19 @@ export const workflowJobs = pgTable(
     ),
     index("workflow_jobs_due_idx").on(table.status, table.runAt),
     index("workflow_jobs_team_id_idx").on(table.teamId),
+    // The links an invoice's activity trace follows (invoiceJobsQuery).
+    index("workflow_jobs_team_inbox_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'inboxId')`)
+      .where(sql`(${table.payload} ->> 'inboxId') is not null`),
+    index("workflow_jobs_team_invoice_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'invoiceId')`)
+      .where(sql`(${table.payload} ->> 'invoiceId') is not null`),
+    index("workflow_jobs_team_delivery_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'deliveryId')`)
+      .where(sql`(${table.payload} ->> 'deliveryId') is not null`),
+    index("workflow_jobs_team_correction_id_idx")
+      .on(table.teamId, sql`(${table.payload} ->> 'correctionId')`)
+      .where(sql`(${table.payload} ->> 'correctionId') is not null`),
   ],
 );
 
@@ -3415,6 +3428,80 @@ export const deliveryDecisions = pgTable(
       columns: [table.resolvedBy],
       foreignColumns: [users.id],
       name: "delivery_decisions_resolved_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+/**
+ * Who changed what in a workspace, and every operator action and operator
+ * access to customer data (docs/operations.md#audit-trail). One row per
+ * action: written as `started` before the change runs and settled with its
+ * outcome after, so an action that crashed mid-way still reads as attempted.
+ * `detail` holds only named, redacted fields: never document contents,
+ * extracted values, bank details, tokens or secrets.
+ */
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    // Null for an operator action that belongs to no workspace.
+    teamId: uuid("team_id"),
+    actorType: text("actor_type", {
+      enum: ["user", "api_key", "oauth", "operator"],
+    }).notNull(),
+    // The acting user (the key's or grant's owner for API access); null for
+    // an operator, and once the user's account is deleted.
+    actorUserId: uuid("actor_user_id"),
+    // The API key or OAuth application id, or the operator's name.
+    actorRef: text("actor_ref"),
+    // app (dashboard, tRPC), api (REST), ops (operator routes).
+    surface: text("surface", { enum: ["app", "api", "ops"] }).notNull(),
+    action: text("action").notNull(),
+    category: text("category", {
+      enum: [
+        "invoice",
+        "delivery",
+        "question",
+        "supplier",
+        "authorization_source",
+        "integration",
+        "access",
+        "workspace",
+        "operator",
+      ],
+    }).notNull(),
+    targetType: text("target_type"),
+    targetId: text("target_id"),
+    // The invoice processing revision the action named or produced.
+    revision: integer("revision"),
+    outcome: text("outcome", {
+      enum: ["started", "succeeded", "refused", "denied", "failed"],
+    }).notNull(),
+    detail: jsonb("detail").$type<Record<string, unknown>>(),
+    // Operator actions: why the operator acted (incident, support, security).
+    purpose: text("purpose"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true, mode: "string" }),
+  },
+  (table) => [
+    index("audit_events_team_created_at_idx").on(table.teamId, table.createdAt),
+    index("audit_events_team_target_idx").on(
+      table.teamId,
+      table.targetType,
+      table.targetId,
+    ),
+    index("audit_events_created_at_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "audit_events_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.actorUserId],
+      foreignColumns: [users.id],
+      name: "audit_events_actor_user_id_fkey",
     }).onDelete("set null"),
   ],
 );

@@ -10,5 +10,7 @@ export type Context = {
     teamId: string;
     teamRole: TeamRole | null;
     scopes: Scope[];
+    /** The API key or OAuth application behind the request (audit trail). */
+    credentialId: string | null;
   };
 };

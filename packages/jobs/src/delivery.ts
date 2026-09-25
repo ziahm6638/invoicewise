@@ -469,6 +469,11 @@ export async function retryInvoiceDelivery(
     invoiceId: string;
     teamId: string;
     teamRole: TeamRole | null;
+    /**
+     * An operator recovering an incident (docs/operations.md#recovery) may
+     * re-post on the workspace's behalf; the action is audited as theirs.
+     */
+    operator?: boolean;
     expectedRevision?: number;
   },
 ): Promise<DeliveryRetryResult | null> {
@@ -525,7 +530,8 @@ export async function retryInvoiceDelivery(
       requeued += 1;
     }
 
-    const permitted = canPostToAccounting(input.teamRole);
+    const permitted =
+      input.operator === true || canPostToAccounting(input.teamRole);
     return {
       invoiceId: invoice.id,
       revision,

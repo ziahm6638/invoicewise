@@ -27,6 +27,8 @@
     "./runner": "./src/runner.ts",
     "./schema": "./src/schema.ts",
     "./accounting": "./src/accounting.ts",
+    "./activity": "./src/activity.ts",
+    "./operator-recovery": "./src/operator-recovery.ts",
     "./suppliers": "./src/suppliers.ts",
     "./authorization-sources": "./src/authorization-sources.ts",
     "./questions": "./src/questions.ts",

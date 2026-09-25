@@ -7,6 +7,7 @@ import { type TeamRole, roleAtLeast } from "@invoicewise/db/queries";
 import { TRPCError, initTRPC } from "@trpc/server";
 import type { Context } from "hono";
 import superjson from "superjson";
+import { withAuditTrail } from "./audit";
 import { withPrimaryReadAfterWrite } from "./middleware/primary-read-after-write";
 import { withTeamPermission } from "./middleware/team-permission";
 
@@ -78,7 +79,19 @@ export const protectedProcedure = t.procedure
         session,
       },
     });
-  });
+  })
+  // Before the role gates below, so a refused attempt is recorded too.
+  .use(async (opts) =>
+    withAuditTrail({
+      path: opts.path,
+      type: opts.type,
+      db: opts.ctx.db,
+      teamId: opts.ctx.teamId ?? null,
+      userId: opts.ctx.session.user.id,
+      getRawInput: opts.getRawInput,
+      next: opts.next,
+    }),
+  );
 
 /**
  * Requires the caller to hold at least `minimum` in their active workspace.

@@ -350,6 +350,28 @@ export function buildExportRecords(
       },
     });
   }
+  // Recorded actions: who changed what, and operator actions and access.
+  for (const event of data.auditEvents) {
+    audit.push({
+      id: `audit:${event.id}`,
+      at: event.createdAt,
+      type: event.action,
+      subject: event.targetId
+        ? { kind: event.targetType, id: event.targetId }
+        : null,
+      detail: {
+        category: event.category,
+        outcome: event.outcome,
+        actorType: event.actorType,
+        actorId: event.actorUserId,
+        actorRef: event.actorRef,
+        surface: event.surface,
+        revision: event.revision,
+        purpose: event.purpose,
+        ...(event.detail ?? {}),
+      },
+    });
+  }
   for (const request of data.exports) {
     audit.push({
       id: `export.requested:${request.id}`,

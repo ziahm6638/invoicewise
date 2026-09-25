@@ -469,9 +469,10 @@ Requirements and isolation rules:
   a different disposable stack (defaults are local: `localhost` for Postgres, `127.0.0.1` for Redis and MinIO).
 - Every port the command itself binds is per-run. The API executable and
   dashboard origins are chosen free at start (or pinned with
-  `VERIFY_API_PORT` / `VERIFY_DASHBOARD_PORT`), the four HTTP regression suites
+  `VERIFY_API_PORT` / `VERIFY_DASHBOARD_PORT`), the HTTP regression suites
   receive their own free ports through `PERMISSIONS_TEST_PORT`,
-  `INTAKE_TEST_PORT`, `IDENTITY_TEST_PORT` and `ACCOUNT_SECURITY_TEST_PORT`, and the delivery verifier's
+  `INTAKE_TEST_PORT`, `INBOUND_EMAIL_TEST_PORT`, `IDENTITY_TEST_PORT`,
+  `ACCOUNT_SECURITY_TEST_PORT` and `ACTIVITY_TEST_PORT`, and the delivery verifier's
   webhook listener binds port 0. Two `bun run verify` runs in different
   worktrees on one machine therefore cannot collide on app ports; give each run
   its own backing stack by starting a second `ci-services.sh` with a distinct

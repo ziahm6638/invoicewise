@@ -20,6 +20,7 @@ members see the same schedule under Settings → Data, rendered from
 | Failed uploads and deleted invoices, and the MIME source of a received message that failed | 30 days after upload or receipt | hourly retention job | `RETENTION_FAILED_UPLOAD_DAYS` |
 | Source email reference (on the invoice and on each re-delivery) and the headers kept for each received message | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
 | Job and webhook payloads | 30 days after the job or delivery finished | hourly retention job | `RETENTION_JOB_PAYLOAD_DAYS` |
+| Audit trail (`audit_events`: who changed what, operator actions and access) | 365 days | hourly retention job; deleting the workspace removes it | `RETENTION_AUDIT_EVENT_DAYS` |
 | Application logs | rotated log files 30 days; a running container's current file is capped at 50 MB by size | size rotation by Docker (`logging` in `config/deploy.yml`), then a daily host prune of the project's container logs on hp-slice and hostinger | `INVOICEWISE_LOG_RETENTION_DAYS` on the host |
 | Database backups | 30 days | `ops/backup` on hp-slice | `INVOICEWISE_BACKUP_RETAIN_DAYS` on the host, `RETENTION_BACKUP_DAYS` in the app |
 | Data export downloads | 24 hours | download route refuses at once; hourly retention job removes the archive | `EXPORT_LINK_TTL_HOURS` |
@@ -203,7 +204,7 @@ named `invoicewise-export-<date>-<id>.zip`:
 | `delivery-policies.json` | every version of the workspace's delivery rules, with who saved it and when |
 | `delivery-decisions.json` | the delivery decision of each revision of an exported invoice: policy and rules version, outcome, reasons, what each destination was told, and a release or dismissal with who made it, when and why |
 | `inbound-emails.json` | every message received at the workspace address: receipt time, recipient address, header and envelope sender and subject (until they expire), outcome and note, delivery count, attachment outcomes and the ids of the invoices it became (`invoiceIds`); never the MIME source |
-| `audit.json` | invoice received, posted to accounting and corrected, supplier corrections, webhook deliveries, workflow runs and export requests, in time order |
+| `audit.json` | invoice received, posted to accounting and corrected, supplier corrections, webhook deliveries, workflow runs, export requests and the recorded audit trail (who did what, with outcome, including operator actions and access), in time order |
 | `workspace.json` | the workspace, its members and roles, mailboxes, accounting connections and webhook endpoints |
 
 Stable identifiers: invoices keep their InvoiceWise UUID; a document is
