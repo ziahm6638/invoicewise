@@ -161,6 +161,8 @@ export function assertLoopbackUrl(label: string, rawUrl: string): URL {
 }
 
 const DISPOSABLE_DB_PATTERN = /^invoicewise_[a-z0-9_]+_test$/;
+/** Per-run e2e databases (`bun run e2e`); the sweeper drops stale ones. */
+export const E2E_DB_PATTERN = /^e2e_[0-9]+_[0-9a-f]{6}$/;
 const PROTECTED_DATABASE_NAMES = new Set([
   "postgres",
   "template0",
@@ -178,9 +180,9 @@ export function assertDisposableDatabaseName(name: string): string {
       `refusing to touch a protected database name (${name.length} characters)`,
     );
   }
-  if (!DISPOSABLE_DB_PATTERN.test(name)) {
+  if (!DISPOSABLE_DB_PATTERN.test(name) && !E2E_DB_PATTERN.test(name)) {
     throw new Error(
-      `refusing to touch a database name that does not match ${DISPOSABLE_DB_PATTERN} (value withheld)`,
+      `refusing to touch a database name that does not match ${DISPOSABLE_DB_PATTERN} or ${E2E_DB_PATTERN} (value withheld)`,
     );
   }
   return name;
@@ -393,8 +395,9 @@ export class Verification {
   private readonly cleanupFns: { name: string; fn: () => Promise<void> }[] = [];
   private stepIndex = 0;
 
-  constructor(runId: string) {
-    this.artifactsDir = join(ARTIFACTS_ROOT, runId);
+  /** `artifactsDir` overrides where logs go (the e2e evidence directory). */
+  constructor(runId: string, artifactsDir?: string) {
+    this.artifactsDir = artifactsDir ?? join(ARTIFACTS_ROOT, runId);
   }
 
   get tmpDir() {

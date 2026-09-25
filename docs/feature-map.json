@@ -1,0 +1,290 @@
+{
+  "version": 1,
+  "project": "invoicewise",
+  "apps": {
+    "dashboard": "apps/dashboard/src/app",
+    "website": "apps/website/src/app"
+  },
+  "features": [
+    {
+      "id": "sign-up",
+      "name": "Create account",
+      "route": "/signup",
+      "reach": "Sign-in page > Create an account",
+      "elements": ["Name field", "Email field", "Password field", "Create account button", "check-your-email message"],
+      "actions": ["create an account and its first workspace", "receive the verification email"],
+      "journey": "e2e/journeys/sign-up-sign-in.journey.ts"
+    },
+    {
+      "id": "verify-email",
+      "name": "Verify email",
+      "route": "/verify-email",
+      "reach": "An expired or invalid link in the verification email (a valid link signs in and lands on /invoices)",
+      "elements": ["verification result message"],
+      "actions": ["see the result of an expired or invalid verification link"]
+    },
+    {
+      "id": "sign-in",
+      "name": "Sign in",
+      "route": "/login",
+      "reach": "Any signed-out page redirects here; website header > Sign in",
+      "elements": ["Email field", "Password field", "Sign in button", "Forgot password link", "Resend verification email button", "two-factor challenge"],
+      "actions": ["sign in with email and password", "resend a lost verification email", "complete a TOTP second factor"],
+      "journey": "e2e/journeys/sign-up-sign-in.journey.ts"
+    },
+    {
+      "id": "forgot-password",
+      "name": "Forgot password",
+      "route": "/forgot-password",
+      "reach": "Sign-in page > Forgot password?",
+      "elements": ["Email field", "Send reset link button"],
+      "actions": ["request a password reset email"]
+    },
+    {
+      "id": "reset-password",
+      "name": "Reset password",
+      "route": "/reset-password",
+      "reach": "Link in the password reset email",
+      "elements": ["New password field", "Reset password button"],
+      "actions": ["set a new password from the emailed link"]
+    },
+    {
+      "id": "invoices",
+      "name": "Invoices (inbox, intake and review)",
+      "route": "/invoices",
+      "reach": "Sidebar > Invoices (the app's home; / and /inbox redirect here)",
+      "elements": ["invoice list", "upload drop zone", "search and filters", "invoice details sheet", "original document preview", "extracted fields", "validation results", "supplier checks", "question answers", "source match", "delivery status", "correction form", "bulk actions"],
+      "actions": ["upload an invoice PDF or image", "review the extracted fields", "correct a field with a reason", "re-extract", "rerun questions", "retry, release or dismiss a delivery", "delete an invoice"],
+      "journey": "e2e/journeys/invoice-intake-review.journey.ts"
+    },
+    {
+      "id": "authorizations",
+      "name": "Authorization sources",
+      "route": "/authorizations",
+      "reach": "Sidebar > Authorizations",
+      "elements": ["jobs, purchase orders and contracts list", "CSV import", "new source form"],
+      "actions": ["import sources from CSV", "create a source", "search sources"]
+    },
+    {
+      "id": "authorization-detail",
+      "name": "Authorization source detail",
+      "route": "/authorizations/[id]",
+      "reach": "Authorizations > a source row",
+      "elements": ["version history", "linked documents", "matched invoices"],
+      "actions": ["amend a source (new version)", "change its status", "link a supplier", "attach a document"]
+    },
+    {
+      "id": "questions",
+      "name": "Questions",
+      "route": "/questions",
+      "reach": "Sidebar > Questions",
+      "elements": ["workspace questions list", "question editor", "preview against an invoice"],
+      "actions": ["add a boolean, choice, score or number question", "revise a question", "preview a question"]
+    },
+    {
+      "id": "settings-general",
+      "name": "Workspace settings",
+      "route": "/settings",
+      "reach": "Sidebar > Settings > General",
+      "elements": ["company name", "company email", "company logo", "company country", "Delete workspace"],
+      "actions": ["rename the workspace", "upload a logo", "delete the workspace"],
+      "journey": "e2e/journeys/account-deletion.journey.ts"
+    },
+    {
+      "id": "settings-email",
+      "name": "Email intake settings",
+      "route": "/settings/email",
+      "reach": "Settings > Email",
+      "elements": ["dedicated receiving address", "connected Gmail/Outlook mailboxes"],
+      "actions": ["copy the receiving address", "connect or disconnect a mailbox"]
+    },
+    {
+      "id": "settings-data",
+      "name": "Data export and retention",
+      "route": "/settings/data",
+      "reach": "Settings > Data",
+      "elements": ["Export workspace data", "export list with download links", "retention schedule"],
+      "actions": ["request an owner export of all workspace data", "download a finished export"],
+      "journey": "e2e/journeys/invoice-export.journey.ts"
+    },
+    {
+      "id": "settings-delivery",
+      "name": "Delivery rules",
+      "route": "/settings/delivery",
+      "reach": "Settings > Delivery rules",
+      "elements": ["rule list (deliver/hold per rule)", "policy version"],
+      "actions": ["choose which risky invoices are held before delivery"]
+    },
+    {
+      "id": "settings-billing",
+      "name": "Billing",
+      "route": "/settings/billing",
+      "reach": "Settings > Billing (workspace owner only)",
+      "elements": ["plans", "manage subscription", "orders"],
+      "actions": ["start a Polar checkout", "open the customer portal", "download an order invoice"]
+    },
+    {
+      "id": "settings-members",
+      "name": "Members",
+      "route": "/settings/members",
+      "reach": "Settings > Members (owner/admin)",
+      "elements": ["members table", "pending invites", "invite form"],
+      "actions": ["invite a member", "change a role", "remove a member"]
+    },
+    {
+      "id": "settings-accounting",
+      "name": "Accounting connections",
+      "route": "/settings/accounting",
+      "reach": "Settings > Accounting (owner/admin)",
+      "elements": ["Xero and QuickBooks connect buttons", "organisation picker", "expense account and tax code setup", "automatic posting switch", "connection health"],
+      "actions": ["connect Xero or QuickBooks through Nango", "choose the organisation", "set up and switch on automatic posting of draft bills", "check health", "disconnect"],
+      "journey": "e2e/journeys/accounting-delivery.journey.ts"
+    },
+    {
+      "id": "settings-webhooks",
+      "name": "Webhooks",
+      "route": "/settings/webhooks",
+      "reach": "Settings > Webhooks (owner/admin)",
+      "elements": ["endpoint list", "Add endpoint", "event selection", "signing secret"],
+      "actions": ["add a webhook endpoint", "choose events", "rotate the secret", "delete an endpoint"],
+      "journey": "e2e/journeys/webhooks.journey.ts"
+    },
+    {
+      "id": "settings-developer",
+      "name": "API keys and OAuth apps",
+      "route": "/settings/developer",
+      "reach": "Settings > Developer (owner/admin)",
+      "elements": ["API keys table", "Create API key", "OAuth applications table", "create OAuth application"],
+      "actions": ["create, edit or delete an API key with scopes", "register an OAuth application"],
+      "journey": "e2e/journeys/invoice-export.journey.ts"
+    },
+    {
+      "id": "settings-audit",
+      "name": "Audit log",
+      "route": "/settings/audit",
+      "reach": "Settings > Audit log (owner/admin)",
+      "elements": ["audit events table", "filters"],
+      "actions": ["review who changed what in the workspace"]
+    },
+    {
+      "id": "account",
+      "name": "Account settings",
+      "route": "/account",
+      "reach": "User menu > Account",
+      "elements": ["avatar", "display name", "email", "Delete account"],
+      "actions": ["change display name or email", "delete the account (with sole-owned workspaces)"],
+      "journey": "e2e/journeys/account-deletion.journey.ts"
+    },
+    {
+      "id": "account-date-locale",
+      "name": "Date and locale",
+      "route": "/account/date-and-locale",
+      "reach": "Account > Date & Locale",
+      "elements": ["locale", "timezone", "date format", "time format", "week start"],
+      "actions": ["change date, time and locale preferences"]
+    },
+    {
+      "id": "account-security",
+      "name": "Account security",
+      "route": "/account/security",
+      "reach": "Account > Security",
+      "elements": ["change password", "two-factor settings", "active sessions"],
+      "actions": ["change password", "enable or disable TOTP", "revoke a session"]
+    },
+    {
+      "id": "account-teams",
+      "name": "My workspaces",
+      "route": "/account/teams",
+      "reach": "Account > Teams",
+      "elements": ["workspaces table"],
+      "actions": ["leave a workspace", "switch workspace"]
+    },
+    {
+      "id": "account-support",
+      "name": "Support",
+      "route": "/account/support",
+      "reach": "Account > Support",
+      "elements": ["support form"],
+      "actions": ["send a support request"]
+    },
+    {
+      "id": "setup",
+      "name": "Account setup",
+      "route": "/setup",
+      "reach": "First sign-in without a display name",
+      "elements": ["full name field", "avatar"],
+      "actions": ["complete the profile"]
+    },
+    {
+      "id": "teams",
+      "name": "Choose workspace",
+      "route": "/teams",
+      "reach": "Team dropdown > Switch; signing in with several workspaces",
+      "elements": ["workspace list", "pending invites", "Create team"],
+      "actions": ["select a workspace", "accept or decline an invite"]
+    },
+    {
+      "id": "teams-create",
+      "name": "Create workspace",
+      "route": "/teams/create",
+      "reach": "Teams > Create team; a user with no workspace lands here",
+      "elements": ["workspace name form", "Delete your account"],
+      "actions": ["create a workspace", "delete the account when no workspace remains"],
+      "journey": "e2e/journeys/account-deletion.journey.ts"
+    },
+    {
+      "id": "oauth-authorize",
+      "name": "OAuth consent",
+      "route": "/oauth/authorize",
+      "reach": "A third-party app's OAuth authorize link",
+      "elements": ["requested scopes", "Allow / Deny buttons"],
+      "actions": ["grant or deny API access to an OAuth application"]
+    },
+    {
+      "id": "website-home",
+      "name": "Marketing site home",
+      "app": "website",
+      "route": "/",
+      "reach": "invoicewise.uk",
+      "elements": ["hero", "product screenshots", "waitlist form", "Sign in link"],
+      "actions": ["read about the product", "join the waitlist"],
+      "journey": "e2e/journeys/marketing-site.journey.ts"
+    },
+    {
+      "id": "website-pricing",
+      "name": "Pricing",
+      "app": "website",
+      "route": "/pricing",
+      "reach": "Website header > Pricing",
+      "elements": ["plans", "FAQ accordion"],
+      "actions": ["compare plans"],
+      "journey": "e2e/journeys/marketing-site.journey.ts"
+    },
+    {
+      "id": "website-terms",
+      "name": "Terms",
+      "app": "website",
+      "route": "/terms",
+      "reach": "Website footer > Terms",
+      "elements": ["terms of service"],
+      "actions": ["read the terms"],
+      "journey": "e2e/journeys/marketing-site.journey.ts"
+    },
+    {
+      "id": "website-policy",
+      "name": "Privacy policy",
+      "app": "website",
+      "route": "/policy",
+      "reach": "Website footer > Privacy",
+      "elements": ["privacy policy"],
+      "actions": ["read the privacy policy"],
+      "journey": "e2e/journeys/marketing-site.journey.ts"
+    }
+  ],
+  "ignoredRoutes": [
+    { "route": "/", "reason": "redirects to /invoices" },
+    { "route": "/inbox", "reason": "legacy path, redirects to /invoices" },
+    { "route": "/inbox/settings", "reason": "legacy path, redirects to /settings/email" },
+    { "route": "/settings/questions", "reason": "legacy path, redirects to /questions" }
+  ]
+}

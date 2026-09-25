@@ -179,7 +179,7 @@ on a webhook delivery ([delivery](delivery.md#corrections-reprocessing-and-retri
 `bun jobs:status` still lists the queue from a shell on the host.
 
 The runnable proof is `src/activity.http.integration.test.ts` in `apps/api`
-(`verify:activity-recovery-http` in `bun run verify`): a worker is killed
+(`verify:activity-recovery-http` in `bun run test:legacy`): a worker is killed
 mid-job, a fresh runner reclaims it, a provider outage exhausts its attempts,
 customer credentials and bad operator requests are refused, an operator reads
 the trace for a stated purpose and retries the job, the invoice is delivered,

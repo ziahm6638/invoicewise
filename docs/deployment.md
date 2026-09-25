@@ -71,7 +71,7 @@ A refused container never passes its health check, so `kamal deploy` fails and
 the previous release keeps serving. The reason is in
 `kamal app logs -r <role>` as `invoicewise-<role> refusing to start: …`.
 
-`scripts/deploy/deploy-config.test.ts` (part of `bun run verify`) keeps
+`scripts/deploy/deploy-config.test.ts` (a legacy suite in `bun run test:legacy`) keeps
 `config/deploy.yml`, `.kamal/secrets` and the preflight in step.
 
 ## Secrets

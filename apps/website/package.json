@@ -9,7 +9,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "start": "next start",
-    "test": "bun test src",
+    "test:legacy": "bun test src",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

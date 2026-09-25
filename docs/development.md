@@ -399,17 +399,54 @@ jurisdiction. Do not enable an `r2.dev` public URL or public bucket access.
 Dashboard workflow status uses one-second polling until a dedicated local event
 transport is selected.
 
+## The gate: e2e journeys
+
+`bun run gate` is the check every change passes before review:
+
+```bash
+bun run gate      # typecheck -> lint -> build -> e2e, stopping at the first failure
+bun run e2e       # the journeys only (builds first); --journey <part>, --parallel
+bun run e2e:sweep # drop e2e_<epoch>_<hex> databases older than an hour
+```
+
+- **Typecheck and lint are the floor.** `bun run lint` also runs
+  `scripts/check-feature-map.ts` (every dashboard and website page is in
+  [`docs/feature-map.json`](feature-map.json)), `scripts/check-paved-path.ts`
+  (the rules in [`paved-path.md`](paved-path.md)) and
+  `scripts/check-test-locations.ts` (the test policy below).
+- **E2E journeys against the running app are the gate.** `scripts/e2e.ts`
+  reuses the project's already-running Postgres and Redis (the compose services
+  or the verification suite; it never starts containers), creates a per-run
+  `e2e_<epoch>_<hex>` database, migrates it with drizzle-kit, seeds it with
+  `e2e/seed.ts`, starts production builds of the API, dashboard and website on
+  free ports with every provider stubbed on loopback (TypeSafe answers through
+  the verifiers' deterministic stub, Xero through a fake behind a fake Nango,
+  mail through an SMTP trap; nothing reaches a paid or real service), runs
+  `e2e/journeys/*.journey.ts`, and drops the database on exit, failure or
+  Ctrl-C. Browser journeys need Chromium for Playwright once:
+  `bunx playwright-core install chromium`.
+- **Evidence.** Each run writes `report.md`, `report.json`, per-journey
+  `requests.json`, Playwright `trace.zip` and screenshots, and redacted process
+  logs to `${E2E_EVIDENCE_ROOT:-~/e2e-evidence}/invoicewise/<run-id>/`, and
+  prints `E2E_REPORT=<report.md>` last. Link that path in the PR's `## Evidence`.
+- **Tests.** Unit tests are not written or kept. A `*.test.*`/`*.spec.*` file
+  may live only in `e2e/` or `invariants/` (at most 10 files, each opening with
+  `// Guards: <the real failure it guards>`); the legacy suites listed in
+  `.test-policy-legacy.txt` (a list that may only shrink) run only through
+  `bun run test:legacy` until they are retired.
+
+How to add a journey, a route, a migration, a job or an integration:
+[`paved-path.md`](paved-path.md).
+
 ## Release verification
 
-`bun run verify` is the authoritative, reproducible check for this repository.
+`bun run verify` is the authoritative, reproducible release check for this repository.
 It installs from the frozen lockfile and then gates the whole workspace on a
 disposable local stack:
 
 - lint and typecheck for every workspace (including the marketing site and the
-  verifier scripts themselves), `manypkg check`, and the workspace unit suites
-  (`packages/db`, `packages/documents`, `packages/jobs`, `packages/encryption`,
-  `packages/inbox`, `apps/api` and `apps/dashboard`) plus the verifier
-  negative-control suite (`bun run verify:selftest`);
+  verifier scripts themselves), the gate's lint checks (`bun run lint:gates`)
+  and `manypkg check`;
 - an empty-database bootstrap, an upgrade from the recorded prior schema at
   `ef798a99` (migrations through `0006`) with synthetic users, membership,
   invoice and queued-work rows, and an injected migration failure with the
@@ -422,28 +459,27 @@ disposable local stack:
 - the existing verifiers: `apps/api` delivery, `packages/jobs` workflows,
   accounting and handoff fault injection, supplier identity, authorization
   sources ([authorization sources](authorization-sources.md#proof)), invoice
-  matching ([matching](authorization-matching.md#proof)), the local and MinIO-backed storage
-  adapters, the #32/#34 security and intake HTTP regression suites
-  (including the concurrency, content-hash and request-body bound checks), and
-  the data lifecycle export and retention suite
-  ([data lifecycle](data-lifecycle.md#proof));
+  matching ([matching](authorization-matching.md#proof));
 - real production builds for the dashboard and website, and executable
   `bun build --packages=external` artifacts for the API and the workflow worker
   that are started and probed (health, database health, OpenAPI, a real queued
   job claimed by that worker process, and graceful `SIGTERM` shutdown);
-- a two-workspace production-entrypoint smoke: Better Auth sign-up and sign-in
-  on a built dashboard origin, a real upload through `/api/storage/upload`, the
-  original document through `/api/proxy`, the rendered invoice through
-  `/api/preview`, tRPC reads on the separate API origin, and denied cross-tenant
-  reads;
+- the e2e journeys (`scripts/e2e.ts`, [the gate](#the-gate-e2e-journeys));
 - the dependency and secret checks described below.
+
+`bun run verify --legacy-tests` additionally runs the retained legacy suites
+(the workspace unit suites, the MinIO-backed storage suite, the #32/#34
+security and intake HTTP regression suites, the data lifecycle suite, the
+verifier negative controls, the deploy-config check and the retired matching
+scope); `bun run test:legacy` runs only those.
 
 Supporting commands:
 
 ```bash
 bun run verify:migrations   # migrations and recovery drill only
 bun run verify:security     # dependency advisories and tracked-file secret scan
-bun run verify:selftest     # negative controls for the verification tooling
+bun run verify --e2e-only   # the e2e journeys only
+bun run test:legacy         # legacy suites, outside the gate, until retired
 ```
 
 Requirements and isolation rules:
@@ -504,7 +540,8 @@ Requirements and isolation rules:
 - Safety preconditions abort the run before any process, database or build
   effect: a rejected target, a missing canary, or an unreachable service
   stops the command (a missing bucket is created) with a redacted summary
-  (`bun run verify:selftest` proves the abort with a non-loopback target).
+  (the legacy negative-control suite in `bun run test:legacy` proves the
+  abort with a non-loopback target).
 - Redacted logs and `summary.json` are written to `.verify-artifacts/<run-id>/`
   (gitignored) and include the provider-trap request list, the SMTP trap's
   connection and message counts (never message content), the excluded `.env`
@@ -583,8 +620,8 @@ waives only external range mismatches while every other rule still fails.
 
 Retired bank/transaction matching is the only product-scope exclusion: those
 suites stay in the repository for historical reference, are out of
-`packages/db`'s product `test` script (reachable via
-`bun run test:retired-bank-matching`), and the verification command still runs
+`packages/db`'s `test:legacy` script (reachable via
+`bun run test:legacy:retired-bank-matching`), and `bun run test:legacy` still runs
 the retired unit suite (`transaction-matching.test.ts`), requiring a completed
 run whose failures are exactly the three recorded tiered-tolerance tests, by
 name — a crashed or unreadable run, a newly failing test or a recorded failure
