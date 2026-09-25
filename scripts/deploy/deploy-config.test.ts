@@ -364,3 +364,41 @@ describe("production preflight", () => {
     expect(preflight("worker", roleEnv("api")).exitCode).toBe(2);
   });
 });
+
+// The marketing site (Vercel, root apps/website) is built through Turbo, whose
+// strict env mode hands a task only the variables it declares. A build-time
+// setting missing from the declaration is silently dropped, as
+// INBOUND_EMAIL_LIVE was: the site kept saying the mailbox was "coming soon"
+// after the flag was set in Vercel (docs/inbound-email.md#going-live).
+describe("website build environment", () => {
+  test("Turbo passes the website's build-time settings to its build", () => {
+    const result = Bun.spawnSync(
+      [
+        "bun",
+        "--no-env-file",
+        "x",
+        "turbo",
+        "run",
+        "build",
+        "--filter=@invoicewise/website",
+        "--dry=json",
+      ],
+      { cwd: ROOT, env: { ...process.env, TURBO_TELEMETRY_DISABLED: "1" } },
+    );
+    expect(result.exitCode).toBe(0);
+    const plan = JSON.parse(result.stdout.toString()) as {
+      envMode: string;
+      tasks: {
+        taskId: string;
+        environmentVariables: { specified: { passThroughEnv: string[] } };
+      }[];
+    };
+    const build = plan.tasks.find(
+      ({ taskId }) => taskId === "@invoicewise/website#build",
+    );
+    expect(build).toBeDefined();
+    expect(build!.environmentVariables.specified.passThroughEnv).toContain(
+      "INBOUND_EMAIL_LIVE",
+    );
+  });
+});
