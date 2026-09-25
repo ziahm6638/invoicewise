@@ -3123,6 +3123,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "inbox_accounting_post_status_idx": {
+          "name": "inbox_accounting_post_status_idx",
+          "columns": [
+            {
+              "expression": "accounting_post_status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {

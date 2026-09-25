@@ -2183,6 +2183,10 @@ export const inbox = pgTable(
       "btree",
       table.createdAt.asc().nullsLast().op("timestamptz_ops"),
     ),
+    // Serves the delivery reconciler's scan for queued accounting intents.
+    // Not partial on 'queued': that enum value is added in the same
+    // migration batch and cannot be referenced until it commits.
+    index("inbox_accounting_post_status_idx").on(table.accountingPostStatus),
     index("inbox_team_id_idx").using(
       "btree",
       table.teamId.asc().nullsLast().op("uuid_ops"),
