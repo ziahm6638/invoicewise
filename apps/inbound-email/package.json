@@ -7,7 +7,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src"
+    "test:legacy": "bun test src"
   },
   "devDependencies": {
     "@invoicewise/tsconfig": "workspace:*",

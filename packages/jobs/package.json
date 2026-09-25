@@ -7,7 +7,7 @@
     "status": "bun run src/status.ts",
     "resume-deletions": "bun run src/resume-deletions.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src",
+    "test:legacy": "bun test src",
     "verify": "bun run src/verify-workflows.ts",
     "verify:accounting": "bun run src/verify-accounting.ts",
     "verify:quickbooks": "bun run src/verify-quickbooks.ts",

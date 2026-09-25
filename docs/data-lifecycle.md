@@ -280,7 +280,7 @@ outside this lifecycle.
 ## Proof
 
 `apps/api/src/trpc/routers/data.lifecycle.integration.test.ts` (run by
-`bun run verify` as `verify:data-lifecycle`) builds a disposable
+`bun run test:legacy` as `verify:data-lifecycle`) builds a disposable
 multi-workspace dataset and checks: owner-only access; an export interrupted
 after its archive was built, then resumed to completion; manifest and
 object completeness byte for byte, with suppliers taken from the

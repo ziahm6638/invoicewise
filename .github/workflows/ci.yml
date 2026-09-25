@@ -14,12 +14,14 @@ permissions:
 
 jobs:
   # Runs the same authoritative command a developer runs locally:
-  # `bun run verify`. It installs from the frozen lockfile, gates lint,
-  # typecheck and the workspace unit suites plus the verifier negative
-  # controls, proves fresh/upgrade/recovery migrations from the pinned prior
+  # `bun run verify`. It installs from the frozen lockfile, gates lint
+  # (including the feature map, paved-path and test-policy checks) and
+  # typecheck, proves fresh/upgrade/recovery migrations from the pinned prior
   # schema, builds the dashboard, website, API executable and worker
-  # executable, and drives the two-tenant production-entrypoint smoke with a
-  # loopback provider trap and no application `.env`.
+  # executable, runs the DB-backed verifiers, and runs the e2e journeys
+  # (scripts/e2e.ts) against a production build on a per-run database with
+  # every provider stubbed and no application `.env`. Unit tests are not part
+  # of it: legacy suites run only through `bun run test:legacy`.
   verify:
     name: verify (frozen install, migrations, builds, e2e)
     runs-on: ubuntu-latest
@@ -49,6 +51,10 @@ jobs:
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
+
+      # The browser journeys drive Chromium through playwright-core.
+      - name: Install Chromium for the e2e journeys
+        run: bunx playwright-core install --with-deps chromium
 
       - name: Verify release
         run: bun run verify

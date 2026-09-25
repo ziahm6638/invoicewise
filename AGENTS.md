@@ -46,7 +46,7 @@ Retired or inherited and deliberately outside the product path: bank feeds
 invoice creation, vault, desktop/mobile apps and the Trigger.dev task runner.
 The remaining retired bank-matching code lives in `packages/db/src/queries/inbox-matching.ts`,
 `packages/db/src/queries/transaction-matching.ts` and `packages/db/src/test/transaction-matching*.test.ts`;
-the release gate pins its three known failures as a recorded baseline (see `docs/development.md`).
+`bun run test:legacy` pins its three known failures as a recorded baseline (see `docs/development.md`).
 
 ## Stack
 
@@ -66,7 +66,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Exception workflow:** re-extract, rerun questions, retry delivery and field corrections each carry the processing revision the user saw (one transition per revision); corrections keep the reading (`inbox.extraction_original`, audited `invoice_corrections`), re-run validation, and a posted bill is kept or updated in place, never posted twice. See `docs/delivery.md#corrections-reprocessing-and-retries` (`packages/jobs/src/exceptions.ts`)
 - **Delivery rules:** each invoice revision gets one `delivery_decisions` row from the workspace's versioned `delivery_policies` in the transaction that schedules its deliveries; a destination is scheduled only when that decision lets it through, and a hold is cleared only by an owner/admin release or dismissal, a correction or a re-read, never by a retry. Defaults, the fixed rule vocabulary and resolution paths are in `docs/delivery.md#delivery-rules` (`packages/documents/src/delivery-policy.ts`, `packages/jobs/src/delivery-rules.ts`)
 - **Integrations:** self-hosted Nango on hp-slice for Xero/QuickBooks (auth + proxy only, so bill adapters live in `packages/jobs`; see `docs/accounting-integrations.md`), Polar (billing), API/MCP/webhooks. Nango integrations are created from Infisical with `bun run nango:configure-integration`, never by hand. Either provider posts only after an admin's setup (account, tax codes) and confirmed opt-in (`auto_post_enabled_at`), re-checked when each post runs. Xero creates DRAFT bills/credit notes in the organisation the workspace chose (`organisation_id` sent as `Xero-Tenant-Id`; one authorisation can reach several); QuickBooks has no drafts (open, unpaid `Bill`/`VendorCredit`). Creates are idempotent by the provider key (`Idempotency-Key`/`requestid`) plus a number/contact lookup for InvoiceWise's marker, and attachments retry on their own job
-- **Audit and recovery:** workspace changes are recorded in `audit_events` (started before, settled after; tRPC registry `apps/api/src/trpc/audit.ts`, whose test fails for an unlisted mutation, and REST middleware `apps/api/src/rest/middleware/audit.ts`); an invoice's activity trace is built from existing records, never a copied log. Operators diagnose and recover only through `/ops/*` with `OPS_TOKEN` + `X-Operator`, with a stated purpose that is audited in the workspace; retries re-drive the workflow's own recovery path. Redact operational text with `redactOperationalText`. See `docs/operations.md#recovery`
+- **Audit and recovery:** workspace changes are recorded in `audit_events` (started before, settled after; tRPC registry `apps/api/src/trpc/audit.ts`, whose legacy test in `bun run test:legacy` fails for an unlisted mutation, and REST middleware `apps/api/src/rest/middleware/audit.ts`); an invoice's activity trace is built from existing records, never a copied log. Operators diagnose and recover only through `/ops/*` with `OPS_TOKEN` + `X-Operator`, with a stated purpose that is audited in the workspace; retries re-drive the workflow's own recovery path. Redact operational text with `redactOperationalText`. See `docs/operations.md#recovery`
 - **Public API:** versioned `/v1` (customer guide `docs/api.md`): `apps/api/src/rest/v1.ts` authenticates (bearer only), checks scopes and rate-limits, then the Effect `HttpApi` in `apps/api/src/effect/public-api-http.ts` serves it. The committed `docs/api/openapi-v1.json` must match the served contract (regenerate with `bun run contract:v1` in `apps/api`), so change v1 only additively. The stdio MCP tools stay read-only and call `/v1` with the caller's key
 - **Outbound to customer URLs:** webhooks send only through the egress guard `packages/jobs/src/egress.ts` (resolve, refuse private/metadata addresses, connect to the pinned address, bounded); never `fetch` a customer-supplied URL. Management and semantics: `docs/delivery.md#webhooks`
 
@@ -84,13 +84,24 @@ bun jobs:status            # inspect queued/running/stuck jobs
 bun jobs:resume-deletions  # re-queue failed account/workspace deletion cleanup (docs/offboarding.md)
 bun scripts/ops/load-test.ts  # staging-only load and hostile-input test (docs/operations.md)
 # tesseract must be installed locally for the scanned-invoice OCR test (CI and the image install it)
+bun run gate               # THE gate: typecheck -> lint -> build -> e2e journeys (link its E2E_REPORT in the PR)
+bun run e2e                # e2e journeys only (--journey <part>, --parallel); needs the compose Postgres/Redis running
 bun typecheck
-bun lint
+bun lint                   # also: feature map, paved path and test-policy checks
 bun format
+bun run test:legacy        # legacy unit/integration suites awaiting retirement; never add to them
 bun run verify             # authoritative local release verification
 bun run verify:security    # dependency + secret checks only
 bun run verify:migrations  # fresh, upgrade and recovery migration proof only
 ```
+
+## Gates, journeys and the paved path
+
+- E2E journeys against the running app are the gate; typecheck and lint are the floor. Do not write unit tests: a new `*.test.*`/`*.spec.*` outside `e2e/` or `invariants/` fails lint (`scripts/check-test-locations.ts`). Cover behaviour with a journey in `e2e/journeys/` (`docs/development.md#the-gate-e2e-journeys`).
+- `docs/feature-map.json` lists every user-facing page (route, how to reach it, elements, actions, covering journey); lint fails when a page is missing from it.
+- `docs/paved-path.md` is the one way to add a route, migration, background job or integration; its checkable rules are lint (`scripts/check-paved-path.ts`, allowlist `.paved-path-allowlist.txt` only shrinks).
+- Operational know-how (deploys, live proofs, extraction, Nango, inbound email, local verification) lives in `.agents/skills/*/SKILL.md`.
+- Every PR carries `## Evidence` linking an artifact from the running app (the gate's `E2E_REPORT`); see `.github/PULL_REQUEST_TEMPLATE.md`.
 
 ## Environment variables
 

@@ -65,7 +65,7 @@
     "start": {
       "cache": false
     },
-    "test": {
+    "test:legacy": {
       "cache": false
     },
     "dev": {
