@@ -204,8 +204,32 @@ const latency = (row?: {
   maxSeconds: row?.max ?? null,
 });
 
+/** p95 seconds of each processing stage, over documents that recorded them. */
+export type IntakeStageSummary = {
+  queueP95Seconds: number | null;
+  readP95Seconds: number | null;
+  typesafeP95Seconds: number | null;
+  persistP95Seconds: number | null;
+};
+
+export type IntakeLatencySummary = LatencySummary & {
+  stages: IntakeStageSummary;
+};
+
 /**
- * Intake latency (document accepted to extraction finished) and
+ * Text-layer PDFs and scans (OCR'd PDFs, images, mixed PDFs) have separate
+ * targets: docs/operations.md#service-and-load-targets.
+ */
+export type IntakeInputKind = "text" | "scan";
+
+const stageP95 = (column: string) =>
+  sql.raw(
+    `round(percentile_cont(0.95) within group (order by (result->'timings'->>'${column}')::float8 / 1000) filter (where result->'timings'->>'${column}' is not null)::numeric, 1)::float8`,
+  );
+
+/**
+ * Intake latency (document accepted to extraction finished), overall and
+ * split by input kind with the stages of each document's final attempt, and
  * intake-to-delivery latency (document accepted to the first successful
  * webhook delivery or accounting draft), over documents finished since `since`.
  */
@@ -217,24 +241,56 @@ export async function getPipelineLatency(db: Database, since: Date) {
     since.getTime() - 7 * 24 * 60 * 60 * 1000,
   ).toISOString();
   const extraction = await db.execute<{
+    kind: IntakeInputKind | null;
     count: number;
     p50: number | null;
     p95: number | null;
     max: number | null;
+    queue_p95: number | null;
+    read_p95: number | null;
+    typesafe_p95: number | null;
+    persist_p95: number | null;
   }>(sql`
     select
+      kind,
       count(*)::int as count,
       round(percentile_cont(0.5) within group (order by seconds))::int as p50,
       round(percentile_cont(0.95) within group (order by seconds))::int as p95,
-      round(max(seconds))::int as max
+      round(max(seconds))::int as max,
+      ${stageP95("queueMs")} as queue_p95,
+      ${stageP95("readMs")} as read_p95,
+      ${stageP95("typesafeMs")} as typesafe_p95,
+      ${stageP95("persistMs")} as persist_p95
     from (
-      select extract(epoch from finished_at - created_at) as seconds
+      select
+        extract(epoch from finished_at - created_at) as seconds,
+        case when coalesce(
+          result->>'textSource',
+          -- Jobs finished before the result carried the input kind.
+          (select extraction->>'textSource' from inbox
+            where inbox.id = (workflow_jobs.payload->>'inboxId')::uuid)
+        ) in ('ocr', 'mixed') then 'scan' else 'text' end as kind,
+        result
       from workflow_jobs
       where name = 'process-attachment'
         and status = 'succeeded'
         and finished_at >= ${sinceIso}
     ) finished
+    group by grouping sets ((), (kind))
   `);
+
+  const intake = (kind: IntakeInputKind | null): IntakeLatencySummary => {
+    const row = extraction.rows.find((candidate) => candidate.kind === kind);
+    return {
+      ...latency(row),
+      stages: {
+        queueP95Seconds: row?.queue_p95 ?? null,
+        readP95Seconds: row?.read_p95 ?? null,
+        typesafeP95Seconds: row?.typesafe_p95 ?? null,
+        persistP95Seconds: row?.persist_p95 ?? null,
+      },
+    };
+  };
 
   const delivery = await db.execute<{
     count: number;
@@ -264,8 +320,10 @@ export async function getPipelineLatency(db: Database, since: Date) {
     ) delivered
   `);
 
+  const { stages: _, ...overall } = intake(null);
   return {
-    extraction: latency(extraction.rows[0]),
+    extraction: overall,
+    intake: { text: intake("text"), scan: intake("scan") },
     delivery: latency(delivery.rows[0]),
   };
 }

@@ -44,7 +44,8 @@ test measure; revisit them with real traffic.
 | --- | --- | --- |
 | Availability (dashboard and API) | 99.5% per month | `api_unready`, `app_unavailable` alerts |
 | Upload response (≤ 5 MB) | p95 under 3 s | load test |
-| Intake latency (accepted → extracted) | p95 under 10 min | `latency.extraction`, `intake_latency` alert |
+| Intake latency, text PDF (accepted → processed) | p95 under 60 s | `latency.intake.text`, `intake_latency:text` alert |
+| Intake latency, scanned PDF or image (accepted → processed) | p95 under 3 min | `latency.intake.scan`, `intake_latency:scan` alert |
 | Queue wait | oldest due job under 15 min | `queue_age` alert |
 | Intake → delivery (webhook or accounting draft) | p95 under 15 min | `latency.delivery` in `/ops/metrics` |
 | Sustained volume | 500 invoices per day | `budget.typesafe`, daily status |
@@ -62,7 +63,7 @@ waits, it never grows memory or spend without limit.
 | Dashboard container memory | 1 GiB hard limit | same |
 | Database connections | 8 per pool; api has 3 pools, web 1 (≤ 32 of 100) | `DATABASE_POOL_MAX` |
 | Redis connections | one per cache namespace per process (≤ 6) | `packages/cache` |
-| Workflow jobs running at once | 4 per runner | `WORKFLOW_CONCURRENCY` |
+| Workflow jobs running at once | 4 per runner; a slot is refilled as soon as its job finishes, so a long job never holds new work queued | `WORKFLOW_CONCURRENCY` |
 | PDF/OCR child processes | 2 running + 8 queued (previews 1 + 4), 320 MB RSS each | `IW_PDF_*`, [document-intake.md#limits](document-intake.md#limits) |
 | Upload size and shape | 5 MB, 50 pages, 25 MP images | [document-intake.md#limits](document-intake.md#limits) |
 | Queued document processing | 200 per workspace, 1000 in total; beyond that intake answers `429 queue_full` with `Retry-After` | `INTAKE_MAX_PENDING_PER_WORKSPACE`, `INTAKE_MAX_PENDING_TOTAL` |
@@ -83,7 +84,7 @@ decision.
 | --- | --- | --- |
 | `GET /health/live` | yes | `{"status":"ok"}` while the process serves; touches nothing |
 | `GET /health`, `GET /health/ready` | yes | `{"status":"ok"}` (200) or `{"status":"unavailable"}` (503): the database answers within 3 s. kamal-proxy gates traffic on it |
-| `GET /ops/metrics` | no: `Authorization: Bearer $OPS_TOKEN`, 404 when no token is configured | queue depth and age per workflow, failures and retries, stuck leases, intake and intake-to-delivery latency, provider calls/failures/rate limits/latency/tokens, budget, database size and pool, Redis, storage free space, API memory, version, and the alerts they raise |
+| `GET /ops/metrics` | no: `Authorization: Bearer $OPS_TOKEN`, 404 when no token is configured | queue depth and age per workflow, failures and retries, stuck leases, intake latency by input kind (text PDF, scan) with stage p95s, intake-to-delivery latency, provider calls/failures/rate limits/latency/tokens, budget, database size and pool, Redis, storage free space, API memory, version, and the alerts they raise |
 
 Public responses never include pools, timings, hostnames, credentials or
 dependency errors. The inherited `/health/db` and `/health/pools` are gone.
@@ -113,7 +114,7 @@ invoice contents, file names or workspace names.
 | `workflow_stuck:<workflow>` | critical | a lease expired and nothing reclaimed it: is the api container running? `bun jobs:status` |
 | `queue_age:<workflow>` | warning | backlog: runner errors in the logs, provider outage, or the TypeSafe budget is spent |
 | `workflow_failures:<workflow>` | warning | `bun jobs:status` for the error; fix, then retry from the inbox |
-| `intake_latency` | warning | extraction p95 over target: provider latency (`providers`) or queue age |
+| `intake_latency:text`, `intake_latency:scan` | warning | intake p95 over its target; the summary names each stage's p95 (queue, text/OCR, TypeSafe, save). Queue: runner errors, `queue_age`, a stopped runner or a spent budget; TypeSafe: `providers`; a document that failed and was retried counts from its original acceptance |
 | `provider_throttled:<provider>/<op>`, `provider_errors:…` | warning | provider status page; failures retry with backoff |
 | `provider_budget:typesafe` | warning at 80%, critical when spent | expected volume, or runaway intake? Raising the ceiling is an operator decision |
 | `storage_capacity` | warning at 15% free, critical at 5% | prune old backups, grow the volume |

@@ -95,6 +95,7 @@ export async function processDocumentAttachment(
   // The result, its validation, its revision and every destination's delivery
   // intent commit together; a null completion means another worker already
   // completed this document.
+  const savingAt = performance.now();
   const { completion, validation } = await saveProcessedDocument(db, {
     id: input.inboxId,
     teamId: input.teamId,
@@ -113,7 +114,14 @@ export async function processDocumentAttachment(
     processingError: null,
   });
 
-  return { completion, result: { ...result, validation } };
+  return {
+    completion,
+    result: { ...result, validation },
+    timings: {
+      ...result.timings,
+      persistMs: Math.round(performance.now() - savingAt),
+    },
+  };
 }
 
 /**

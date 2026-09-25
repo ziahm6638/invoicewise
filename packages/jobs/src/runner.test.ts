@@ -6,6 +6,7 @@ import {
   WorkflowRunnerSettings,
   retryDelayMs,
   runWorkflowBatch,
+  runWorkflowSlots,
 } from "./runner";
 import { WorkflowExecutionError, WorkflowHandler } from "./workflows";
 
@@ -178,5 +179,60 @@ describe("Effect workflow runner", () => {
     await run(3);
 
     expect(claims).toEqual([[], ["process-attachment"], []]);
+  });
+
+  test("claims into a free slot while a slow job still runs", async () => {
+    // Production counterfactual (issue #102): a text PDF uploaded two seconds
+    // after a ten-page scan waited 24 s for the scan to finish although three
+    // of four slots were free.
+    const slow = { ...job, id: "00000000-0000-0000-0000-00000000000a" };
+    const fast = { ...job, id: "00000000-0000-0000-0000-00000000000b" };
+    const due = [[slow], [fast]];
+    const completed: string[] = [];
+    const released: string[] = [];
+    const fastDone = Promise.withResolvers<void>();
+    const repository = Layer.succeed(WorkflowRepository, {
+      claim: (_workerId, limit) =>
+        Effect.sync(() => (due.shift() ?? []).slice(0, limit)),
+      heartbeat: () => Effect.void,
+      complete: (id) =>
+        Effect.sync(() => {
+          completed.push(id);
+          if (id === fast.id) fastDone.resolve();
+        }),
+      retry: () => Effect.void,
+      fail: () => Effect.void,
+      release: (id) => Effect.sync(() => released.push(id)).pipe(Effect.asVoid),
+      providerCallsSince: () => Effect.succeed(0),
+    });
+    const handler = Layer.succeed(WorkflowHandler, {
+      handle: (claimed) =>
+        claimed.id === slow.id ? Effect.never : Effect.succeed({}),
+    });
+    const twoSlots = Layer.succeed(WorkflowRunnerSettings, {
+      workerId: "test-worker",
+      concurrency: 2,
+      pollMs: 5,
+      leaseMs: 60_000,
+      retryBaseMs: 100,
+      retryMaxMs: 1000,
+    });
+
+    const fiber = Effect.runFork(
+      runWorkflowSlots.pipe(
+        Effect.provide(Layer.mergeAll(repository, handler, twoSlots)),
+        Effect.provide(Logger.minimumLogLevel(LogLevel.None)),
+      ),
+    );
+    const outcome = await Promise.race([
+      fastDone.promise.then(() => "fast finished"),
+      Bun.sleep(2000).then(() => "fast still queued"),
+    ]);
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(outcome).toBe("fast finished");
+    expect(completed).toEqual([fast.id]);
+    // Shutdown still hands the unfinished job back to the queue.
+    expect(released).toEqual([slow.id]);
   });
 });
