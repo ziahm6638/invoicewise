@@ -80,6 +80,13 @@ export const canManageAuthorizationSources = (
   role: TeamRole | null | undefined,
 ) => roleAtLeast(role, "admin");
 
+/**
+ * The audit trail names every member's actions and every operator access,
+ * so it is read by the people who manage members and integrations.
+ */
+export const canReadAuditLog = (role: TeamRole | null | undefined) =>
+  roleAtLeast(role, "admin");
+
 /** A full export carries every member's data and the workspace's documents. */
 export const canExportData = (role: TeamRole | null | undefined) =>
   roleAtLeast(role, "owner");
@@ -99,6 +106,7 @@ export const getTeamCapabilities = (role: TeamRole | null | undefined) => ({
   transferOwnership: canTransferOwnership(role),
   exportData: canExportData(role),
   manageAuthorizationSources: canManageAuthorizationSources(role),
+  readAuditLog: canReadAuditLog(role),
 });
 
 /**

@@ -46,6 +46,7 @@ const continueWithSession = async (
   c.set("teamId", teamId);
   c.set("teamRole", teamRole);
   c.set("scopes", expandScopes(["apis.all"]));
+  c.set("credentialId", null);
   await next();
 };
 
@@ -121,6 +122,7 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
     c.set("teamRole", role);
     // Aliases are expanded and unknown scopes dropped inside the clamp.
     c.set("scopes", clampScopesForRole(role, tokenData.scopes ?? []));
+    c.set("credentialId", tokenData.applicationId ?? null);
 
     await next();
     return;
@@ -168,6 +170,7 @@ export const withAuth: MiddlewareHandler = async (c, next) => {
   c.set("teamId", session.teamId);
   c.set("teamRole", role);
   c.set("scopes", clampScopesForRole(role, apiKey.scopes ?? []));
+  c.set("credentialId", apiKey.id);
 
   // Update last used at
   updateApiKeyLastUsedAt(primaryDb, apiKey.id);

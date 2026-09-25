@@ -267,12 +267,19 @@ export function listDeletionRequests(
 export async function resumeDeletionRequests(
   db: Database | PrimaryDatabase,
   now = new Date(),
+  /** Only these requests (an operator resuming one); every one when omitted. */
+  ids?: readonly string[],
 ) {
   return db.transaction(async (tx) => {
     const unfinished = await tx
       .select({ id: deletionRequests.id })
       .from(deletionRequests)
-      .where(inArray(deletionRequests.status, ["pending", "failed"]))
+      .where(
+        and(
+          inArray(deletionRequests.status, ["pending", "failed"]),
+          ids ? inArray(deletionRequests.id, [...ids]) : undefined,
+        ),
+      )
       .for("update", { skipLocked: true });
 
     const resumed: string[] = [];

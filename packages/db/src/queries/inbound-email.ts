@@ -272,6 +272,31 @@ export async function settleInboundEmail(
 }
 
 /**
+ * Operator re-drive of a failed message whose MIME source is still kept:
+ * the message goes back to `received` so its processing job can read it
+ * again. Only a failed message with its source can be re-opened; returns the
+ * message, or undefined when it cannot be.
+ */
+export async function reopenFailedInboundEmail(
+  db: Pick<Database, "update">,
+  params: { id: string; teamId: string },
+) {
+  const [row] = await db
+    .update(inboundEmails)
+    .set({ status: "received", detail: null, processedAt: null })
+    .where(
+      and(
+        eq(inboundEmails.id, params.id),
+        eq(inboundEmails.teamId, params.teamId),
+        eq(inboundEmails.status, "failed"),
+        sql`${inboundEmails.raw} is not null`,
+      ),
+    )
+    .returning({ id: inboundEmails.id });
+  return row;
+}
+
+/**
  * Messages still "received" whose processing job has already given up, for
  * example a lease that expired after the final attempt or a failure the
  * handler could not record.

@@ -31,6 +31,7 @@ export function useTeamPermissions() {
       transferOwnership: false,
       exportData: false,
       manageAuthorizationSources: false,
+      readAuditLog: false,
     }
   );
 }

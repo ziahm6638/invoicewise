@@ -2,6 +2,7 @@ import type { Database, PrimaryDatabase } from "@db/client";
 import {
   type DataExportSummary,
   accountingConnections,
+  auditEvents,
   dataExports,
   inboundEmails,
   inbox,
@@ -477,6 +478,7 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     receivedEmails,
     questionRunRows,
     questionAnswerRows,
+    auditEventRows,
   ] = await Promise.all([
     db
       .select({
@@ -735,6 +737,28 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
       .innerJoin(inbox, eq(inbox.id, questionAnswers.invoiceId))
       .where(and(eq(questionAnswers.teamId, teamId), exportedInvoice))
       .orderBy(asc(questionAnswers.createdAt), asc(questionAnswers.id)),
+    // The recorded audit trail (already redacted when written).
+    db
+      .select({
+        id: auditEvents.id,
+        actorType: auditEvents.actorType,
+        actorUserId: auditEvents.actorUserId,
+        actorRef: auditEvents.actorRef,
+        surface: auditEvents.surface,
+        action: auditEvents.action,
+        category: auditEvents.category,
+        targetType: auditEvents.targetType,
+        targetId: auditEvents.targetId,
+        revision: auditEvents.revision,
+        outcome: auditEvents.outcome,
+        detail: auditEvents.detail,
+        purpose: auditEvents.purpose,
+        createdAt: auditEvents.createdAt,
+        settledAt: auditEvents.settledAt,
+      })
+      .from(auditEvents)
+      .where(eq(auditEvents.teamId, teamId))
+      .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id)),
   ]);
 
   return {
@@ -755,6 +779,7 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     inboundEmails: receivedEmails,
     questionRuns: questionRunRows,
     questionAnswers: questionAnswerRows,
+    auditEvents: auditEventRows,
   };
 }
 

@@ -8,6 +8,7 @@ import {
   retryInboxSchema,
   updateInboxSchema,
 } from "@api/schemas/inbox";
+import { readInvoiceActivity } from "@api/services/activity";
 import { createTRPCRouter, workspaceProcedure } from "@api/trpc/init";
 import type { Database } from "@invoicewise/db/client";
 import {
@@ -298,6 +299,21 @@ export const inboxRouter = createTRPCRouter({
             : null,
       };
     }),
+
+  /**
+   * The invoice's activity trace: receipt, each reading and question rerun,
+   * corrections and actions with who took them, and every destination with
+   * its outcome and correlation identifiers. Every member may read it.
+   */
+  activity: workspaceProcedure
+    .input(getInboxByIdSchema)
+    .query(async ({ ctx: { db, teamId }, input }) =>
+      readInvoiceActivity(db, {
+        teamId: teamId!,
+        invoiceId: input.id,
+        audience: "customer",
+      }),
+    ),
 
   /**
    * Per-destination delivery outcome of the invoice's current revision:

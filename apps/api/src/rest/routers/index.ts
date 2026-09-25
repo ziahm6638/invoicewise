@@ -1,5 +1,6 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { protectedMiddleware, withRequiredTeam } from "../middleware";
+import { withRestAuditTrail } from "../middleware/audit";
 import { accountingRouter } from "./accounting";
 import { authorizationSourcesRouter } from "./authorization-sources";
 import { inboxRouter } from "./inbox";
@@ -16,6 +17,9 @@ routers.route("/oauth", oauthRouter);
 
 // Apply protected middleware to all subsequent routes
 routers.use(...protectedMiddleware);
+
+// Every workspace write is recorded in the audit trail.
+routers.use(withRestAuditTrail);
 
 // Workspace resources need an active workspace
 for (const path of [

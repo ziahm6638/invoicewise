@@ -8,5 +8,7 @@ export type Context = {
     session: Session;
     teamId: string;
     teamRole: TeamRole | null;
+    /** The API key or OAuth application behind the request (audit trail). */
+    credentialId: string | null;
   };
 };

@@ -16,6 +16,7 @@ import {
   updateInboxAccount,
 } from "@invoicewise/db/queries";
 import { createStorageClient } from "@invoicewise/db/storage";
+import { redactOperationalText } from "@invoicewise/db/utils/redact";
 import { INTAKE_LIMITS } from "@invoicewise/documents";
 import { GetStartedEmail } from "@invoicewise/email/emails/get-started";
 import { InviteEmail } from "@invoicewise/email/emails/invite";
@@ -530,7 +531,7 @@ const makeProcessAttachment = (
           ? Effect.logWarning("invoice_processing_failed").pipe(
               Effect.annotateLogs({
                 inboxId: inboxItem.id,
-                reason: error.reason,
+                reason: redactOperationalText(error.reason),
               }),
               Effect.zipRight(
                 attempt(
@@ -583,7 +584,7 @@ const makeProcessInboundEmail = (
           ? Effect.logWarning("inbound_email_processing_failed").pipe(
               Effect.annotateLogs({
                 inboundEmailId: payload.inboundEmailId,
-                reason: error.reason,
+                reason: redactOperationalText(error.reason),
               }),
               Effect.zipRight(
                 attempt(
@@ -621,7 +622,7 @@ const makeRerunJudgments = (
           ? Effect.logWarning("invoice_judgments_rerun_failed").pipe(
               Effect.annotateLogs({
                 inboxId: payload.invoiceId,
-                reason: error.reason,
+                reason: redactOperationalText(error.reason),
               }),
               Effect.zipRight(
                 attempt(
@@ -1020,7 +1021,7 @@ const makePurgeDeletedData = (
             event: "deletion_cleanup_failed",
             deletionId: payload.deletionId,
             attempt: job.attempts,
-            error: error.reason,
+            error: redactOperationalText(error.reason),
           }),
         ),
       ),
@@ -1096,7 +1097,7 @@ const makeBuildDataExport = (
             event: "data_export_failed",
             exportId: payload.exportId,
             attempt: job.attempts,
-            error: error.reason,
+            error: redactOperationalText(error.reason),
           }),
         ),
       ),
@@ -1141,7 +1142,7 @@ const makeApplyRetention = (
           Effect.annotateLogs({
             event: "retention_sweep_failed",
             attempt: job.attempts,
-            error: error.reason,
+            error: redactOperationalText(error.reason),
           }),
         ),
       ),
@@ -1157,7 +1158,7 @@ const makeApplyRetention = (
             Effect.logError("retention_schedule_failed").pipe(
               Effect.annotateLogs({
                 event: "retention_schedule_failed",
-                error: error.reason,
+                error: redactOperationalText(error.reason),
               }),
             ),
           ),

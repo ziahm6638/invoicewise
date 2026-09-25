@@ -64,6 +64,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Validation:** plain-code checks of every extraction (arithmetic with explicit tolerances, currency pairs, credit notes, duplicate identity) persist in `inbox.validation` and gate accounting delivery; rules and the reviewed fixture corpus (`packages/documents/src/test/corpus`, gated by `thresholds.json`) are in `docs/document-intake.md#validation`
 - **Exception workflow:** re-extract, rerun questions, retry delivery and field corrections each carry the processing revision the user saw (one transition per revision); corrections keep the reading (`inbox.extraction_original`, audited `invoice_corrections`), re-run validation, and a posted bill is kept or updated in place, never posted twice. See `docs/delivery.md#corrections-reprocessing-and-retries` (`packages/jobs/src/exceptions.ts`)
 - **Integrations:** self-hosted Nango on hp-slice for Xero/QuickBooks (auth + proxy only, so bill adapters live in `packages/jobs`; see `docs/accounting-integrations.md`), Polar (billing), API/MCP/webhooks
+- **Audit and recovery:** workspace changes are recorded in `audit_events` (started before, settled after; tRPC registry `apps/api/src/trpc/audit.ts`, whose test fails for an unlisted mutation, and REST middleware `apps/api/src/rest/middleware/audit.ts`); an invoice's activity trace is built from existing records, never a copied log. Operators diagnose and recover only through `/ops/*` with `OPS_TOKEN` + `X-Operator`, with a stated purpose that is audited in the workspace; retries re-drive the workflow's own recovery path. Redact operational text with `redactOperationalText`. See `docs/operations.md#recovery`
 - **Outbound to customer URLs:** webhooks send only through the egress guard `packages/jobs/src/egress.ts` (resolve, refuse private/metadata addresses, connect to the pinned address, bounded); never `fetch` a customer-supplied URL. Management and semantics: `docs/delivery.md#webhooks`
 
 ## Commands
@@ -102,7 +103,7 @@ TypeSafe, Nango and Polar values are documented in `docs/development.md`. Real
 `migrations/`. Applied state is recorded in `drizzle.__drizzle_migrations`. Member tables include
 `users`, `teams`, `users_on_team`, `user_questions`, `inbox` (with extraction, judgments, intake
 lifecycle, supplier and accounting-delivery columns), `suppliers`, `supplier_events`,
-`inbox_redeliveries`, `invoice_corrections`, `authorization_sources` (+ `_versions`, `_documents`, `_imports`) and `workflow_jobs`. Bank and transaction tables are
+`inbox_redeliveries`, `invoice_corrections`, `authorization_sources` (+ `_versions`, `_documents`, `_imports`), `audit_events` and `workflow_jobs`. Bank and transaction tables are
 unused but still defined in the schema; `inbox` keeps the accepted document, its source reference and financial fields.
 
 After `drizzle-kit generate`, set the new `_journal.json` entry's `when` above the previous

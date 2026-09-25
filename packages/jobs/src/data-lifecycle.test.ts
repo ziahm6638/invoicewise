@@ -81,6 +81,7 @@ describe("retention policy", () => {
       failedUploadDays: 30,
       sourceEmailDays: 90,
       jobPayloadDays: 30,
+      auditEventDays: 365,
       backupDays: 30,
       exportLinkHours: 24,
     });
@@ -106,6 +107,7 @@ describe("retention policy", () => {
       "failed-uploads",
       "source-email",
       "job-payloads",
+      "audit",
       "logs",
       "backups",
       "exports",
@@ -280,6 +282,25 @@ describe("export records", () => {
         deliveries: [],
         jobs: [],
         exports: [],
+        auditEvents: [
+          {
+            id: "88888888-8888-4888-8888-888888888888",
+            actorType: "operator" as const,
+            actorUserId: null,
+            actorRef: "on-call",
+            surface: "ops" as const,
+            action: "operator.job_retry",
+            category: "operator" as const,
+            targetType: "invoice",
+            targetId: secondId,
+            revision: null,
+            outcome: "succeeded" as const,
+            detail: { workflow: "process-attachment" },
+            purpose: "incident",
+            createdAt: "2026-09-06T10:00:00.000Z",
+            settledAt: "2026-09-06T10:00:01.000Z",
+          },
+        ],
         inboundEmails: [
           {
             id: "77777777-7777-4777-8777-777777777777",
@@ -378,15 +399,29 @@ describe("export records", () => {
       "invoice.accounting_posted",
       "supplier.assign_invoice",
       "invoice.corrected",
+      "operator.job_retry",
     ]);
-    expect(records.audit.at(-2)).toMatchObject({
+    expect(records.audit.at(-3)).toMatchObject({
       subject: { kind: "invoice", id: secondId },
       detail: { supplierId: acme, targetSupplierId: bolt },
     });
-    expect(records.audit.at(-1)).toMatchObject({
+    expect(records.audit.at(-2)).toMatchObject({
       id: "invoice.corrected:77777777-7777-4777-8777-777777777777",
       subject: { kind: "invoice", id: secondId },
       detail: { version: 1, accountingOutcome: "keep_bill" },
+    });
+    // The recorded audit trail is exported with who acted and why.
+    expect(records.audit.at(-1)).toMatchObject({
+      id: "audit:88888888-8888-4888-8888-888888888888",
+      subject: { kind: "invoice", id: secondId },
+      detail: {
+        category: "operator",
+        outcome: "succeeded",
+        actorType: "operator",
+        actorRef: "on-call",
+        purpose: "incident",
+        workflow: "process-attachment",
+      },
     });
   });
 });

@@ -25,6 +25,7 @@ Available read routes are:
 | `GET /invoices` | Cursor-paginated invoices; supports `cursor`, `pageSize`, `status`, `q`, `sort`, and `order` |
 | `GET /invoices/:id` | Extraction (with per-value evidence), validation, line items, judgments, and a five-minute signed document URL |
 | `GET /invoices/:id/delivery-status` | Webhook deliveries (logical event ID, revision, status, attempts, last error, whether a retry may succeed) plus the Nango accounting post status, provider ID, failure reason and retryability |
+| `GET /invoices/:id/activity` | The invoice's [activity trace](#activity-trace) |
 | `GET /invoices/export.csv` | Workspace invoices with document type, validation status, accounting readiness and issues, and a `judgment:<questionId>` column for every judgment |
 
 An invoice outside the API key's workspace is returned as `404`, so the route
@@ -39,6 +40,43 @@ totals with their currencies, duplicate and credit-note identity, and
 `POST /invoices/:id/delivery/retry` (scope `inbox.write`) is the recovery
 action for failed or cancelled destinations; see
 [Processing-to-delivery handoff](#processing-to-delivery-handoff).
+
+### Activity trace
+
+`GET /invoices/:id/activity` (scope `inbox.read`), tRPC `inbox.activity` and
+the **Activity** section of the invoice page trace one invoice from receipt to
+every destination, oldest first. Each entry has a time, stage (`receipt`,
+`extraction`, `judgments`, `correction`, `delivery`, `accounting`, `action`),
+a title, a status (`ok`, `pending`, `failed`, `refused`, `info`), the reason in
+plain words when it failed or is waiting, who acted, and `refs`: the
+correlation identifiers that tie it to the rest of the system (the received
+message's Message-ID, the queue job and its attempts, the processing
+revision, the webhook delivery, logical event ID and endpoint, the bill's
+provider ID, the correction and question run, the audit event).
+
+```json
+{
+  "invoiceId": "…",
+  "revision": 1,
+  "current": { "extraction": "processed", "extractionError": null, "validation": "valid", "accounting": null, "questionRerun": null },
+  "entries": [
+    { "at": "…", "stage": "receipt", "title": "Received by email from Acme <billing@acme.example>", "status": "ok", "refs": { "inboundEmailId": "…", "messageId": "<…>" } },
+    { "at": "…", "stage": "extraction", "title": "Reading the document: failed", "status": "failed", "reason": "TypeSafe unavailable: 503 (after 3 attempts)", "refs": { "jobId": "…", "attempts": 3 } },
+    { "at": "…", "stage": "action", "title": "Operator retried a job", "status": "ok", "reason": "Purpose: incident", "actor": { "type": "operator", "name": "on-call" }, "refs": { "auditEventId": "…" } },
+    { "at": "…", "stage": "delivery", "title": "Webhook invoice.processed to https://hooks.example.com delivered", "status": "ok", "refs": { "deliveryId": "…", "eventId": "…", "revision": 1 } }
+  ],
+  "truncated": false
+}
+```
+
+It is built from the existing records (the intake row, the received message,
+the queue, the delivery ledger, corrections, question answers and the
+[audit trail](operations.md#audit-trail)); nothing is copied into a separate
+log, and it holds no extracted values or document text. Failure reasons are
+redacted, and endpoints are shown by origin only, since a path or query can
+carry a receiver's token. Queue jobs are linked through their payload, which
+the retention job empties 30 days after a job finished, so older runs drop out
+of the trace while their outcomes stay on the invoice.
 
 ## MCP
 

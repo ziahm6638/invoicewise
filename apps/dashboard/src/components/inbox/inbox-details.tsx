@@ -27,6 +27,7 @@ import { CorrectionForm } from "./correction-form";
 import { DeliveryResults } from "./delivery-results";
 import { EarlierAnswers } from "./earlier-answers";
 import { InboxStatus } from "./inbox-status";
+import { InvoiceActivity } from "./invoice-activity";
 import { InvoiceHistory } from "./invoice-history";
 import { InvoiceWorkflow } from "./invoice-workflow";
 import { JudgmentResults } from "./judgment-results";
@@ -476,6 +477,7 @@ export function InboxDetails() {
               )
             )}
             <InvoiceHistory invoiceId={data.id} />
+            <InvoiceActivity invoiceId={data.id} />
           </div>
         </ScrollArea>
       </div>
