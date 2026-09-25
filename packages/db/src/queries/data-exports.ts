@@ -636,6 +636,10 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
         provider: accountingConnections.provider,
         connectedAt: accountingConnections.connectedAt,
         disconnectedAt: accountingConnections.disconnectedAt,
+        organisationId: accountingConnections.organisationId,
+        organisationName: accountingConnections.organisationName,
+        settings: accountingConnections.settings,
+        autoPostEnabledAt: accountingConnections.autoPostEnabledAt,
       })
       .from(accountingConnections)
       .where(eq(accountingConnections.teamId, teamId)),

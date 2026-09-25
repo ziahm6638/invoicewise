@@ -18,6 +18,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
+import { QuickBooksSetup } from "./quickbooks-setup";
 
 type Provider =
   RouterOutputs["accounting"]["get"]["providers"][number]["provider"];
@@ -32,9 +33,15 @@ const PROVIDERS: { provider: Provider; name: string; outcome: string }[] = [
     provider: "quickbooks",
     name: "QuickBooks Online",
     outcome:
-      "QuickBooks has no draft bills: invoices arrive as unpaid, open bills.",
+      "QuickBooks has no draft bills: invoices arrive as open, unpaid bills (credit notes as vendor credits), only after you switch on automatic bills below.",
   },
 ];
+
+const HEALTH: Record<string, { label: string; tone: string }> = {
+  ok: { label: "Healthy", tone: "text-muted-foreground" },
+  reconnect: { label: "Reconnect needed", tone: "text-destructive" },
+  unavailable: { label: "Unreachable", tone: "text-destructive" },
+};
 
 export function AccountingConnections() {
   const trpc = useTRPC();
@@ -95,8 +102,29 @@ export function AccountingConnections() {
     }),
   );
 
+  const checkHealth = useMutation(
+    trpc.accounting.checkHealth.mutationOptions({
+      onSuccess: (result) => {
+        toast({
+          duration: 5000,
+          variant: result.healthStatus === "ok" ? "success" : "error",
+          title:
+            result.healthStatus === "ok"
+              ? "The connection is working"
+              : "The connection needs attention",
+          description: result.healthError ?? undefined,
+        });
+        refresh();
+      },
+      onError: fail("Unable to check the connection"),
+    }),
+  );
+
   const busy =
-    connect.isPending || completeConnection.isPending || disconnect.isPending;
+    connect.isPending ||
+    completeConnection.isPending ||
+    disconnect.isPending ||
+    checkHealth.isPending;
 
   return (
     <Card>
@@ -123,49 +151,110 @@ export function AccountingConnections() {
               entry.provider !== provider && entry.status === "connected",
           );
 
+          const health = connection?.health.status
+            ? HEALTH[connection.health.status]
+            : undefined;
+          const sandbox = connection
+            ? connection.sandbox
+            : data.providers.find((entry) => entry.provider === provider)
+                ?.sandbox;
+
           return (
-            <div
-              key={provider}
-              className="flex items-center justify-between gap-4 py-4"
-            >
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{name}</span>
+            <div key={provider} className="py-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{name}</span>
+                    {connection ? (
+                      <Badge variant="tag-rounded" className="text-xs">
+                        Connected
+                      </Badge>
+                    ) : null}
+                    {available && sandbox ? (
+                      <Badge variant="tag-rounded" className="text-xs">
+                        Sandbox companies only
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <span className="text-muted-foreground text-xs">
+                    {connection
+                      ? `Connected ${formatDistanceToNow(new Date(connection.connectedAt))} ago. ${outcome}`
+                      : available
+                        ? outcome
+                        : `${name} is not available yet.`}
+                  </span>
                   {connection ? (
-                    <Badge variant="tag-rounded" className="text-xs">
-                      Connected
-                    </Badge>
+                    <span className="text-xs">
+                      Company:{" "}
+                      <span className="font-medium">
+                        {connection.organisationName ?? "unnamed"}
+                      </span>
+                      {connection.organisationId
+                        ? ` (ID ${connection.organisationId})`
+                        : ""}
+                      {health ? (
+                        <span className={health.tone}>
+                          {" · "}
+                          {health.label}
+                          {connection.health.checkedAt
+                            ? `, checked ${formatDistanceToNow(new Date(connection.health.checkedAt))} ago`
+                            : ""}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : null}
+                  {connection?.health.error &&
+                  connection.health.status !== "ok" ? (
+                    <span className="text-xs text-destructive">
+                      {connection.health.error}
+                    </span>
                   ) : null}
                 </div>
-                <span className="text-muted-foreground text-xs">
-                  {connection
-                    ? `Connected ${formatDistanceToNow(new Date(connection.connectedAt))} ago. ${outcome}`
-                    : available
-                      ? outcome
-                      : `${name} is not available yet.`}
-                </span>
-              </div>
 
-              {connection ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="text-xs"
-                  disabled={busy}
-                  onClick={() => disconnect.mutate({ provider })}
-                >
-                  Disconnect
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  className="text-xs"
-                  disabled={busy || !available || otherConnected}
-                  onClick={() => connect.mutate({ provider })}
-                >
-                  Connect
-                </Button>
-              )}
+                {connection ? (
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs"
+                      disabled={busy}
+                      onClick={() => checkHealth.mutate()}
+                    >
+                      Check
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs"
+                      disabled={busy || !available}
+                      onClick={() => connect.mutate({ provider })}
+                    >
+                      Reconnect
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs"
+                      disabled={busy}
+                      onClick={() => disconnect.mutate({ provider })}
+                    >
+                      Disconnect
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="text-xs"
+                    disabled={busy || !available || otherConnected}
+                    onClick={() => connect.mutate({ provider })}
+                  >
+                    Connect
+                  </Button>
+                )}
+              </div>
+              {connection && provider === "quickbooks" ? (
+                <QuickBooksSetup />
+              ) : null}
             </div>
           );
         })}

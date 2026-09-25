@@ -307,8 +307,9 @@ An answer that is not a confident answer never counts as no or zero: a
 condition over it holds the invoice as *could not be checked*, and so does an
 amount limit on an invoice in another currency (amounts are never
 converted). The three *always held* checks cannot be switched off, because a
-bill could not safely carry them. A credit note is not held; it is not
-posted either, because a draft bill cannot represent it.
+bill could not safely carry them. A credit note is not held; with Xero it is
+not posted either, because a draft bill cannot represent it, and with
+QuickBooks it is posted as a vendor credit.
 
 **Destinations.** *Accounting* on or off: whether eligible invoices are
 posted as draft bills. *Webhooks*: `eligible` (the default) sends invoice
@@ -323,7 +324,10 @@ the outcome, every reason (with whether a release may clear it) and what
 each destination was told: `accounting` is `deliver`, `held`, `off`,
 `not_connected`, `not_applicable`, `already_posted` or `not_scheduled` (the
 rules would let it through but the revision schedules no post: a question
-rerun of an invoice that was not held, or a correction that posts nothing),
+rerun of an invoice that was not held, a correction that posts nothing, or a
+connection not opted in to automatic posting, as a QuickBooks connection is
+until an admin opts in; see
+[QuickBooks Online](accounting-integrations.md#quickbooks-online)),
 `webhooks` is `deliver` or `held`. A destination is scheduled only when its decision lets
 it through, so every webhook delivery and bill has the decision it was sent
 under (the delivery's revision, or the invoice's `accounting_revision`), and

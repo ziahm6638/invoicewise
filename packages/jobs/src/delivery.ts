@@ -26,6 +26,7 @@ import {
   listStalledAccountingPosts,
   listStalledBillUpdates,
   listStalledWebhookDeliveries,
+  recordAccountingAttachment,
   recordAccountingPostQueued,
   recordBillUpdateOutcome,
   releaseAccountingPostForReview,
@@ -232,7 +233,9 @@ export async function scheduleAccountingPost(
     return null;
   }
   const connection = await getActiveAccountingConnection(db, input.teamId);
-  if (!connection) return null;
+  // Nothing is created automatically until the workspace opted in (a
+  // QuickBooks bill is open and unpaid, not a draft).
+  if (!connection?.autoPostEnabledAt) return null;
   await recordAccountingPostQueued(db, {
     invoiceId: input.invoiceId,
     teamId: input.teamId,
@@ -552,6 +555,8 @@ export async function retryInvoiceDelivery(
         revision: invoice.accountingRevision ?? revision,
         currentRevision: revision,
         permitted,
+        attachmentStatus: invoice.accountingAttachmentStatus,
+        provider: invoice.accountingProvider,
       }),
     };
   });
@@ -700,8 +705,44 @@ async function requeueFailedBillUpdate(
 }
 
 /**
+ * Schedules the source document's upload to a record InvoiceWise already
+ * created, on its own: the bill is never posted again for it. Restarts the
+ * record's attachment job when one ran before.
+ */
+export async function scheduleAccountingAttachment(
+  db: Database,
+  input: { invoiceId: string; teamId: string; providerId: string },
+) {
+  await recordAccountingAttachment(db, {
+    invoiceId: input.invoiceId,
+    teamId: input.teamId,
+    status: "queued",
+    error: null,
+  });
+  const key = workflowKey.accountingAttachment(
+    input.teamId,
+    input.invoiceId,
+    input.providerId,
+  );
+  const restarted = await requeueFinishedWorkflowJob(db, {
+    name: "attach-accounting-document",
+    idempotencyKey: key,
+    teamId: input.teamId,
+  });
+  if (!restarted) {
+    await enqueueWorkflowJob(db, {
+      name: "attach-accounting-document",
+      teamId: input.teamId,
+      payload: { invoiceId: input.invoiceId, teamId: input.teamId },
+      idempotencyKey: key,
+    });
+  }
+}
+
+/**
  * Re-drives a failed or cancelled accounting intent on the active connection,
- * unless the delivery rules hold the invoice's current revision.
+ * unless the delivery rules hold the invoice's current revision. For a posted
+ * invoice whose document failed to attach, it retries only the attachment.
  */
 export async function requeueAccountingIntent(
   db: Database,
@@ -716,6 +757,10 @@ export async function requeueAccountingIntent(
     currentRevision: number;
     /** Whether the caller may re-post to the accounting provider. */
     permitted: boolean;
+    /** The posted record's attachment state, when known. */
+    attachmentStatus?: string | null;
+    /** The provider the invoice was posted to, when known. */
+    provider?: string | null;
   },
 ): Promise<DeliveryRetryResult["accounting"]> {
   if (
@@ -723,6 +768,20 @@ export async function requeueAccountingIntent(
     input.status === "posted" ||
     input.status === "already_posted"
   ) {
+    if (
+      input.providerId &&
+      (input.attachmentStatus === "failed" ||
+        input.attachmentStatus === "queued") &&
+      input.permitted &&
+      (await getActiveAccountingConnection(db, input.teamId))?.provider ===
+        input.provider
+    ) {
+      await scheduleAccountingAttachment(db, {
+        invoiceId: input.invoiceId,
+        teamId: input.teamId,
+        providerId: input.providerId,
+      });
+    }
     return "already_posted";
   }
   if (input.status === "queued") return "in_progress";

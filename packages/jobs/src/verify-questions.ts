@@ -193,6 +193,10 @@ async function main() {
       provider: "xero",
       integrationId: "xero-invoicewise",
       connectionId: "xero-questions",
+      organisationId: "xero-tenant",
+      organisationName: null,
+      sandbox: false,
+      autoPostOnConnect: true,
     });
 
     // --- Revision 1: two options.

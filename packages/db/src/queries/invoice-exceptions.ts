@@ -289,6 +289,7 @@ export async function getBillUpdate(
         status: inbox.status,
         accountingProvider: inbox.accountingProvider,
         accountingProviderId: inbox.accountingProviderId,
+        accountingProviderEntity: inbox.accountingProviderEntity,
       },
     })
     .from(invoiceCorrections)

@@ -48,7 +48,11 @@ import {
 } from "effect";
 import { nanoid } from "nanoid";
 import { type CreateContactOptions, Resend } from "resend";
-import { postAccountingDraft, updateAccountingBill } from "./accounting";
+import {
+  attachAccountingDocument,
+  postAccountingDraft,
+  updateAccountingBill,
+} from "./accounting";
 import { workflowKey } from "./client";
 import {
   DataExportError,
@@ -1237,6 +1241,27 @@ export const WorkflowHandlerLive = Layer.effect(
             }),
         ),
       );
+    const attachAccountingDocumentJob = (
+      job: WorkflowJob,
+      payload: PostAccountingDraftPayload,
+    ) =>
+      ensureTeam(job, payload.teamId).pipe(
+        Effect.zipRight(
+          attachAccountingDocument(db, storage, {
+            ...payload,
+            attempt: job.attempts,
+            maxAttempts: job.maxAttempts,
+          }).pipe(
+            Effect.mapError(
+              (error) =>
+                new WorkflowExecutionError({
+                  reason: error.reason,
+                  retryable: error.retryable,
+                }),
+            ),
+          ),
+        ),
+      );
     const updateAccountingBillJob = (
       job: WorkflowJob,
       payload: UpdateAccountingBillPayload,
@@ -1329,6 +1354,8 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* rerunJudgments(job, request.payload);
             case "update-accounting-bill":
               return yield* updateAccountingBillJob(job, request.payload);
+            case "attach-accounting-document":
+              return yield* attachAccountingDocumentJob(job, request.payload);
             case "rerun-question":
               return yield* rerunQuestionJob(job, request.payload);
             case "purge-deleted-data":

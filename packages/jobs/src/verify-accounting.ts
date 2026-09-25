@@ -20,7 +20,7 @@ import {
 import { scheduleAccountingPost } from "./delivery";
 import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
-import { deliverPossibleDuplicates } from "./verify-support";
+import { deliverPossibleDuplicates, xeroConnectStub } from "./verify-support";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -70,6 +70,8 @@ async function main() {
           { status: 401 },
         );
       }
+      const connectCheck = xeroConnectStub(request, url);
+      if (connectCheck) return connectCheck;
       if (request.method === "POST" && url.pathname === "/connect/sessions") {
         const body = (await request.json()) as {
           tags?: { workspace_id?: string };

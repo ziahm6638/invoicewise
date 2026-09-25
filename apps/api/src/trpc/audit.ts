@@ -377,6 +377,19 @@ export const TRPC_AUDIT: Record<string, AuditSpec | null> = {
     action: "accounting.disconnect",
     detail: (input) => ({ provider: str(field(input, "provider")) }),
   },
+  "accounting.checkHealth": {
+    action: "accounting.health_check",
+    result: (result) => ({
+      detail: { status: str(field(asObject(result), "healthStatus")) },
+    }),
+  },
+  "accounting.updateSettings": {
+    action: "accounting.settings_update",
+    detail: (input) => ({
+      provider: str(field(input, "provider")),
+      autoPost: field(input, "autoPost") === true,
+    }),
+  },
   "inboxAccounts.connect": {
     action: "mailbox.connect",
     detail: (input) => ({ provider: str(field(input, "provider")) }),

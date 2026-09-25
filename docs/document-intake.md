@@ -476,7 +476,8 @@ posted as a draft bill. The draft-bill contract (Xero and QuickBooks alike)
 requires `documentType` (invoice), supplier name, invoice number, invoice
 date, currency and gross total (`ACCOUNTING_REQUIRED_FIELDS`); every error is
 a blocker, and a credit note is `credit_note_unsupported` because a draft
-bill cannot represent a credit. The workspace's
+bill cannot represent a credit (a QuickBooks connection lifts only that
+blocker and posts the credit note as a vendor credit). The workspace's
 [delivery rules](delivery.md#delivery-rules) hold an invoice with any error
 before a bill is scheduled, with the errors as its reasons. The accounting
 job checks again before calling the provider, so a copy that reached it

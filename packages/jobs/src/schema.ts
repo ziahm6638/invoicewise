@@ -158,6 +158,10 @@ export const WorkflowRequest = Schema.Union(
     payload: UpdateAccountingBillPayload,
   }),
   Schema.Struct({
+    name: Schema.Literal("attach-accounting-document"),
+    payload: PostAccountingDraftPayload,
+  }),
+  Schema.Struct({
     name: Schema.Literal("rerun-question"),
     payload: RerunQuestionPayload,
   }),

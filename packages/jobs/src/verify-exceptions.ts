@@ -44,6 +44,7 @@ import {
   deliverPossibleDuplicates,
   required,
   startTypeSafeStub,
+  xeroConnectStub,
 } from "./verify-support";
 
 const runBatch = () =>
@@ -164,6 +165,8 @@ async function main() {
           },
         );
       }
+      const connectCheck = xeroConnectStub(request, url);
+      if (connectCheck) return connectCheck;
       if (request.method === "GET" && url.pathname === "/connections") {
         return Response.json({
           connections: [

@@ -97,6 +97,9 @@ line is `NAME=$NAME` from the environment `infisical run` injects.
 | `NANGO_ENCRYPTION_KEY` | nango accessory | encrypts provider tokens in the Nango database; never change it |
 | `NANGO_DB_PASSWORD` | nango, nango-db accessories | the Nango database password |
 | `NANGO_DASHBOARD_PASSWORD` | nango accessory | basic-auth password for the Nango admin dashboard (user `invoicewise-admin`) |
+| `INTUIT_CLIENT_ID`, `INTUIT_CLIENT_SECRET` | operator only | the Intuit (QuickBooks) app keys, written into the Nango `quickbooks` integration by `nango:configure-integration`; not deployed |
+| `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET` | operator only | the Xero app keys, for the Nango `xero` integration the same way; not deployed |
+| `INTUIT_SANDBOX_REFRESH_TOKEN`, `INTUIT_SANDBOX_REALM_ID` | operator only | the owner's QuickBooks sandbox authorisation, imported into Nango by `quickbooks:sandbox-connection` (which writes each rotated refresh token back); not deployed |
 
 Infisical also holds `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `AUTH_EMAIL_FROM` and
 `TYPESAFE_BASE_URL` for reference; `config/deploy.yml` sets them in clear. To
@@ -194,8 +197,12 @@ reaches it as `http://invoicewise-nango:3003` on the kamal network.
   # open http://localhost:3020 as invoicewise-admin / NANGO_DASHBOARD_PASSWORD
   ```
 
-  Create integrations under the `prod` environment; the integration keys and
-  provider apps are listed in accounting-integrations.md.
+  Integrations live under the `prod` environment. Do not create them in the
+  dashboard: `infisical run --env prod -- bun run nango:configure-integration
+  <quickbooks|xero>` (from `packages/jobs`, with `NANGO_BASE_URL` set to the
+  public host) creates or updates each one from the app credentials in
+  Infisical; see
+  [accounting-integrations.md](accounting-integrations.md#deployment-contract).
 
 Accessories are not touched by `kamal deploy`. Starting, upgrading (bump the
 image tag in `config/deploy.yml`) or changing Nango's settings leaves the web

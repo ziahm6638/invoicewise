@@ -26,7 +26,7 @@ import {
   updateInbox,
 } from "@invoicewise/db/queries";
 import { signedUrl } from "@invoicewise/db/storage";
-import { providerBillUrl } from "@invoicewise/jobs/accounting";
+import { accountingRecordUrl } from "@invoicewise/jobs/accounting";
 import {
   dismissHeldDelivery,
   releaseHeldDelivery,
@@ -303,10 +303,8 @@ export const inboxRouter = createTRPCRouter({
                 provider: accounting.provider,
                 providerId: accounting.providerId,
                 postedAt: accounting.postedAt,
-                url: providerBillUrl(
-                  accounting.provider,
-                  accounting.providerId,
-                ),
+                entity: accounting.entity,
+                url: await accountingRecordUrl(db, teamId!, accounting),
               }
             : null,
       };
@@ -362,10 +360,7 @@ export const inboxRouter = createTRPCRouter({
         ),
         accounting: accounting && {
           ...accounting,
-          url:
-            accounting.provider && accounting.providerId
-              ? providerBillUrl(accounting.provider, accounting.providerId)
-              : null,
+          url: await accountingRecordUrl(db, teamId!, accounting),
         },
         billUpdate: billUpdate && {
           version: billUpdate.version,
