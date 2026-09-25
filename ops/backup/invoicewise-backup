@@ -7,12 +7,13 @@
 #
 # Dumps land on the host's root NVMe disk, apart from the /mnt/ssd disk that
 # holds the live data; each is checked with pg_restore --list, checksummed and
-# kept for RETAIN_DAYS.
+# kept for RETAIN_DAYS, the operating backup retention in docs/data-lifecycle.md
+# (the app's RETENTION_BACKUP_DAYS must match it).
 set -euo pipefail
 umask 077
 
 readonly DIR=/var/backups/invoicewise
-readonly RETAIN_DAYS=14
+readonly RETAIN_DAYS=${INVOICEWISE_BACKUP_RETAIN_DAYS:-30}
 # container:user:database
 readonly DATABASES=(
   invoicewise-db:invoicewise:invoicewise

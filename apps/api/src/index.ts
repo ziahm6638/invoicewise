@@ -12,6 +12,7 @@ import { invoiceHttp } from "./effect/invoice-http";
 import { registerHealthRoutes } from "./ops/route";
 import { routers } from "./rest/routers";
 import type { Context } from "./rest/types";
+import { exportDownloadResponse } from "./storage/export-route";
 import { storageCapabilityResponse } from "./storage/route";
 import { createTRPCContext } from "./trpc/init";
 import { appRouter } from "./trpc/routers/_app";
@@ -53,6 +54,7 @@ app.use(
 registerHealthRoutes(app, { db, checkDatabase: checkHealth });
 
 app.get("/storage/*", (c) => storageCapabilityResponse(c.req.raw));
+app.get("/exports/:id/download", (c) => exportDownloadResponse(c.req.raw));
 
 app.doc("/openapi", {
   openapi: "3.1.0",

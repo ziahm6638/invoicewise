@@ -24,7 +24,11 @@
     "./suppliers": "./src/suppliers.ts",
     "./deletion": "./src/deletion.ts",
     "./delivery": "./src/delivery.ts",
-    "./webhooks": "./src/webhooks.ts"
+    "./webhooks": "./src/webhooks.ts",
+    "./data-export": "./src/data-export.ts",
+    "./retention": "./src/retention.ts",
+    "./retention-policy": "./src/retention-policy.ts",
+    "./zip": "./src/zip.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "^0.91.2",

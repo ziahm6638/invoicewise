@@ -28,6 +28,7 @@ export function useTeamPermissions() {
       manageBilling: false,
       deleteWorkspace: false,
       transferOwnership: false,
+      exportData: false,
     }
   );
 }

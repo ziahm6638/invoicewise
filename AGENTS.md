@@ -100,6 +100,13 @@ lifecycle, supplier and accounting-delivery columns), `suppliers`, `supplier_eve
 `inbox_redeliveries` and `workflow_jobs`. Bank and transaction tables are
 unused but still defined in the schema; `inbox` keeps the accepted document, its source reference and financial fields.
 
+After `drizzle-kit generate`, set the new `_journal.json` entry's `when` above the previous
+entry's (the journal uses synthetic increasing values; drizzle skips a migration whose `when` is
+not newer than the last applied one).
+
+Workspace data has an owner export and an hourly retention job (`docs/data-lifecycle.md`); a new
+table holding workspace data should be added to both, or noted there as deliberately excluded.
+
 A failed migration batch rolls back to the last committed migration set. Recovery is forward:
 resolve the conflicting object or data, then re-run `bun db:migrate`. There is no automatic
 destructive reset and no fictional rollback for irreversible enum/schema changes; see

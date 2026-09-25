@@ -7,3 +7,4 @@ This directory contains technical documentation for InvoiceWise.
 - [REST, MCP, webhooks, and export](delivery.md)
 - [Nango accounting integrations](accounting-integrations.md)
 - [Offboarding and deletion](offboarding.md)
+- [Data lifecycle: export, retention and processors](data-lifecycle.md)

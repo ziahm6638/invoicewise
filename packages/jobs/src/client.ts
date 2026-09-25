@@ -75,4 +75,6 @@ export const workflowKey = {
   /** A cleanup run deferred until the deletion's quiesce time. */
   deletionResume: (deletionId: string, resumeAt: string) =>
     `${deletionId}:after:${resumeAt}`,
+  /** One retention sweep per hourly slot. */
+  retention: (slot: string) => `retention:${slot}`,
 };

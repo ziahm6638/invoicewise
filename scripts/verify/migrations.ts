@@ -24,7 +24,7 @@ import {
 } from "./lib";
 
 const PRIOR_SCHEMA_THROUGH = 6;
-const TOTAL_MIGRATIONS = 22;
+const TOTAL_MIGRATIONS = 23;
 
 const PRIOR_SCHEMA_BASELINE = join(
   ROOT,
@@ -369,6 +369,8 @@ export async function runMigrationVerification(
       ["suppliers", "merged_into_id"],
       ["supplier_events", "data"],
       ["inbox_redeliveries", "inbox_id"],
+      ["data_exports", "status"],
+      ["data_exports", "expires_at"],
     ];
     for (const [table, column] of expectedColumns) {
       if (!(await columnExists(FRESH_DATABASE, table, column))) {

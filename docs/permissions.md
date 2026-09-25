@@ -8,7 +8,7 @@ expected to reach the same decision for the same actor.
 
 | Capability | Owner | Admin | Member |
 | --- | --- | --- | --- |
-| Read workspace, invoices, inbox, judgments, exports, MCP | yes | yes | yes |
+| Read workspace, invoices, inbox, judgments, CSV exports, MCP, retention schedule | yes | yes | yes |
 | Upload, process, retry, annotate invoices (including re-driving failed webhook deliveries) | yes | yes | yes |
 | Re-post an invoice to the accounting provider (`POST /accounting/invoices/:id/retry`, and the accounting part of `inbox.retryDelivery` and `POST /invoices/:id/delivery/retry`, which report `admin_required` to a member) | yes | yes | no |
 | Manage workspace settings (name, logo, currency, email) | yes | yes | no |
@@ -19,6 +19,7 @@ expected to reach the same decision for the same actor.
 | Correct supplier identity (reassign an invoice, merge suppliers, undo) | yes | yes | no |
 | Manage integrations: API keys, OAuth apps, accounting, webhooks, mailboxes | yes | yes | no |
 | Manage billing and subscription | yes | no | no |
+| Export all workspace data ([data lifecycle](data-lifecycle.md)) | yes | no | no |
 | Delete the workspace | yes | no | no |
 | Transfer ownership | yes | no | no |
 

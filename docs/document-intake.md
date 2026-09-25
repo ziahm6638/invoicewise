@@ -15,7 +15,9 @@ the server.
   processing job. Initial processing is keyed by the canonical inbox id, so a
   concurrent replay cannot create a second job. Each accepted replay is kept
   as a re-delivery of that document (`inbox_redeliveries`: when, file name,
-  provider reference, mailbox), shown under the invoice's supplier history;
+  provider reference, mailbox), shown under the invoice's supplier history
+  (the provider reference is cleared on the source-email schedule in
+  [data lifecycle](data-lifecycle.md#retention-schedule));
   replaying the same provider reference is not counted twice, and a mailbox
   sync treats a re-delivered reference as handled. A re-delivery is never
   processed, posted or sent to webhooks again.

@@ -3,6 +3,7 @@ import {
   claimWorkflowJobs,
   completeWorkflowJob,
   countProviderCallsSince,
+  failStalledDataExports,
   failWorkflowJob,
   heartbeatWorkflowJob,
   recordProviderUsage,
@@ -20,7 +21,11 @@ import {
   WorkflowHandler,
   WorkflowHandlerLive,
   WorkflowInfrastructureLive,
+  enqueueNextRetention,
 } from "./workflows";
+
+/** The database the runner and its reconciler work against. */
+export { WorkflowDatabase } from "./workflows";
 
 export class WorkflowQueueError extends Schema.TaggedError<WorkflowQueueError>()(
   "WorkflowQueueError",
@@ -69,6 +74,14 @@ export class WorkflowRepository extends Context.Tag(
       workerId: string,
       error: string,
     ) => Effect.Effect<void, WorkflowQueueError>;
+    /**
+     * Makes sure recurring maintenance (the hourly retention run) is queued.
+     * Idempotent: every runner calls it at start.
+     */
+    readonly scheduleMaintenance?: () => Effect.Effect<
+      void,
+      WorkflowQueueError
+    >;
   }
 >() {}
 
@@ -164,14 +177,20 @@ export const WorkflowRepositoryLive = Layer.effect(
           () => failWorkflowJob(db, { id, workerId, error }),
           "Unable to fail workflow",
         ),
+      scheduleMaintenance: () =>
+        queueAttempt(
+          () => enqueueNextRetention(db).then(() => undefined),
+          "Unable to schedule retention",
+        ),
     };
   }),
 );
 
 /**
- * Periodic safety net for the processing-to-delivery handoff: settles
- * delivery intents whose job vanished or failed without the handler recording
- * an outcome (for example a lease that expired after the final attempt).
+ * Periodic safety net for work whose job can end without its handler
+ * recording an outcome (for example a lease that expired after the final
+ * attempt): it settles delivery intents whose job vanished or failed, and
+ * workspace exports left `queued` or `running` with no live build job.
  */
 export class DeliveryReconciler extends Context.Tag(
   "invoicewise/DeliveryReconciler",
@@ -180,7 +199,7 @@ export class DeliveryReconciler extends Context.Tag(
   {
     readonly intervalMs: number;
     readonly run: Effect.Effect<
-      { rescheduled: number; failed: number },
+      { rescheduled: number; failed: number; exportsFailed: number },
       WorkflowQueueError
     >;
   }
@@ -195,10 +214,15 @@ export const DeliveryReconcilerLive = Layer.effect(
     );
     return {
       intervalMs: Math.max(1000, intervalMs),
-      run: queueAttempt(
-        () => reconcileDeliveries(db, {}, publishDeliveryFailureById),
-        "Unable to reconcile deliveries",
-      ),
+      run: queueAttempt(async () => {
+        const deliveries = await reconcileDeliveries(
+          db,
+          {},
+          publishDeliveryFailureById,
+        );
+        const exports = await failStalledDataExports(db);
+        return { ...deliveries, exportsFailed: exports.length };
+      }, "Unable to reconcile deliveries"),
     };
   }),
 );
@@ -430,6 +454,16 @@ const reconcileForever = Effect.gen(function* () {
   const reconciler = yield* DeliveryReconciler;
   yield* Effect.forever(
     reconciler.run.pipe(
+      Effect.tap(({ exportsFailed }) =>
+        exportsFailed > 0
+          ? Effect.logWarning("data_export_reconciled").pipe(
+              Effect.annotateLogs({
+                event: "data_export_reconciled",
+                failed: exportsFailed,
+              }),
+            )
+          : Effect.void,
+      ),
       Effect.tap(({ rescheduled, failed }) =>
         rescheduled + failed > 0
           ? Effect.logWarning("delivery_reconciled").pipe(
@@ -456,6 +490,19 @@ const reconcileForever = Effect.gen(function* () {
 
 export const runWorkflows = Effect.gen(function* () {
   const settings = yield* WorkflowRunnerSettings;
+  const repository = yield* WorkflowRepository;
+  if (repository.scheduleMaintenance) {
+    yield* repository.scheduleMaintenance().pipe(
+      Effect.catchAll((error) =>
+        Effect.logError("workflow_maintenance_schedule_failed").pipe(
+          Effect.annotateLogs({
+            event: "workflow_maintenance_schedule_failed",
+            error: error.reason,
+          }),
+        ),
+      ),
+    );
+  }
   // Supervised by this fiber: it stops when the runner stops.
   yield* Effect.fork(reconcileForever);
   yield* Effect.logInfo("workflow_runner_started").pipe(

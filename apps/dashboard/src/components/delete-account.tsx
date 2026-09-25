@@ -99,7 +99,7 @@ export function DeleteAccountDialog({ children }: { children: ReactNode }) {
             This cannot be undone. You are signed out everywhere and your
             account, API keys and memberships are removed from InvoiceWise
             immediately. Backups taken before now keep a copy until they expire,
-            about two weeks later.
+            up to about a month later.
           </AlertDialogDescription>
         </AlertDialogHeader>
 
