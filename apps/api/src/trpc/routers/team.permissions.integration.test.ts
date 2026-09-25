@@ -820,6 +820,72 @@ suite("workspace permissions (integration)", () => {
       ).rejects.toThrow();
     });
 
+    test("bank payments: only an admin reads bank data or decides a payment; members see the status", async () => {
+      const member = caller(ctx(ids.memberA, ids.teamA));
+      const admin = caller(ctx(ids.adminA, ids.teamA));
+      const otherOwner = caller(ctx(ids.ownerB, ids.teamB));
+      const [invoice] = await primaryDb
+        .insert(schema.inbox)
+        .values({
+          teamId: ids.teamA,
+          displayName: "Payment check",
+          fileName: "payment-check.pdf",
+          contentType: "application/pdf",
+          status: "pending",
+          intakeState: "accepted",
+          extraction: {
+            documentType: "invoice",
+            invoiceNumber: "PAY-1",
+            currency: "GBP",
+            grossAmount: 120,
+          },
+          validation: {
+            documentType: "invoice",
+            currency: "GBP",
+            totals: { gross: { amount: 120, currency: "GBP" } },
+          },
+        })
+        .returning({ id: schema.inbox.id });
+      const inboxId = invoice!.id;
+      const transactionId = crypto.randomUUID();
+
+      for (const call of [
+        () => member.bankPayments.overview(),
+        () => member.bankPayments.transactions({ page: 0 }),
+        () => member.bankPayments.setEnabled({ enabled: true }),
+        () => member.bankPayments.connect({ consentAccepted: true }),
+        () =>
+          member.bankPayments.record({
+            inboxId,
+            payments: [{ transactionId, amount: "120" }],
+          }),
+        () => member.bankPayments.confirm({ inboxId }),
+        () => member.bankPayments.unlink({ inboxId, reason: "No" }),
+      ]) {
+        await expect(call()).rejects.toMatchObject({ code: "FORBIDDEN" });
+      }
+      const memberView = await member.bankPayments.forInvoice({ inboxId });
+      expect(memberView).toMatchObject({
+        canDecide: false,
+        history: [],
+        choices: [],
+      });
+
+      // Off for the workspace: an admin's decision is refused, and another
+      // workspace never reaches this invoice.
+      await expect(
+        admin.bankPayments.record({
+          inboxId,
+          payments: [{ transactionId, amount: "120" }],
+        }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      const foreign = await otherOwner.bankPayments.forInvoice({ inboxId });
+      expect(foreign).toMatchObject({ processed: false, current: null });
+      expect(
+        (await otherOwner.bankPayments.transactions({ page: 0 })).data,
+      ).toEqual([]);
+    });
+
     test("an admin manages members but can never grant owner", async () => {
       const admin = caller(ctx(ids.adminA, ids.teamA));
 

@@ -75,7 +75,9 @@ export const bankPaymentsAvailability = (
       message: "The bank data provider is not configured on this deployment.",
     };
   }
-  const privateKey = env.SALT_EDGE_PRIVATE_KEY?.trim() || null;
+  // A PEM kept in one line of a secrets store carries literal "\n"s.
+  const privateKey =
+    env.SALT_EDGE_PRIVATE_KEY?.replace(/\\n/g, "\n").trim() || null;
   if ((env.INVOICEWISE_ENVIRONMENT ?? "") === "production" && !privateKey) {
     return {
       available: false,
@@ -569,6 +571,13 @@ export function createSaltEdgeClient(
       return all("/consents", { connection_id: connectionId }, consentOf);
     },
 
+    /** Revokes a consent at the provider (the bank's own revocation, for proofs). */
+    async revokeConsent(consentId: string, connectionId: string) {
+      await call("PUT", `/consents/${encodeURIComponent(consentId)}/revoke`, {
+        query: { connection_id: connectionId },
+      });
+    },
+
     listAccounts(connectionId: string) {
       return all("/accounts", { connection_id: connectionId }, accountOf);
     },
@@ -625,7 +634,8 @@ export async function revokeBankFeedCustomer(
     {
       appId,
       secret,
-      privateKey: env.SALT_EDGE_PRIVATE_KEY?.trim() || null,
+      privateKey:
+        env.SALT_EDGE_PRIVATE_KEY?.replace(/\\n/g, "\n").trim() || null,
       baseUrl: (env.SALT_EDGE_BASE_URL?.trim() || SALT_EDGE_DEFAULT_BASE_URL).replace(
         /\/+$/,
         "",

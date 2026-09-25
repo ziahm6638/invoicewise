@@ -751,6 +751,16 @@ export function decidePayment(input: {
       "Some transactions relate to this invoice, but none is clear enough to count.",
     );
   }
+  if (
+    assessed.some(
+      (item) => item.printedReference && item.transaction.status === "reversed",
+    )
+  ) {
+    return finish(
+      "unmatched",
+      "The payment that printed this invoice's reference was reversed at the bank; nothing else pays it yet.",
+    );
+  }
   return finish("unmatched", "No bank transaction matches this invoice yet.");
 }
 

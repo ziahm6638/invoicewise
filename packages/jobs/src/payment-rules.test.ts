@@ -189,6 +189,7 @@ describe("decidePayment", () => {
     ]);
     expect(result.status).toBe("unmatched");
     expect(result.paymentStatus).toBe("unpaid");
+    expect(result.message).toContain("reversed at the bank");
     const [foreign, reversed, duplicate] = result.candidates;
     expect(foreign?.eligible).toBe(false);
     expect(reversed?.eligible).toBe(false);

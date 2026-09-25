@@ -148,6 +148,29 @@ describe("deploy config", () => {
     expect(Number(roleEnv("api").TYPESAFE_DAILY_CALL_LIMIT)).toBeGreaterThan(0);
   });
 
+  test("bank payments are an off-by-default secret switch with each destination's callback URL", () => {
+    for (const [deployed, host] of [
+      [config, "api.invoicewise.uk"],
+      [staging, "iw-staging-api.zzapp.uk"],
+    ] as const) {
+      const api = deployed.servers.api!;
+      // Never switched on in committed config: only the secrets store can.
+      expect(api.env?.clear?.BANK_PAYMENTS_ENABLED).toBeUndefined();
+      expect(deployed.env.clear?.BANK_PAYMENTS_ENABLED).toBeUndefined();
+      expect(api.env?.secret).toEqual(
+        expect.arrayContaining([
+          "BANK_PAYMENTS_ENABLED",
+          "SALT_EDGE_APP_ID",
+          "SALT_EDGE_SECRET",
+          "SALT_EDGE_PRIVATE_KEY",
+        ]),
+      );
+      expect(api.env?.clear?.SALT_EDGE_CALLBACK_URL).toBe(
+        `https://${host}/webhooks/saltedge`,
+      );
+    }
+  });
+
   test("never sets a secret in clear", () => {
     for (const block of [
       config.env,

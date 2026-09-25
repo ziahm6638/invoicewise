@@ -11,6 +11,7 @@
     "verify": "bun run src/verify-workflows.ts",
     "verify:accounting": "bun run src/verify-accounting.ts",
     "prove:accounting-sandbox": "bun run src/prove-accounting-sandbox.ts",
+    "prove:bank-sandbox": "bun run src/prove-bank-sandbox.ts",
     "verify:handoff": "bun run src/verify-handoff.ts",
     "verify:exceptions": "bun run src/verify-exceptions.ts",
     "verify:suppliers": "bun run src/verify-suppliers.ts",

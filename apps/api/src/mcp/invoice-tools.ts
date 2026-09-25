@@ -37,7 +37,7 @@ export const ListInvoices = Tool.make("list_invoices", {
 
 export const GetInvoice = Tool.make("get_invoice", {
   description:
-    "Get one invoice with its extraction, validation (deterministic checks and accounting readiness), supplier-history checks (known supplier, duplicate or revision, bank-detail changes, with the earlier invoices they cite), the authorization-source match (the jobs, purchase orders or contracts it bills, with confidence, allocations and the evidence for every candidate; only the status and source IDs without the sources.read scope), the delivery rules' decision (delivered, or held with each reason and how the hold was resolved), line items, judgments, and signed document link.",
+    "Get one invoice with its extraction, validation (deterministic checks and accounting readiness), supplier-history checks (known supplier, duplicate or revision, bank-detail changes, with the earlier invoices they cite), the authorization-source match (the jobs, purchase orders or contracts it bills, with confidence, allocations and the evidence for every candidate; only the status and source IDs without the sources.read scope), the delivery rules' decision (delivered, or held with each reason and how the hold was resolved), the optional bank-payment decision (payment status, the bank transactions counted and the evidence for each; only the status and amounts without the payments.read scope), line items, judgments, and signed document link.",
   parameters: { id: Schema.String },
   success: InvoiceDetail,
   failure: InvoiceMcpError,

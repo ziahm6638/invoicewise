@@ -24,6 +24,7 @@ servers:
         # No Cloudflare Email Routing for staging: its addresses are shown
         # but not routable, so staging never receives real mail.
         INBOUND_EMAIL_DOMAIN: iw-staging-in.zzapp.uk
+        SALT_EDGE_CALLBACK_URL: https://iw-staging-api.zzapp.uk/webhooks/saltedge
     proxy:
       host: iw-staging-api.zzapp.uk
 

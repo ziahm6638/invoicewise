@@ -93,6 +93,8 @@ line is `NAME=$NAME` from the environment `infisical run` injects.
 | `OPS_ALERT_TO` | monitor only | operator address for alerts; written to the monitor host by `ops/monitor/install.sh`, not deployed |
 | `INBOUND_EMAIL_SECRET` | api, Email Worker (Wrangler secret) | signs every Worker → API delivery for the dedicated addresses ([inbound email](inbound-email.md#cloudflare-setup)) |
 | `INBOUND_EMAIL_LIVE` | api (optional) | `true` shows workspaces their receiving address; set only after the live proof ([going live](inbound-email.md#going-live)) |
+| `BANK_PAYMENTS_ENABLED` | api (optional) | `true` offers the optional [bank payments](bank-payments.md#deployment); production is `false` and the API also refuses it there without `SALT_EDGE_PRIVATE_KEY` (a live-status Salt Edge app) |
+| `SALT_EDGE_APP_ID`, `SALT_EDGE_SECRET`, `SALT_EDGE_PRIVATE_KEY` | api (optional) | Salt Edge app credentials; set in staging (sandbox app), not in production |
 | `NANGO_SECRET_KEY` | api, nango accessory | the Nango `prod` environment secret key (`NANGO_SECRET_KEY_PROD` in Nango) |
 | `NANGO_ENCRYPTION_KEY` | nango accessory | encrypts provider tokens in the Nango database; never change it |
 | `NANGO_DB_PASSWORD` | nango, nango-db accessories | the Nango database password |

@@ -24,6 +24,8 @@ expected to reach the same decision for the same actor.
 | Manage authorization sources: create, import, amend, close, cancel, link a supplier, attach documents ([authorization sources](authorization-sources.md)) | yes | yes | no |
 | Read an invoice's match to authorization sources ([matching](authorization-matching.md)) | yes | yes | yes |
 | Confirm, correct or unlink an invoice's match to authorization sources | yes | yes | no |
+| Read an invoice's payment status and amounts ([bank payments](bank-payments.md)) | yes | yes | yes |
+| Turn bank payments on or off, connect, reconnect, sync or disconnect a bank, read bank connections and transactions and an invoice's payment evidence, and confirm, record or unlink an invoice's payment | yes | yes | no |
 | Manage integrations: API keys, OAuth apps, accounting, mailboxes, webhooks (endpoints, secret rotation, test events, per-endpoint redelivery), replacing the workspace's receiving address | yes | yes | no |
 | Manage billing and subscription | yes | no | no |
 | Export all workspace data ([data lifecycle](data-lifecycle.md)) | yes | no | no |
@@ -58,7 +60,7 @@ database on every request (`apps/api/src/trpc/middleware/team-permission.ts`).
 `adminProcedure` and `ownerProcedure` in `apps/api/src/trpc/init.ts` gate the
 privileged routers: team settings, members, invitations, questions, API keys,
 OAuth applications, accounting and mailbox connections, and supplier
-corrections, authorization-source writes and match decisions (admin) and billing (owner). `workspaceProcedure` additionally requires an active workspace, so a
+corrections, authorization-source writes, match decisions and bank payments (admin) and billing (owner). `workspaceProcedure` additionally requires an active workspace, so a
 session with none cannot reach workspace-scoped handlers.
 
 **Stale active workspace.** A browser session whose active-workspace pointer
@@ -97,7 +99,8 @@ The scope vocabulary is authoritative and lives in
 `packages/db/src/utils/scopes.ts`. Aliases (`apis.all`, `apis.read`) are
 expanded first, then intersected with the role: owners and admins may hold any
 known scope, members keep invoice use (`inbox.read`, `inbox.write`) plus
-`sources.read`, `teams.read` and `users.read`, and any unknown scope is dropped
+`sources.read`, `teams.read` and `users.read` (never `payments.read`, which
+exposes bank transactions), and any unknown scope is dropped
 for every role. Keys store their expanded scopes, so a key created before a
 scope existed (for example `sources.read`/`sources.write`) does not gain it;
 edit the key to grant it.

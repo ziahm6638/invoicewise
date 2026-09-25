@@ -59,6 +59,9 @@ servers:
         # Dedicated workspace addresses: <local part>@INBOUND_EMAIL_DOMAIN,
         # received by the Cloudflare Email Worker (docs/inbound-email.md).
         INBOUND_EMAIL_DOMAIN: in.invoicewise.uk
+        # Salt Edge signs each callback over `<this URL>/<type>`; register
+        # these URLs in the Salt Edge app (docs/bank-payments.md#deployment).
+        SALT_EDGE_CALLBACK_URL: https://api.invoicewise.uk/webhooks/saltedge
       secret:
         # Invoice extraction and judgments run only in the workflow runner.
         - TYPESAFE_API_KEY
@@ -73,6 +76,13 @@ servers:
         # "true" once the receiving address passed its live proof; until then
         # no workspace is shown an address (docs/inbound-email.md#going-live).
         - INBOUND_EMAIL_LIVE
+        # Optional bank payments (docs/bank-payments.md): off unless "true".
+        # Production stays off (and the app refuses it without a signing
+        # key) until a live-status Salt Edge app exists.
+        - BANK_PAYMENTS_ENABLED
+        - SALT_EDGE_APP_ID
+        - SALT_EDGE_SECRET
+        - SALT_EDGE_PRIVATE_KEY
     proxy:
       host: api.invoicewise.uk
       app_port: 3003

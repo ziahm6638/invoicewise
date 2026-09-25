@@ -1907,6 +1907,73 @@ suite("workspace permissions over real HTTP", () => {
     });
   });
 
+  test("bank payments: payments.read and admin role over REST, owners and admins over tRPC", async () => {
+    const owner = await createUser("payments-owner");
+    const member = await createUser("payments-member");
+    const teamResult = await trpc(
+      owner.cookie,
+      "team.create",
+      { name: "Payments Team", baseCurrency: "GBP", switchTeam: true },
+      "mutation",
+    );
+    const teamId = teamResult.data as string;
+    created.teamIds.push(teamId);
+    await joinTeam(owner, member, "member");
+    expect((await switchTeam(member.cookie, teamId)).error).toBeNull();
+
+    const key = async (scopes: string[]) => {
+      const result = await trpc(
+        owner.cookie,
+        "apiKeys.upsert",
+        { name: `Payments ${scopes.join(" ")}`, scopes },
+        "mutation",
+      );
+      expect(result.error).toBeNull();
+      return {
+        Authorization: `Bearer ${(result.data as { key: string }).key}`,
+      };
+    };
+    const inboxOnly = await key(["inbox.read"]);
+    const payments = await key(["payments.read"]);
+
+    expect((await get("/bank-payments", inboxOnly)).status).toBe(403);
+    const overview = await get("/bank-payments", payments);
+    expect(overview.status).toBe(200);
+    // Off by default, and this deployment offers no bank data provider.
+    expect(await overview.json()).toMatchObject({
+      enabled: false,
+      available: false,
+      connections: [],
+    });
+    const transactions = await get("/bank-payments/transactions", payments);
+    expect(transactions.status).toBe(200);
+    expect(((await transactions.json()) as { data: unknown[] }).data).toEqual(
+      [],
+    );
+
+    // Bank data is owners' and admins': a member is refused on tRPC.
+    const memberOverview = await trpc(
+      member.cookie,
+      "bankPayments.overview",
+      undefined,
+    );
+    expect(memberOverview.error).not.toBeNull();
+    const ownerOverview = await trpc(
+      owner.cookie,
+      "bankPayments.overview",
+      undefined,
+    );
+    expect(ownerOverview.error).toBeNull();
+    // Turning it on needs a configured provider on the deployment.
+    const enable = await trpc(
+      owner.cookie,
+      "bankPayments.setEnabled",
+      { enabled: true },
+      "mutation",
+    );
+    expect(enable.error).not.toBeNull();
+  });
+
   test("authorization sources: scoped API keys, admin-only writes, versions and workspace isolation", async () => {
     const owner = await createUser("sources-owner");
     const member = await createUser("sources-member");

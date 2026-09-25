@@ -13,6 +13,10 @@ The rules are plain code in `packages/documents/src/source-matching.ts`
 TypeSafe is the only model involved, and only as described under
 [Semantic judgment](#semantic-judgment).
 
+Whether the invoice was **paid** is a separate, optional decision made from
+bank transactions ([bank payments](bank-payments.md)); neither decision reads
+or changes the other.
+
 ## When matching runs
 
 Saving a processed revision queues a `match-invoice` job in the same
