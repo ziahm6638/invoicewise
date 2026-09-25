@@ -62,6 +62,7 @@ import {
   requestQuestionRerun,
   runQuestionRerun,
 } from "./questions";
+import { deliverPossibleDuplicates } from "./verify-support";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -176,6 +177,9 @@ async function main() {
     const main = await createTeam("Question verification");
     const other = await createTeam("Question verification neighbour");
     const { teamId, userId } = main;
+    // QP-001 and QP-002 share a date and total; this proves reruns, not the
+    // delivery rules' possible-duplicate hold.
+    await deliverPossibleDuplicates(db, teamId);
 
     const endpoint = await createWebhookEndpoint(db, {
       teamId,

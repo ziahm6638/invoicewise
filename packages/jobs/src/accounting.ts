@@ -614,6 +614,7 @@ export async function retryAccountingPost(
       status: invoice.accountingPostStatus ?? "failed",
       providerId: invoice.accountingProviderId,
       revision: invoice.accountingRevision ?? invoice.processingRevision,
+      currentRevision: invoice.processingRevision,
       permitted: true,
     }),
   );

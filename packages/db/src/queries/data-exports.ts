@@ -3,6 +3,8 @@ import {
   type DataExportSummary,
   accountingConnections,
   dataExports,
+  deliveryDecisions,
+  deliveryPolicies,
   inboundEmails,
   inbox,
   inboxAccounts,
@@ -477,6 +479,8 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     receivedEmails,
     questionRunRows,
     questionAnswerRows,
+    deliveryPolicyRows,
+    deliveryDecisionRows,
   ] = await Promise.all([
     db
       .select({
@@ -735,6 +739,41 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
       .innerJoin(inbox, eq(inbox.id, questionAnswers.invoiceId))
       .where(and(eq(questionAnswers.teamId, teamId), exportedInvoice))
       .orderBy(asc(questionAnswers.createdAt), asc(questionAnswers.id)),
+    // Every version of the delivery rules.
+    db
+      .select({
+        id: deliveryPolicies.id,
+        version: deliveryPolicies.version,
+        settings: deliveryPolicies.settings,
+        createdBy: deliveryPolicies.createdBy,
+        createdAt: deliveryPolicies.createdAt,
+      })
+      .from(deliveryPolicies)
+      .where(eq(deliveryPolicies.teamId, teamId))
+      .orderBy(asc(deliveryPolicies.version)),
+    // The delivery decision of each revision of an exported invoice, with
+    // how a hold was resolved and by whom.
+    db
+      .select({
+        id: deliveryDecisions.id,
+        invoiceId: deliveryDecisions.invoiceId,
+        revision: deliveryDecisions.revision,
+        policyVersion: deliveryDecisions.policyVersion,
+        rulesVersion: deliveryDecisions.rulesVersion,
+        outcome: deliveryDecisions.outcome,
+        reasons: deliveryDecisions.reasons,
+        accounting: deliveryDecisions.accounting,
+        webhooks: deliveryDecisions.webhooks,
+        resolution: deliveryDecisions.resolution,
+        resolutionReason: deliveryDecisions.resolutionReason,
+        resolvedBy: deliveryDecisions.resolvedBy,
+        resolvedAt: deliveryDecisions.resolvedAt,
+        createdAt: deliveryDecisions.createdAt,
+      })
+      .from(deliveryDecisions)
+      .innerJoin(inbox, eq(inbox.id, deliveryDecisions.invoiceId))
+      .where(and(eq(deliveryDecisions.teamId, teamId), exportedInvoice))
+      .orderBy(asc(deliveryDecisions.createdAt), asc(deliveryDecisions.id)),
   ]);
 
   return {
@@ -755,6 +794,8 @@ export async function getWorkspaceExportData(db: Db, teamId: string) {
     inboundEmails: receivedEmails,
     questionRuns: questionRunRows,
     questionAnswers: questionAnswerRows,
+    deliveryPolicies: deliveryPolicyRows,
+    deliveryDecisions: deliveryDecisionRows,
   };
 }
 

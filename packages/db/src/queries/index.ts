@@ -12,6 +12,7 @@ export * from "./customers";
 export * from "./customer-analytics";
 export * from "./data-exports";
 export * from "./deletion-requests";
+export * from "./delivery-rules";
 export * from "./document-tag-assignments";
 export * from "./document-tag-embedings";
 export * from "./document-tags";

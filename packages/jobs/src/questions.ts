@@ -26,6 +26,7 @@ import {
   markQuestionRunRunning,
   recordProviderUsage,
   recordQuestionAnswer,
+  webhooksHeldFor,
 } from "@invoicewise/db/queries";
 import {
   type InvoiceExtraction,
@@ -504,9 +505,17 @@ export async function runQuestionRerun(
         invoiceRevision: invoice.processingRevision,
         judgment: answer,
       });
-      if (result.outcome === "recorded") {
-        // One event per invoice per run, with its own id: a new result, not
-        // a replay of the processing run's events.
+      // One event per invoice per run, with its own id: a new result, not
+      // a replay of the processing run's events. An invoice whose delivery
+      // the rules hold sends nothing until it is released.
+      if (
+        result.outcome === "recorded" &&
+        !(await webhooksHeldFor(executor, {
+          invoiceId: invoice.id,
+          teamId: input.teamId,
+          revision: invoice.processingRevision,
+        }))
+      ) {
         await scheduleWebhookEvent(executor, {
           id: logicalEventId(
             invoice.id,

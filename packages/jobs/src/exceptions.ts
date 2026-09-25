@@ -3,10 +3,12 @@ import {
   type InvoiceCorrectionOutcome,
   type TeamRole,
   canPostToAccounting,
+  canResolveHeldDeliveries,
   claimAdditionalPostingKey,
   clearJudgmentsRerun,
   enqueueWorkflowJob,
   getActiveAccountingConnection,
+  getDeliveryDecision,
   getPendingBillUpdate,
   getTeamById,
   insertInvoiceCorrection,
@@ -34,11 +36,8 @@ import {
 } from "@invoicewise/documents";
 import { InvoiceActionError } from "./action-error";
 import { workflowKey } from "./client";
-import {
-  enqueueBillUpdate,
-  scheduleAccountingPost,
-  scheduleInvoiceDeliveries,
-} from "./delivery";
+import { enqueueBillUpdate, scheduleInvoiceDeliveries } from "./delivery";
+import { decisionHeld } from "./delivery-rules";
 import { resolveWorkerIntakeBinding, verifyStoredIntake } from "./intake";
 import {
   loadJudgmentQuestions,
@@ -131,6 +130,8 @@ export type CorrectionAccounting =
   | "not_scheduled"
   /** Not posted; re-posting after a failure needs an admin. */
   | "admin_required"
+  /** Not posted: the delivery rules hold the corrected invoice. */
+  | "held"
   /** Posted: the bill was left as it is. */
   | "bill_kept"
   /** Posted: an in-place update of the same bill is queued. */
@@ -251,6 +252,22 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
       outcome = input.accountingOutcome;
     }
 
+    // A member's correction cannot clear a hold by itself: the corrected
+    // revision waits for an owner's or admin's release.
+    const previous = await getDeliveryDecision(executor, {
+      invoiceId: invoice.id,
+      teamId: input.teamId,
+      revision: invoice.processingRevision,
+    });
+    const approval =
+      !posted &&
+      !canResolveHeldDeliveries(input.teamRole) &&
+      previous?.outcome === "hold" &&
+      decisionHeld(previous) &&
+      previous.resolution === null
+        ? "A member corrected this invoice while its delivery was held; an owner or admin must release it."
+        : null;
+
     const identityChanged = changesPostingIdentity(applied.changes);
     // A post that may have reached the provider under its current key (it
     // failed in a way a retry could fix, or was cancelled mid-way) could
@@ -365,11 +382,15 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
       updateStatus: outcome === "update_bill" ? "queued" : null,
     });
 
+    // A failed, cancelled or held post: sending it again is a re-post,
+    // which needs an admin (docs/permissions.md).
+    const repost = invoice.accountingPostStatus !== null && !admin;
     const scheduled = await scheduleInvoiceDeliveries(executor, revised, {
-      accounting: false,
+      accounting: outcome === "not_posted" && !repost,
       data: {
         correction: { version, reason, changes: applied.changes },
       },
+      approval,
     });
     // The corrected values (a fixed PO number, say) are matched to
     // authorization sources again; a person's match decision is kept.
@@ -378,6 +399,7 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
       invoiceId: invoice.id,
       revision: revised.processingRevision,
     });
+    const allowed = scheduled.decision?.accounting;
 
     let accounting: CorrectionAccounting;
     if (outcome === "update_bill") {
@@ -389,19 +411,14 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
       accounting = "bill_update_queued";
     } else if (outcome === "keep_bill") {
       accounting = "bill_kept";
-    } else if (invoice.accountingPostStatus !== null && !admin) {
-      // A failed, cancelled or held post: sending it again is a re-post,
-      // which needs an admin (docs/permissions.md).
+    } else if (allowed === "held") {
+      accounting = "held";
+    } else if (scheduled.accounting) {
+      accounting = "post_queued";
+    } else if (repost && allowed === "not_scheduled") {
       accounting = "admin_required";
     } else {
-      const job = await scheduleAccountingPost(executor, {
-        invoiceId: invoice.id,
-        teamId: input.teamId,
-        revision: revised.processingRevision,
-        status: invoice.accountingPostStatus,
-        providerId: null,
-      });
-      accounting = job ? "post_queued" : "not_scheduled";
+      accounting = "not_scheduled";
     }
 
     const before = invoice.extraction as Partial<InvoiceExtraction>;
@@ -485,7 +502,9 @@ type RerunStorage = {
  * extraction and commits them as the next revision (with its webhook
  * deliveries) only if the invoice is still at the revision the rerun was
  * requested for; a rerun overtaken by a re-extraction or a correction is
- * dropped. Its answers never change the bill, so no accounting is scheduled.
+ * dropped. Its answers never change the bill, so no accounting is scheduled,
+ * except the post the delivery rules held for the previous revision when the
+ * new answers let the invoice through.
  */
 export async function rerunInvoiceJudgments(
   db: Database,
@@ -571,6 +590,22 @@ export async function rerunInvoiceJudgments(
     ) {
       return superseded(executor);
     }
+    // New answers may clear a hold (a required question now answered): the
+    // bill that was held is then posted. Otherwise a rerun never posts. A
+    // hold awaiting an admin's approval is carried over: only a release
+    // clears it.
+    const previous = await getDeliveryDecision(executor, {
+      invoiceId: input.invoiceId,
+      teamId: input.teamId,
+      revision: input.revision,
+    });
+    const unresolved = previous?.resolution === null;
+    const accountingWasHeld = unresolved && previous?.accounting === "held";
+    const awaitingApproval = unresolved
+      ? (previous?.reasons as { code?: unknown; message?: unknown }[]).find(
+          (held) => held.code === "awaiting_approval",
+        )
+      : undefined;
     const revised = await reviseInvoice(executor, {
       id: input.invoiceId,
       teamId: input.teamId,
@@ -584,8 +619,9 @@ export async function rerunInvoiceJudgments(
     });
     if (!revised) return superseded(executor);
     const scheduled = await scheduleInvoiceDeliveries(executor, revised, {
-      accounting: false,
+      accounting: accountingWasHeld,
       data: { judgmentsRerun: true },
+      approval: awaitingApproval ? String(awaitingApproval.message) : null,
     });
     return {
       invoiceId: input.invoiceId,

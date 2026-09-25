@@ -209,7 +209,14 @@
       "idx": 29,
       "version": "7",
       "when": 1790510000000,
-      "tag": "0029_bank_payments",
+      "tag": "0029_delivery_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790520000000,
+      "tag": "0030_bank_payments",
       "breakpoints": true
     }
   ]

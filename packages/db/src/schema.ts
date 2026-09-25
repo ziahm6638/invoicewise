@@ -3650,6 +3650,117 @@ export const invoiceCorrections = pgTable(
   ],
 );
 
+/**
+ * A workspace's delivery rules (docs/delivery.md#delivery-rules). Each change
+ * is a new version; earlier versions are never changed, so a decision can
+ * always be explained by the version it was made under. A workspace with no
+ * row uses the built-in defaults (version 0).
+ */
+export const deliveryPolicies = pgTable(
+  "delivery_policies",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    version: integer("version").notNull(),
+    // `DeliveryPolicy` from @invoicewise/documents, as normalised on save.
+    settings: jsonb("settings").$type<Record<string, unknown>>().notNull(),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("delivery_policies_team_version_key").on(
+      table.teamId,
+      table.version,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "delivery_policies_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.createdBy],
+      foreignColumns: [users.id],
+      name: "delivery_policies_created_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+/**
+ * The delivery decision for one invoice revision: the policy version and
+ * rules it was made under, the reasons it was held, what each destination
+ * was told, and how a hold was resolved and by whom. One per revision, made
+ * in the transaction that schedules the revision's deliveries.
+ */
+export const deliveryDecisions = pgTable(
+  "delivery_decisions",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    invoiceId: uuid("invoice_id").notNull(),
+    revision: integer("revision").notNull(),
+    // Null for the built-in defaults (policy version 0).
+    policyId: uuid("policy_id"),
+    policyVersion: integer("policy_version").notNull(),
+    // The policy as it was applied, and the evaluator's rules version.
+    policy: jsonb("policy").$type<Record<string, unknown>>().notNull(),
+    rulesVersion: integer("rules_version").notNull(),
+    outcome: text("outcome", { enum: ["deliver", "hold"] }).notNull(),
+    reasons: jsonb("reasons").$type<Record<string, unknown>[]>().notNull(),
+    // What the decision meant for each destination.
+    accounting: text("accounting", {
+      enum: [
+        "deliver",
+        "held",
+        "off",
+        "not_connected",
+        "not_applicable",
+        "already_posted",
+        "not_scheduled",
+      ],
+    }).notNull(),
+    webhooks: text("webhooks", { enum: ["deliver", "held"] }).notNull(),
+    resolution: text("resolution", { enum: ["released", "dismissed"] }),
+    resolutionReason: text("resolution_reason"),
+    resolvedBy: uuid("resolved_by"),
+    resolvedAt: timestamp("resolved_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("delivery_decisions_invoice_revision_key").on(
+      table.invoiceId,
+      table.revision,
+    ),
+    index("delivery_decisions_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "delivery_decisions_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [inbox.id],
+      name: "delivery_decisions_invoice_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.policyId],
+      foreignColumns: [deliveryPolicies.id],
+      name: "delivery_decisions_policy_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.resolvedBy],
+      foreignColumns: [users.id],
+      name: "delivery_decisions_resolved_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
 export const webhookEndpoints = pgTable(
   "webhook_endpoints",
   {

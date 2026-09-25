@@ -1762,6 +1762,151 @@ suite("workspace permissions over real HTTP", () => {
     expect(await postStatus(memberRestInvoice)).toBe("queued");
   });
 
+  test("delivery rules: members read, owners and admins change and release, other workspaces see nothing", async () => {
+    const owner = await createUser("rules-owner");
+    const member = await createUser("rules-member");
+    const outsider = await createUser("rules-outsider");
+
+    const teamResult = await trpc(
+      owner.cookie,
+      "team.create",
+      { name: "Rules Team", baseCurrency: "GBP", switchTeam: true },
+      "mutation",
+    );
+    const teamId = teamResult.data as string;
+    created.teamIds.push(teamId);
+    await joinTeam(owner, member, "member");
+    expect((await switchTeam(member.cookie, teamId)).error).toBeNull();
+
+    const put = (path: string, body: unknown, cookie: string) =>
+      fetch(`${BASE}${path}`, {
+        method: "PUT",
+        redirect: "manual",
+        headers: { "content-type": "application/json", origin: BASE, cookie },
+        body: JSON.stringify(body),
+      });
+
+    // Every member can inspect the rules; the defaults are version 0.
+    const read = await get("/delivery-policy", { cookie: member.cookie });
+    expect(read.status).toBe(200);
+    const rules = (await read.json()) as {
+      version: number;
+      policy: Record<string, unknown>;
+      alwaysHeld: string[];
+    };
+    expect(rules.version).toBe(0);
+    expect(rules.alwaysHeld).toContain("duplicate");
+
+    // Only an owner or admin changes them, on either surface.
+    const change = {
+      expectedVersion: 0,
+      policy: {
+        ...rules.policy,
+        rules: {
+          ...(rules.policy.rules as Record<string, string>),
+          bank_details_changed: "deliver",
+        },
+      },
+    };
+    expect((await put("/delivery-policy", change, member.cookie)).status).toBe(
+      403,
+    );
+    const memberTrpc = await trpc(
+      member.cookie,
+      "deliveryRules.update",
+      change,
+      "mutation",
+    );
+    expect(memberTrpc.status).toBe(403);
+    const locked = await put(
+      "/delivery-policy",
+      {
+        ...change,
+        policy: {
+          ...change.policy,
+          rules: { ...change.policy.rules, duplicate: "deliver" },
+        },
+      },
+      owner.cookie,
+    );
+    expect(locked.status).toBe(400);
+    const saved = await put("/delivery-policy", change, owner.cookie);
+    expect(saved.status).toBe(200);
+    expect(((await saved.json()) as { version: number }).version).toBe(1);
+    expect((await put("/delivery-policy", change, owner.cookie)).status).toBe(
+      409,
+    );
+
+    // A held invoice: a member cannot release it, another workspace cannot
+    // see it, and a release names the revision it was made on.
+    const [invoice] = await primaryDb
+      .insert(schema.inbox)
+      .values({
+        teamId,
+        displayName: "held.pdf",
+        fileName: "held.pdf",
+        contentType: "application/pdf",
+        size: 42,
+        status: "pending",
+        processingRevision: 1,
+        extraction: { invoiceNumber: "HELD-1" },
+      })
+      .returning({ id: schema.inbox.id });
+    await primaryDb.insert(schema.deliveryDecisions).values({
+      teamId,
+      invoiceId: invoice!.id,
+      revision: 1,
+      policyVersion: 0,
+      policy: rules.policy,
+      rulesVersion: 1,
+      outcome: "hold",
+      reasons: [
+        {
+          code: "bank_details_changed",
+          rule: "bank_details_changed",
+          message: "The bank account ends 4321.",
+          locked: false,
+        },
+      ],
+      accounting: "held",
+      webhooks: "held",
+    });
+    const release = (revision: number, cookie: string) =>
+      post(
+        `/invoices/${invoice!.id}/delivery/release`,
+        { revision, reason: "Confirmed with the supplier by phone" },
+        cookie,
+      );
+    expect((await release(1, member.cookie)).status).toBe(403);
+
+    const outsiderTeam = await trpc(
+      outsider.cookie,
+      "team.create",
+      { name: "Outsider Rules Team", baseCurrency: "GBP", switchTeam: true },
+      "mutation",
+    );
+    created.teamIds.push(outsiderTeam.data as string);
+    expect((await release(1, outsider.cookie)).status).toBe(404);
+
+    expect((await release(0, owner.cookie)).status).toBe(409);
+    const released = await release(1, owner.cookie);
+    expect(released.status).toBe(200);
+    expect((await release(1, owner.cookie)).status).toBe(409);
+    const delivery = await trpc(member.cookie, "inbox.delivery", {
+      id: invoice!.id,
+    });
+    expect(
+      (
+        delivery.data as {
+          decision: { resolution: string; resolutionReason: string };
+        }
+      ).decision,
+    ).toMatchObject({
+      resolution: "released",
+      resolutionReason: "Confirmed with the supplier by phone",
+    });
+  });
+
   test("authorization sources: scoped API keys, admin-only writes, versions and workspace isolation", async () => {
     const owner = await createUser("sources-owner");
     const member = await createUser("sources-member");

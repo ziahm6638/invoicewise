@@ -20,6 +20,7 @@ import {
 import { scheduleAccountingPost } from "./delivery";
 import { saveProcessedDocument } from "./process-document";
 import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
+import { deliverPossibleDuplicates } from "./verify-support";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -227,6 +228,9 @@ async function main() {
     if (!team) throw new Error("Unable to create verification team");
     teamId = team.id;
     workspaceId = team.id;
+    // This proves the accounting job's own guards against copies that
+    // reached it; the delivery rules have their own proof.
+    await deliverPossibleDuplicates(database.db, teamId);
 
     const session = await createAccountingConnectSession({
       teamId,
@@ -326,7 +330,9 @@ async function main() {
         judgments: [],
       });
       if (!completion?.scheduled.accounting) {
-        throw new Error(`Accounting post for ${invoiceNumber} was not queued`);
+        throw new Error(
+          `Accounting post for ${invoiceNumber} was not queued: ${JSON.stringify(completion?.scheduled.decision?.reasons)}`,
+        );
       }
     };
     const callsFor = (invoiceNumber: string) =>

@@ -273,6 +273,8 @@ describe("export records", () => {
         questions: [],
         questionRuns: [],
         questionAnswers: [],
+        deliveryPolicies: [],
+        deliveryDecisions: [],
         members: [],
         mailboxes: [],
         accounting: [],

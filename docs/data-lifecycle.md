@@ -98,6 +98,12 @@ What each row means precisely:
   timestamps, never a name, email address or provider reference. They are the
   operator audit trail (after a restore, the list of subjects to re-delete) and
   are kept; no retention job removes them.
+- **Delivery rules and decisions.** `delivery_policies` versions and each
+  invoice revision's `delivery_decisions` row (reasons, release or dismissal
+  and its reason) are the audit trail of what was sent automatically and why
+  anything was held. They hold no bank details beyond the masked ending the
+  supplier checks already show, are kept for the invoice's life, and go with
+  the invoice or the workspace; no retention job removes them.
 
 ### The retention job
 
@@ -194,6 +200,8 @@ named `invoicewise-export-<date>-<id>.zip`:
 | `questions.json` | the workspace's questions, every version, with a number question's unit and range |
 | `question-runs.json` | every question rerun: the revision, the invoices chosen, who asked, status and counts |
 | `question-answers.json` | every answer a rerun recorded on an exported invoice, with the answer it replaced |
+| `delivery-policies.json` | every version of the workspace's delivery rules, with who saved it and when |
+| `delivery-decisions.json` | the delivery decision of each revision of an exported invoice: policy and rules version, outcome, reasons, what each destination was told, and a release or dismissal with who made it, when and why |
 | `inbound-emails.json` | every message received at the workspace address: receipt time, recipient address, header and envelope sender and subject (until they expire), outcome and note, delivery count, attachment outcomes and the ids of the invoices it became (`invoiceIds`); never the MIME source |
 | `audit.json` | invoice received, posted to accounting and corrected, supplier corrections, webhook deliveries, workflow runs and export requests, in time order |
 | `workspace.json` | the workspace, its members and roles, mailboxes, accounting connections and webhook endpoints |
