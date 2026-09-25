@@ -93,6 +93,7 @@ import {
   type DeliverWebhookPayload,
   type InitialInboxSetupPayload,
   type InviteTeamMembersPayload,
+  type MatchInvoicePayload,
   type OnboardTeamPayload,
   type PostAccountingDraftPayload,
   type ProcessAttachmentPayload,
@@ -104,6 +105,7 @@ import {
   type UpdateAccountingBillPayload,
   WorkflowRequest,
 } from "./schema";
+import { matchInvoice } from "./source-matching";
 import {
   WebhookDeliveryRepository,
   WebhookTransport,
@@ -1204,6 +1206,19 @@ export const WorkflowHandlerLive = Layer.effect(
     const applyRetention = makeApplyRetention(db, storage, retentionPolicy);
     const rerunJudgments = makeRerunJudgments(db, storage);
     const webhookRepository = makeWebhookDeliveryRepository(db);
+    const matchInvoiceJob = (job: WorkflowJob, payload: MatchInvoicePayload) =>
+      Effect.gen(function* () {
+        yield* ensureTeam(job, payload.teamId);
+        return yield* attempt(
+          () =>
+            matchInvoice(db, {
+              teamId: payload.teamId,
+              invoiceId: payload.invoiceId,
+              finalAttempt: job.attempts >= job.maxAttempts,
+            }),
+          "Unable to match invoice to authorization sources",
+        );
+      });
     const postAccountingDraftJob = (
       job: WorkflowJob,
       payload: PostAccountingDraftPayload,
@@ -1321,6 +1336,8 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* buildDataExportJob(job, request.payload);
             case "apply-retention":
               return yield* applyRetention(job, request.payload);
+            case "match-invoice":
+              return yield* matchInvoiceJob(job, request.payload);
           }
         }) as Effect.Effect<Record<string, unknown>, WorkflowExecutionError>,
     };

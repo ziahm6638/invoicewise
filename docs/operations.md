@@ -68,7 +68,7 @@ waits, it never grows memory or spend without limit.
 | Upload size and shape | 5 MB, 50 pages, 25 MP images | [document-intake.md#limits](document-intake.md#limits) |
 | Queued document processing | 200 per workspace, 1000 in total; beyond that intake answers `429 queue_full` with `Retry-After` | `INTAKE_MAX_PENDING_PER_WORKSPACE`, `INTAKE_MAX_PENDING_TOTAL` |
 | Authenticated API requests | 100 per user per 10 min | `apps/api/src/rest/middleware` |
-| TypeSafe calls | 2000 per UTC day in production, 300 in staging; when spent, document processing and question reruns stay queued until 00:00 UTC while every other workflow runs, and question previews and new reruns are refused | `TYPESAFE_DAILY_CALL_LIMIT` |
+| TypeSafe calls | 2000 per UTC day in production, 300 in staging; when spent, document processing, question reruns and source matching stay queued until 00:00 UTC while every other workflow runs, and question previews and new reruns are refused | `TYPESAFE_DAILY_CALL_LIMIT` |
 | Question previews and reruns | 5 invoices per preview (45 s), 25 per rerun, one rerun per question at a time, 20 enabled custom questions per workspace | [document-intake.md#questions](document-intake.md#questions) |
 | Infrastructure cost | £0 above the existing hosts, Cloudflare free plan and Purelymail account | operator authorisation for anything more |
 

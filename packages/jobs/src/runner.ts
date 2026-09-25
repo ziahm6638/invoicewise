@@ -418,6 +418,7 @@ export const PROVIDER_BUDGETED_WORKFLOWS = [
   "process-attachment",
   "rerun-judgments",
   "rerun-question",
+  "match-invoice",
 ] as const;
 
 let providerBudgetExhausted = false;

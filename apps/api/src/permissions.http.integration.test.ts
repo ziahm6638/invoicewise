@@ -1962,5 +1962,29 @@ suite("workspace permissions over real HTTP", () => {
         }
       ).data,
     ).toEqual([]);
+
+    // The invoices matched to a source are invoice data: they need
+    // `inbox.read` as well, and stay within the workspace.
+    expect(
+      (await get(`/authorization-sources/${poId}/invoices`, readOnly)).status,
+    ).toBe(403);
+    const sourcesAndInbox = await key(owner.cookie, [
+      "sources.read",
+      "inbox.read",
+    ]);
+    const matched = await get(
+      `/authorization-sources/${poId}/invoices`,
+      sourcesAndInbox,
+    );
+    expect(matched.status).toBe(200);
+    expect(((await matched.json()) as { data: unknown[] }).data).toEqual([]);
+    const outsiderReader = await key(outsider.cookie, [
+      "sources.read",
+      "inbox.read",
+    ]);
+    expect(
+      (await get(`/authorization-sources/${poId}/invoices`, outsiderReader))
+        .status,
+    ).toBe(404);
   });
 });

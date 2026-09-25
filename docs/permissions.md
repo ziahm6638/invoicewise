@@ -20,6 +20,8 @@ expected to reach the same decision for the same actor.
 | Correct supplier identity (reassign an invoice, merge suppliers, undo) | yes | yes | no |
 | Read authorization sources (jobs, purchase orders, contracts), their versions and documents | yes | yes | yes |
 | Manage authorization sources: create, import, amend, close, cancel, link a supplier, attach documents ([authorization sources](authorization-sources.md)) | yes | yes | no |
+| Read an invoice's match to authorization sources ([matching](authorization-matching.md)) | yes | yes | yes |
+| Confirm, correct or unlink an invoice's match to authorization sources | yes | yes | no |
 | Manage integrations: API keys, OAuth apps, accounting, mailboxes, webhooks (endpoints, secret rotation, test events, per-endpoint redelivery), replacing the workspace's receiving address | yes | yes | no |
 | Manage billing and subscription | yes | no | no |
 | Export all workspace data ([data lifecycle](data-lifecycle.md)) | yes | no | no |
@@ -54,7 +56,7 @@ database on every request (`apps/api/src/trpc/middleware/team-permission.ts`).
 `adminProcedure` and `ownerProcedure` in `apps/api/src/trpc/init.ts` gate the
 privileged routers: team settings, members, invitations, questions, API keys,
 OAuth applications, accounting and mailbox connections, and supplier
-corrections and authorization-source writes (admin) and billing (owner). `workspaceProcedure` additionally requires an active workspace, so a
+corrections, authorization-source writes and match decisions (admin) and billing (owner). `workspaceProcedure` additionally requires an active workspace, so a
 session with none cannot reach workspace-scoped handlers.
 
 **Stale active workspace.** A browser session whose active-workspace pointer

@@ -30,6 +30,7 @@ import { InboxStatus } from "./inbox-status";
 import { InvoiceHistory } from "./invoice-history";
 import { InvoiceWorkflow } from "./invoice-workflow";
 import { JudgmentResults } from "./judgment-results";
+import { SourceMatch } from "./source-match";
 import { SupplierHistory } from "./supplier-history";
 import { ValidationResults, uncertainFields } from "./validation-results";
 
@@ -255,6 +256,17 @@ export function InboxDetails() {
                 <section className="mb-7">
                   <h3 className="text-sm font-semibold">Validation</h3>
                   <ValidationResults validation={data.validation} />
+                </section>
+
+                <section className="mb-7">
+                  <h3 className="text-sm font-semibold">Authorization</h3>
+                  <SourceMatch
+                    inboxId={data.id}
+                    lines={(extraction.lineItems ?? []).map((line) => ({
+                      description: line.description,
+                      total: line.total,
+                    }))}
+                  />
                 </section>
 
                 <section>

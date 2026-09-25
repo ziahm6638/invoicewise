@@ -13,6 +13,7 @@ import {
   type RetainedSourceText,
 } from "@invoicewise/documents";
 import { completeAndSchedule } from "./delivery";
+import { scheduleInvoiceMatch } from "./source-matching";
 import {
   loadJudgmentHistory,
   recordSupplierChecks,
@@ -185,6 +186,15 @@ export async function saveProcessedDocument(
         teamId: input.teamId,
         revision: completion.revision,
         ...sourceText,
+      });
+    }
+    // Matching to authorization sources follows in its own job (it may ask
+    // TypeSafe), queued with the revision so it cannot be lost.
+    if (completion) {
+      await scheduleInvoiceMatch(executor, {
+        teamId: input.teamId,
+        invoiceId: input.id,
+        revision: completion.revision,
       });
     }
     const supplierChecks = completion
