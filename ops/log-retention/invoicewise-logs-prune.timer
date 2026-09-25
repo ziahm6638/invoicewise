@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily prune of InvoiceWise container logs past retention
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -270,7 +270,26 @@ infisical run --env prod -- kamal accessory logs db
 
 Container logs rotate by size (`logging` in `config/deploy.yml`, 5 × 50 MB per
 container). The logging options apply to a container when it is next created,
-so the first deploy after a change picks them up.
+so the first deploy after a change picks them up. Size rotation does not
+remove logs by time, so `invoicewise-logs-prune.timer` (04:20 UTC) runs
+`/usr/local/sbin/invoicewise-logs-prune` on each Kamal host. It removes every
+entry of the project's container logs older than 30 days (the operating
+application-log retention in [data lifecycle](data-lifecycle.md#retention-schedule))
+from rotated files, deleting one that has nothing left, and trims a stopped
+container's current file. A running container's current file is not rewritten
+from outside: Docker caches the open file's size, and editing it makes
+`docker logs --tail` and `kamal app logs -f` read past the end; it is bounded
+by `max-size` and trimmed when the container stops or its file rotates.
+`INVOICEWISE_LOG_RETENTION_DAYS` on the host changes the window. The script and
+units live in `ops/log-retention/`; install or update them on both hosts with
+`ops/log-retention/install.sh`, which also runs one prune. A retention change
+in the repository takes effect on the host only once `install.sh` has run.
+
+```bash
+ops/log-retention/install.sh root@100.90.24.83    # production (hp-slice)
+ops/log-retention/install.sh root@31.97.116.107   # staging (hostinger)
+ssh root@100.90.24.83 'systemctl list-timers invoicewise-logs-prune.timer; journalctl -u invoicewise-logs-prune.service -n 20'
+```
 
 ## Tunnel and DNS
 
