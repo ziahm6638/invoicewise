@@ -45,7 +45,8 @@
     "./data-export": "./src/data-export.ts",
     "./retention": "./src/retention.ts",
     "./retention-policy": "./src/retention-policy.ts",
-    "./zip": "./src/zip.ts"
+    "./zip": "./src/zip.ts",
+    "./verify-support": "./src/verify-support.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "^0.91.2",

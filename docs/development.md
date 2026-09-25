@@ -414,6 +414,11 @@ disposable local stack:
   `ef798a99` (migrations through `0006`) with synthetic users, membership,
   invoice and queued-work rows, and an injected migration failure with the
   documented forward recovery;
+- the public API proof (`bun run verify:public-api` in `apps/api`): an API
+  process with a loopback TypeSafe stub, and the clean-room smoke check
+  ([API: smoke check](api.md#smoke-check)) driven by only a URL and a freshly
+  created key, plus tenant isolation, scopes, paging, formula-safe export and
+  key revocation checks;
 - the existing verifiers: `apps/api` delivery, `packages/jobs` workflows,
   accounting and handoff fault injection, supplier identity, authorization
   sources ([authorization sources](authorization-sources.md#proof)), invoice

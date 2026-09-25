@@ -191,7 +191,7 @@ A change is refused with a conflict when the decision it was made against
   status and amounts only, never bank transactions. Settings → Bank payments
   lists connections (consent, expiry, last sync and its errors) and recent
   transactions with what each counts for.
-- **REST and MCP.** `GET /invoices`, `GET /invoices/:id` and the inbox reads
+- **REST.** `GET /invoices`, `GET /invoices/:id` and the inbox reads
   return `paymentMatch`, beside and independent of `sourceMatch`: the current
   decision (result plus `id`, `sequence`, `status`, `paymentStatus`, `origin`,
   `action`, `currency`, `dueAmount`, `paidAmount`, `reason`, `decidedAt`), or

@@ -10,6 +10,7 @@ import {
 } from "@invoicewise/db/queries";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
 import { Config, Context, Effect, Layer, Redacted, Schema } from "effect";
+import { csvCell } from "./csv";
 
 const Transaction = Schema.Struct({
   id: Schema.String,
@@ -452,11 +453,6 @@ const withSourceDetails = <
   return paymentDetails === "full" || !("paymentMatch" in item)
     ? sourced
     : { ...sourced, paymentMatch: summarizePaymentMatch(item.paymentMatch) };
-};
-
-const csvCell = (value: unknown) => {
-  const text = value === null || value === undefined ? "" : String(value);
-  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 };
 
 export const invoicesToCsv = (rows: ExportRowsResult) => {

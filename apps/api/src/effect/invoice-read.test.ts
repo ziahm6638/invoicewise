@@ -5,6 +5,7 @@ import {
   InvoiceReadLayer,
   InvoiceRepository,
   InvoiceStorage,
+  invoicesToCsv,
 } from "./invoice-read";
 
 const invoice = {
@@ -418,6 +419,24 @@ describe("Effect invoice read HTTP slice", () => {
       accounting_ready: "false",
     });
     expect(row).toContain("but the gross total is 125.50.");
+  });
+
+  test("exports text a spreadsheet would run as a formula as plain text", () => {
+    const csv = invoicesToCsv([
+      {
+        ...invoice,
+        fileName: "@SUM(A1).pdf",
+        displayName: '=HYPERLINK("http://evil")',
+        amount: -12.5,
+        extraction: { supplierName: "+cmd" },
+        judgments: [],
+      },
+    ] as never);
+    const row = csv.split("\r\n")[1]!;
+    expect(row).toContain(`"'=HYPERLINK(""http://evil"")"`);
+    expect(row).toContain("'@SUM(A1).pdf");
+    expect(row).toContain("'+cmd");
+    expect(row).toContain(",-12.5,");
   });
 
   test("shows source-match details only to a credential with sources.read", async () => {
