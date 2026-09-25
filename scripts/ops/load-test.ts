@@ -4,8 +4,8 @@
  *
  *   LOAD_EMAIL=... LOAD_PASSWORD=... OPS_TOKEN=... \
  *     bun --no-env-file scripts/ops/load-test.ts \
- *       --app https://app.iw-staging.zzapp.uk \
- *       --api https://api.iw-staging.zzapp.uk \
+ *       --app https://iw-staging-app.zzapp.uk \
+ *       --api https://iw-staging-api.zzapp.uk \
  *       --documents 30 --concurrency 10
  *
  * 1. Sends hostile and oversized inputs through the real upload route and

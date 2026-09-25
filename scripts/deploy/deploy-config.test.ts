@@ -193,7 +193,7 @@ describe("staging destination", () => {
       const env = roleEnv(role, staging);
       expect(env.INVOICEWISE_ENVIRONMENT).toBe("staging");
       const cookieDomain = env.BETTER_AUTH_COOKIE_DOMAIN!.replace(/^\./, "");
-      expect(cookieDomain).toBe("iw-staging.zzapp.uk");
+      expect(cookieDomain).toBe("zzapp.uk");
       for (const host of productionProxyHosts) {
         expect(host === cookieDomain || host.endsWith(`.${cookieDomain}`)).toBe(
           false,
@@ -211,8 +211,8 @@ describe("staging destination", () => {
     expect(Object.values(staging.builder.args ?? {}).join(" ")).not.toContain(
       "invoicewise.uk",
     );
-    expect(staging.servers.web?.proxy.host).toBe("app.iw-staging.zzapp.uk");
-    expect(staging.servers.api?.proxy.host).toBe("api.iw-staging.zzapp.uk");
+    expect(staging.servers.web?.proxy.host).toBe("iw-staging-app.zzapp.uk");
+    expect(staging.servers.api?.proxy.host).toBe("iw-staging-api.zzapp.uk");
   });
 
   for (const role of ["web", "api"]) {

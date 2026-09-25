@@ -2,7 +2,7 @@
 
 InvoiceWise runs on `hp-slice`, deployed with Kamal 2 from `config/deploy.yml`.
 This is the operator runbook: what runs where, where secrets live, and how to
-deploy, check migrations and roll back. Staging (`app.iw-staging.zzapp.uk`) is
+deploy, check migrations and roll back. Staging (`iw-staging-app.zzapp.uk`) is
 the `staging` Kamal destination on hostinger; see [Staging](#staging). Service
 targets, capacity and spend ceilings, alerts and the drain/rollback model are
 in [operations.md](operations.md). The marketing site at `invoicewise.uk`
@@ -279,17 +279,18 @@ its own data: `config/deploy.staging.yml` is merged over `config/deploy.yml`
   Service `invoicewise-staging`: containers `invoicewise-staging-web-staging-<version>`
   and `…-api-staging-<version>`, accessories `invoicewise-staging-db`, `-redis`,
   `-nango-db` and `-nango`, all data under `/srv/invoicewise-staging`.
-- Domains: `app.iw-staging.zzapp.uk` (dashboard) and
-  `api.iw-staging.zzapp.uk` (API): proxied CNAMEs in the `zzapp.uk` zone to the remotely managed
+- Domains: `iw-staging-app.zzapp.uk` (dashboard) and
+  `iw-staging-api.zzapp.uk` (API): proxied CNAMEs in the `zzapp.uk` zone to the remotely managed
   Cloudflare Tunnel `invoicewise-staging` (`322d1f96-…`), whose ingress (set in
   Cloudflare, not in this repo) sends both to the host's kamal-proxy at
   `127.0.0.1:18090` with a 404 catch-all. Its connector runs as the
   `cloudflared` accessory (host network) with `CLOUDFLARE_TUNNEL_TOKEN` from
-  Infisical `staging`; TLS terminates at Cloudflare, as in production. Staging
-  cookies are scoped to `.iw-staging.zzapp.uk`, a domain production does not
-  share, so browsers never send a production session to staging or the
-  reverse; the preflight refuses a staging cookie domain that covers
-  `app.invoicewise.uk` or `api.invoicewise.uk`.
+  Infisical `staging`; TLS terminates at Cloudflare, as in production, on
+  the free `*.zzapp.uk` edge certificate (hence single-level hostnames: it does
+  not cover a deeper subdomain). Staging cookies are scoped to `.zzapp.uk`, a
+  domain production does not share, so browsers never send a production
+  session to staging or the reverse; the preflight refuses a staging cookie
+  domain that covers `app.invoicewise.uk` or `api.invoicewise.uk`.
 - Secrets: Infisical `staging`, all generated for staging (database, auth,
   signing, encryption, ops token, Nango) except the Purelymail sender password
   and the TypeSafe key, which are the same accounts as production. Staging's
@@ -321,7 +322,7 @@ Run on staging, never on production:
 ```bash
 # Load and hostile inputs (spends TypeSafe calls from the staging budget).
 LOAD_EMAIL=… LOAD_PASSWORD=… OPS_TOKEN=… bun --no-env-file scripts/ops/load-test.ts \
-  --app https://app.iw-staging.zzapp.uk --api https://api.iw-staging.zzapp.uk
+  --app https://iw-staging-app.zzapp.uk --api https://iw-staging-api.zzapp.uk
 
 # Worker interruption: SIGKILL the api container mid-extraction (no drain).
 # `docker kill` counts as a manual stop, so the container stays down until
