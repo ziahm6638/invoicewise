@@ -17,7 +17,7 @@ expected to reach the same decision for the same actor.
 | Grant the `owner` role | yes | no | no |
 | Manage custom questions | yes | yes | no |
 | Correct supplier identity (reassign an invoice, merge suppliers, undo) | yes | yes | no |
-| Manage integrations: API keys, OAuth apps, accounting, webhooks, mailboxes, replacing the workspace's receiving address | yes | yes | no |
+| Manage integrations: API keys, OAuth apps, accounting, mailboxes, webhooks (endpoints, secret rotation, test events, per-endpoint redelivery), replacing the workspace's receiving address | yes | yes | no |
 | Manage billing and subscription | yes | no | no |
 | Export all workspace data ([data lifecycle](data-lifecycle.md)) | yes | no | no |
 | Delete the workspace | yes | no | no |

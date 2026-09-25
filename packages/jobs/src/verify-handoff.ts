@@ -366,7 +366,7 @@ async function main() {
     };
     const main = await createTeam("Handoff verification");
     teamId = main.teamId;
-    const endpointA = await createWebhookEndpoint(db, {
+    const createdA = await createWebhookEndpoint(db, {
       teamId,
       userId: main.userId,
       url: `http://127.0.0.1:${receiver.port}/a`,
@@ -376,13 +376,17 @@ async function main() {
         "delivery.failed",
       ],
     });
-    const endpointB = await createWebhookEndpoint(db, {
+    const createdB = await createWebhookEndpoint(db, {
       teamId,
       userId: main.userId,
       url: `http://127.0.0.1:${receiver.port}/b`,
       events: ["invoice.processed"],
     });
-    if (!endpointA || !endpointB) throw new Error("Unable to create endpoints");
+    if (createdA.error || createdB.error) {
+      throw new Error("Unable to create endpoints");
+    }
+    const endpointA = createdA.endpoint;
+    const endpointB = createdB.endpoint;
     await upsertAccountingConnection(db, {
       teamId,
       provider: "xero",
@@ -841,13 +845,16 @@ async function main() {
     // A retry that fails for good again is a new failure event. Its
     // notification to endpoint A fails too, and a failed notification is
     // never itself announced (endpoint C would receive it).
-    const endpointC = await createWebhookEndpoint(db, {
+    const createdC = await createWebhookEndpoint(db, {
       teamId,
       userId: main.userId,
       url: `http://127.0.0.1:${receiver.port}/c`,
       events: ["delivery.failed"],
     });
-    if (!endpointC) throw new Error("Unable to create endpoint c");
+    if (createdC.error) {
+      throw new Error("Unable to create endpoint c");
+    }
+    const endpointC = createdC.endpoint;
     failing.add(`a:${partial}:delivery.failed`);
     const failingRetry = await retryInvoiceDelivery(db, {
       invoiceId: partial,

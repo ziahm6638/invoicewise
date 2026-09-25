@@ -9,6 +9,7 @@ import {
   deliverWebhook,
   isAllowedWebhookUrl,
   verifyWebhookSignature,
+  webhookSignature,
 } from "./webhooks";
 
 const event = {
@@ -246,6 +247,111 @@ describe("webhook delivery", () => {
     const outcome = await run(layer, transport);
     expect(outcome._tag).toBe("Left");
     expect(writes.attempts).toEqual([{ succeeded: false, retryable: false }]);
+  });
+});
+
+describe("secret rotation and payload versioning", () => {
+  const send = async (loaded: DeliveryRecord, status = 204) => {
+    const sent: Array<{ body: string; headers: Record<string, string> }> = [];
+    const { layer } = recordingRepository(loaded);
+    const transport = Layer.succeed(WebhookTransport, {
+      post: (_url, body, headers) =>
+        Effect.sync(() => {
+          sent.push({ body, headers });
+          return { status };
+        }),
+    });
+    const outcome = await run(layer, transport);
+    return { sent: sent[0]!, outcome };
+  };
+
+  test("during the overlap a delivery verifies with the new or the previous secret", async () => {
+    const { sent } = await send({
+      ...delivery,
+      endpointSecret: "whsec_new",
+      endpointPreviousSecret: "whsec_old",
+    });
+    const signature = sent.headers["invoicewise-signature"]!;
+    expect(signature.match(/v1=/g)).toHaveLength(2);
+    expect(verifyWebhookSignature("whsec_new", signature, sent.body)).toBe(
+      true,
+    );
+    expect(verifyWebhookSignature("whsec_old", signature, sent.body)).toBe(
+      true,
+    );
+    expect(verifyWebhookSignature("whsec_other", signature, sent.body)).toBe(
+      false,
+    );
+    // The signature covers the exact body: any change invalidates it.
+    expect(
+      verifyWebhookSignature("whsec_new", signature, `${sent.body} `),
+    ).toBe(false);
+  });
+
+  test("after the overlap only the current secret signs", async () => {
+    const { sent } = await send({
+      ...delivery,
+      endpointSecret: "whsec_new",
+      endpointPreviousSecret: null,
+    });
+    const signature = sent.headers["invoicewise-signature"]!;
+    expect(signature.match(/v1=/g)).toHaveLength(1);
+    expect(verifyWebhookSignature("whsec_old", signature, sent.body)).toBe(
+      false,
+    );
+  });
+
+  test("a signature outside the replay window is rejected", () => {
+    const body = JSON.stringify(event);
+    const old = Math.floor(Date.now() / 1000) - 301;
+    expect(
+      verifyWebhookSignature(
+        endpoint.secret,
+        webhookSignature(endpoint.secret, old, body),
+        body,
+      ),
+    ).toBe(false);
+    const now = Math.floor(Date.now() / 1000);
+    expect(
+      verifyWebhookSignature(
+        endpoint.secret,
+        webhookSignature(endpoint.secret, now, body),
+        body,
+      ),
+    ).toBe(true);
+  });
+
+  test("the body is the versioned envelope with event and revision identity", async () => {
+    const { sent } = await send({
+      ...delivery,
+      payload: { ...event, revision: 3 },
+    });
+    const body = JSON.parse(sent.body);
+    expect(Object.keys(body)).toEqual([
+      "id",
+      "type",
+      "version",
+      "createdAt",
+      "teamId",
+      "invoiceId",
+      "revision",
+      "data",
+    ]);
+    expect(body.version).toBe(1);
+    expect(body.id).toBe(event.id);
+    expect(body.revision).toBe(3);
+    expect(sent.headers["invoicewise-webhook-version"]).toBe("1");
+    expect(sent.headers["invoicewise-event-id"]).toBe(event.id);
+  });
+
+  test("a redirect is a failed attempt that says redirects are not followed", async () => {
+    const { outcome } = await send(delivery, 302);
+    expect(outcome._tag).toBe("Left");
+    if (outcome._tag === "Left") {
+      expect(outcome.left.reason).toBe(
+        "Webhook returned HTTP 302; redirects are not followed",
+      );
+    }
   });
 });
 

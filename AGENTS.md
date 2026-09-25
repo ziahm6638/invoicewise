@@ -61,6 +61,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Supplier identity:** each processed document resolves to a workspace `suppliers` row (explicit VAT/company number first; a name only when unique), and supplier-scoped, bounded history drives `inbox.supplier_checks` and the history-based judgments; corrections are audited, reversible `supplier_events`. Rules and outcomes are in `docs/document-intake.md#supplier-identity-and-history`; never compare an invoice with another supplier's or workspace's history
 - **Validation:** plain-code checks of every extraction (arithmetic with explicit tolerances, currency pairs, credit notes, duplicate identity) persist in `inbox.validation` and gate accounting delivery; rules and the reviewed fixture corpus (`packages/documents/src/test/corpus`, gated by `thresholds.json`) are in `docs/document-intake.md#validation`
 - **Integrations:** self-hosted Nango on hp-slice for Xero/QuickBooks (auth + proxy only, so bill adapters live in `packages/jobs`; see `docs/accounting-integrations.md`), Polar (billing), API/MCP/webhooks
+- **Outbound to customer URLs:** webhooks send only through the egress guard `packages/jobs/src/egress.ts` (resolve, refuse private/metadata addresses, connect to the pinned address, bounded); never `fetch` a customer-supplied URL. Management and semantics: `docs/delivery.md#webhooks`
 
 ## Commands
 
