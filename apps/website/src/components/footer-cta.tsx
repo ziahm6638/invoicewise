@@ -10,7 +10,7 @@ export function FooterCTA() {
         Invoices in. Structured data out.
       </span>
       <p className="text-[#878787] mt-6 max-w-[560px]">
-        Forward invoices to your mailbox (coming soon) and let InvoiceWise
+        Forward invoices to your InvoiceWise mailbox and let InvoiceWise
         extract, judge and deliver them. No manual entry, no templates, no
         re-typing.
       </p>

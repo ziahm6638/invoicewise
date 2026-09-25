@@ -63,10 +63,10 @@ export function SectionFour() {
 
       <div className="border border-border basis-1/3 dark:bg-[#121212] p-10 flex flex-col relative group">
         <h4 className="font-medium text-xl md:text-2xl mb-4">
-          Email-first ingestion (coming soon)
+          Email-first ingestion
         </h4>
         <ul className="list-decimal list-inside text-[#878787] text-sm space-y-2 leading-relaxed">
-          <li>Every workspace will get its own inbound address.</li>
+          <li>Every workspace gets its own inbound address.</li>
           <li>
             Suppliers send straight there, or you forward what already lands in
             your inbox.
@@ -80,7 +80,7 @@ export function SectionFour() {
         <div className="flex flex-col space-y-2 mb-6 mt-8">
           <div className="flex space-x-2 text-sm">
             <Check />
-            <span className="text-primary">Dedicated mailbox (coming)</span>
+            <span className="text-primary">Dedicated mailbox</span>
           </div>
           <div className="flex space-x-2 text-sm">
             <Check />
@@ -89,7 +89,7 @@ export function SectionFour() {
           <div className="flex space-x-2 text-sm">
             <Check />
             <span className="text-primary">
-              No upload step once your mailbox is live
+              No upload step: forward and it is read
             </span>
           </div>
         </div>

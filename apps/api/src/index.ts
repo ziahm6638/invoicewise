@@ -2,13 +2,15 @@ import { HttpApp, HttpServer } from "@effect/platform";
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
 import { trpcServer } from "@hono/trpc-server";
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { closeDatabase, db } from "@invoicewise/db/client";
+import { closeDatabase, db, primaryDb } from "@invoicewise/db/client";
+import { inboundEmailDomain } from "@invoicewise/jobs/inbound-email";
 import { WorkflowRuntimeLive, runWorkflows } from "@invoicewise/jobs/runner";
 import { Scalar } from "@scalar/hono-api-reference";
 import { Config, Effect, Logger } from "effect";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { invoiceHttp } from "./effect/invoice-http";
+import { handleInboundEmail } from "./inbound-email/http";
 import { registerHealthRoutes } from "./ops/route";
 import { routers } from "./rest/routers";
 import type { Context } from "./rest/types";
@@ -55,6 +57,15 @@ registerHealthRoutes(app, { db, checkDatabase: checkHealth });
 
 app.get("/storage/*", (c) => storageCapabilityResponse(c.req.raw));
 app.get("/exports/:id/download", (c) => exportDownloadResponse(c.req.raw));
+
+// Mail for the workspaces' dedicated addresses, signed by the Email Worker.
+app.post("/inbound/email", (c) =>
+  handleInboundEmail(c.req.raw, {
+    db: primaryDb,
+    secret: process.env.INBOUND_EMAIL_SECRET?.trim() || undefined,
+    domain: inboundEmailDomain(),
+  }),
+);
 
 app.doc("/openapi", {
   openapi: "3.1.0",

@@ -1,5 +1,6 @@
 import type { Database, PrimaryDatabase } from "@db/client";
 import {
+  inboundEmails,
   inbox,
   inboxAccounts,
   inboxEmbeddings,
@@ -167,6 +168,26 @@ export type GetInboxParams = {
     | null;
 };
 
+/**
+ * Provenance of a document received on the workspace's dedicated address:
+ * the message it was attached to. Null for uploads and synced mailboxes.
+ */
+const inboundEmailSource = {
+  id: inboundEmails.id,
+  messageId: inboundEmails.messageId,
+  from: inboundEmails.headerFrom,
+  envelopeFrom: inboundEmails.envelopeFrom,
+  recipient: inboundEmails.recipient,
+  subject: inboundEmails.subject,
+  receivedAt: inboundEmails.createdAt,
+};
+
+const inboundEmailJoin = () =>
+  and(
+    eq(inboundEmails.id, inbox.inboundEmailId),
+    eq(inboundEmails.teamId, inbox.teamId),
+  );
+
 export async function getInbox(db: Database, params: GetInboxParams) {
   const {
     teamId,
@@ -250,6 +271,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
         email: inboxAccounts.email,
         provider: inboxAccounts.provider,
       },
+      inboundEmail: inboundEmailSource,
       transaction: {
         id: transactions.id,
         amount: transactions.amount,
@@ -261,6 +283,7 @@ export async function getInbox(db: Database, params: GetInboxParams) {
     .from(inbox)
     .leftJoin(transactions, eq(inbox.transactionId, transactions.id))
     .leftJoin(inboxAccounts, eq(inbox.inboxAccountId, inboxAccounts.id))
+    .leftJoin(inboundEmails, inboundEmailJoin())
     .where(and(...whereConditions));
 
   // Apply sorting
@@ -336,6 +359,7 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
         email: inboxAccounts.email,
         provider: inboxAccounts.provider,
       },
+      inboundEmail: inboundEmailSource,
       transaction: {
         id: transactions.id,
         amount: transactions.amount,
@@ -354,6 +378,7 @@ export async function getInboxById(db: Database, params: GetInboxByIdParams) {
     .from(inbox)
     .leftJoin(transactions, eq(inbox.transactionId, transactions.id))
     .leftJoin(inboxAccounts, eq(inbox.inboxAccountId, inboxAccounts.id))
+    .leftJoin(inboundEmails, inboundEmailJoin())
     .leftJoin(
       transactionMatchSuggestions,
       and(
@@ -1410,6 +1435,7 @@ export type ReserveInboxIntakeParams = {
   referenceId?: string;
   website?: string;
   inboxAccountId?: string;
+  inboundEmailId?: string;
 };
 
 /**
@@ -1436,6 +1462,7 @@ export async function reserveInboxIntake(
       referenceId: params.referenceId,
       website: params.website,
       inboxAccountId: params.inboxAccountId,
+      inboundEmailId: params.inboundEmailId,
       status: "new",
     })
     .onConflictDoNothing()
@@ -2276,6 +2303,7 @@ export async function completeInboxProcessing(
       website: inbox.website,
       description: inbox.description,
       referenceId: inbox.referenceId,
+      inboundEmailId: inbox.inboundEmailId,
       size: inbox.size,
       taxAmount: inbox.taxAmount,
       taxRate: inbox.taxRate,

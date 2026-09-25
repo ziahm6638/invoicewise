@@ -19,6 +19,16 @@ const Transaction = Schema.Struct({
   date: Schema.String,
 });
 
+const InboundEmailSource = Schema.Struct({
+  id: Schema.String,
+  messageId: Schema.NullOr(Schema.String),
+  from: Schema.NullOr(Schema.String),
+  envelopeFrom: Schema.NullOr(Schema.String),
+  recipient: Schema.String,
+  subject: Schema.NullOr(Schema.String),
+  receivedAt: Schema.String,
+});
+
 export const InvoiceItem = Schema.Struct({
   id: Schema.String,
   fileName: Schema.String,
@@ -50,6 +60,11 @@ export const InvoiceItem = Schema.Struct({
   supplierChecks: Schema.optional(Schema.NullOr(Schema.Unknown)),
   /** Why extraction failed, when it did; null while processing or once processed. */
   processingError: Schema.optional(Schema.NullOr(Schema.String)),
+  /**
+   * The message this document arrived in on the workspace's dedicated
+   * address (Message-ID, sender, recipient, receipt time); null otherwise.
+   */
+  inboundEmail: Schema.optional(Schema.NullOr(InboundEmailSource)),
   transaction: Schema.NullOr(Transaction),
 });
 

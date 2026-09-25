@@ -17,7 +17,7 @@ expected to reach the same decision for the same actor.
 | Grant the `owner` role | yes | no | no |
 | Manage custom questions | yes | yes | no |
 | Correct supplier identity (reassign an invoice, merge suppliers, undo) | yes | yes | no |
-| Manage integrations: API keys, OAuth apps, accounting, webhooks, mailboxes | yes | yes | no |
+| Manage integrations: API keys, OAuth apps, accounting, webhooks, mailboxes, replacing the workspace's receiving address | yes | yes | no |
 | Manage billing and subscription | yes | no | no |
 | Export all workspace data ([data lifecycle](data-lifecycle.md)) | yes | no | no |
 | Delete the workspace | yes | no | no |
@@ -101,7 +101,8 @@ deliberate multi-workspace behaviour.
 
 **Profile reads.** `GET /users/me` and tRPC `user.me` return the account
 profile and a workspace summary only. Workspace credentials such as the
-inbound-mail address (`inboxId`) come from the workspace-scoped `team.current`.
+receiving address come from workspace-scoped procedures (`inboundEmail.get`,
+readable by every member; see [inbound email](inbound-email.md)).
 
 **Mailbox OAuth connect.** `inboxAccounts.connect` (admin) issues a random
 256-bit `state`, stores only its hash in `auth_verifications` bound to the

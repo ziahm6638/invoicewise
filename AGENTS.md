@@ -30,6 +30,7 @@ current, observed repository map is:
 |------|---------|
 | `apps/dashboard` | Next.js customer app: Better Auth sessions, inbox, intake upload, document viewer, settings |
 | `apps/api` | Hono/Effect HTTP API: REST, tRPC, MCP, OAuth, storage capability route, workflow runner |
+| `apps/inbound-email` | Cloudflare Email Worker for the per-workspace receiving addresses (`<local>@in.invoicewise.uk`); signs each message to `POST /inbound/email`, deployed with Wrangler, not Kamal (`docs/inbound-email.md`) |
 | `apps/website` | invoicewise.uk marketing site: the adopted Midday Next.js landing page with InvoiceWise copy, live-app screenshots and a PocketBase + Purelymail SMTP waitlist (`apps/website/.env-template`) |
 | `packages/db` | Drizzle schema and queries for the primary Postgres database, migrations, storage adapters |
 | `packages/jobs` | Postgres-backed Effect workflow queue plus document, delivery and accounting work |
@@ -55,7 +56,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Auth:** Better Auth (users, sessions, memberships, invitations, TOTP second factor, DB-backed rate limits) in the primary database; production boot policy in `apps/api/src/auth-policy.ts`, flows in `docs/development.md#account-security`
 - **Background jobs:** Postgres-backed Effect workflow queue (`packages/jobs`); processing completion and every destination's delivery intent commit in one transaction (`packages/jobs/src/delivery.ts`), see `docs/delivery.md#processing-to-delivery-handoff`
 - **Storage:** private local filesystem or S3-compatible (MinIO locally, R2 in production)
-- **Email:** transactional mail via Purelymail SMTP (nodemailer); **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)
+- **Email:** transactional mail via Purelymail SMTP (nodemailer); **dedicated addresses:** Cloudflare Email Routing on `in.invoicewise.uk` → Email Worker → signed API endpoint → `process-inbound-email` job → shared intake, with the ack/retry contract in `docs/inbound-email.md`; **mailbox ingestion:** Gmail/Outlook OAuth (from Midday)
 - **Extraction:** TypeSafe (text-only, selects among options, never generates): code mines candidates from laid-out text (PDF text layer, else tesseract OCR), TypeSafe picks; see `docs/document-intake.md#extraction`. Text PDF, scanned PDF, PNG and JPEG share one pipeline and record shape; HEIC is refused. The input matrix and limits are in `docs/document-intake.md#supported-inputs`
 - **Supplier identity:** each processed document resolves to a workspace `suppliers` row (explicit VAT/company number first; a name only when unique), and supplier-scoped, bounded history drives `inbox.supplier_checks` and the history-based judgments; corrections are audited, reversible `supplier_events`. Rules and outcomes are in `docs/document-intake.md#supplier-identity-and-history`; never compare an invoice with another supplier's or workspace's history
 - **Validation:** plain-code checks of every extraction (arithmetic with explicit tolerances, currency pairs, credit notes, duplicate identity) persist in `inbox.validation` and gate accounting delivery; rules and the reviewed fixture corpus (`packages/documents/src/test/corpus`, gated by `thresholds.json`) are in `docs/document-intake.md#validation`

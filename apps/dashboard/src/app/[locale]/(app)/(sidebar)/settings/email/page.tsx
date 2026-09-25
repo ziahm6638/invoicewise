@@ -8,6 +8,7 @@ export const metadata: Metadata = {
 };
 
 export default function EmailSettingsPage() {
+  prefetch(trpc.inboundEmail.get.queryOptions());
   prefetch(trpc.inboxAccounts.get.queryOptions());
 
   return (

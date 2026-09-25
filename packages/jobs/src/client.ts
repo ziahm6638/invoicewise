@@ -55,6 +55,8 @@ export const workflowKey = {
    */
   attachment: (teamId: string, inboxId: string, referenceId?: string) =>
     `${teamId}:${referenceId ?? inboxId}`,
+  /** One processing intent per received message. */
+  inboundEmail: (inboundEmailId: string) => inboundEmailId,
   inboxSetup: (accountId: string) => accountId,
   inboxSync: (accountId: string, occurrence: string) =>
     `${accountId}:${occurrence}`,

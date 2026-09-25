@@ -18,6 +18,7 @@
     ".": "./src/client.ts",
     "./intake": "./src/intake.ts",
     "./intake-failure": "./src/intake-failure.ts",
+    "./inbound-email": "./src/inbound-email.ts",
     "./runner": "./src/runner.ts",
     "./schema": "./src/schema.ts",
     "./accounting": "./src/accounting.ts",
@@ -40,6 +41,7 @@
     "@invoicewise/utils": "workspace:*",
     "effect": "^3.22.2",
     "nanoid": "^5.1.16",
+    "postal-mime": "^3.0.0",
     "resend": "^4.6.0",
     "sharp": "0.35.4"
   },

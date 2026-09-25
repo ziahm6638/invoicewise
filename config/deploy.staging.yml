@@ -21,6 +21,9 @@ servers:
         NANGO_PUBLIC_URL: https://iw-staging-nango.zzapp.uk
         # A small spend ceiling: staging only ever processes synthetic invoices.
         TYPESAFE_DAILY_CALL_LIMIT: 300
+        # No Cloudflare Email Routing for staging: its addresses are shown
+        # but not routable, so staging never receives real mail.
+        INBOUND_EMAIL_DOMAIN: iw-staging-in.zzapp.uk
     proxy:
       host: iw-staging-api.zzapp.uk
 
