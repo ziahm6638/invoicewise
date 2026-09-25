@@ -296,7 +296,7 @@ describe("invoice activity", () => {
       }),
       expect.objectContaining({
         title: "Held by the delivery rules: Changed bank details",
-        status: "pending",
+        status: "review",
         reason: expect.stringContaining("An owner or admin releases"),
         refs: { decisionId: "decision-2", revision: 2, policyVersion: 3 },
       }),
@@ -324,7 +324,7 @@ describe("invoice activity", () => {
       later.entries.find((entry) => entry.id === "decision:decision-5"),
     ).toMatchObject({
       title: "Held by the delivery rules: Invalid financial data",
-      status: "pending",
+      status: "review",
       reason:
         "Accounting: held · Webhooks: held · It cannot be released: correct or re-extract the invoice, or dismiss it",
     });

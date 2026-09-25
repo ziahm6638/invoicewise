@@ -242,7 +242,7 @@ export type InvoiceActivityEntry = {
     | "accounting"
     | "action";
   title: string;
-  status: "ok" | "pending" | "failed" | "refused" | "info";
+  status: "ok" | "pending" | "review" | "failed" | "refused" | "info";
   /** Why it failed or what it is waiting for, in plain words (redacted). */
   reason: string | null;
   actor: ActivityActor | null;
@@ -634,7 +634,7 @@ export function buildInvoiceActivity(
       title: held
         ? `Held by the delivery rules: ${[...new Set(decision.rules.map(ruleLabel))].join(", ") || "held"}`
         : "Passed the delivery rules",
-      status: superseded ? "info" : open ? "pending" : "ok",
+      status: superseded ? "info" : open ? "review" : "ok",
       reason: superseded
         ? `${destinations} · Superseded by revision ${invoice.processingRevision}`
         : open

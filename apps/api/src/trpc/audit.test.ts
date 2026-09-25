@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { AUDIT_ACTIONS } from "@invoicewise/jobs/activity";
 import { TRPCError } from "@trpc/server";
+import { Hono } from "hono";
 import { publicApiContract } from "../effect/public-api-http";
-import { REST_AUDIT_ROUTES, restOutcome } from "../rest/middleware/audit";
+import {
+  REST_AUDIT_ROUTES,
+  restOutcome,
+  withRestAuditTrail,
+} from "../rest/middleware/audit";
 import { routers } from "../rest/routers";
 import { TRPC_AUDIT, auditOutcomeForError } from "./audit";
 import { appRouter } from "./routers/_app";
@@ -89,5 +94,46 @@ describe("audit trail coverage", () => {
       "refused",
       "failed",
     ]);
+  });
+
+  test("a write whose audit record cannot start is not run, in each surface's error shape", async () => {
+    let ran = 0;
+    const unavailable = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("database unavailable");
+        },
+      },
+    );
+    const app = new Hono()
+      .use("*", async (c, next) => {
+        c.set("teamId" as never, "team-1" as never);
+        c.set("db" as never, unavailable as never);
+        await next();
+      })
+      .use("*", withRestAuditTrail)
+      .all("*", (c) => {
+        ran += 1;
+        return c.json({ ok: true });
+      });
+
+    const v1 = await app.request("/v1/invoices/inv-1/reextract", {
+      method: "POST",
+    });
+    expect(v1.status).toBe(500);
+    expect(await v1.json()).toEqual({
+      error: {
+        code: "internal_error",
+        message: "The action could not be recorded, so it was not run.",
+      },
+    });
+
+    const rest = await app.request("/webhooks", { method: "POST" });
+    expect(rest.status).toBe(500);
+    expect(await rest.json()).toEqual({
+      error: "The action could not be recorded, so it was not run.",
+    });
+    expect(ran).toBe(0);
   });
 });

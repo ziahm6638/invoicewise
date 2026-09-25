@@ -8,6 +8,7 @@ import {
 } from "@invoicewise/db/queries";
 import { AUDIT_ACTIONS, type AuditAction } from "@invoicewise/jobs/activity";
 import type { MiddlewareHandler } from "hono";
+import { v1Error } from "../v1-errors";
 
 /**
  * The audit trail for REST changes made with API keys, OAuth tokens or a
@@ -255,10 +256,10 @@ export const withRestAuditTrail: MiddlewareHandler = async (c, next) => {
       },
     });
   } catch {
-    return c.json(
-      { error: "The action could not be recorded, so it was not run." },
-      500,
-    );
+    const message = "The action could not be recorded, so it was not run.";
+    return path.startsWith("/v1/")
+      ? v1Error("internal_error", message, 500)
+      : c.json({ error: message }, 500);
   }
 
   await next();

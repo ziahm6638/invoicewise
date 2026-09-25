@@ -14,6 +14,7 @@ type Entry = NonNullable<RouterOutputs["inbox"]["activity"]>["entries"][number];
 const STATUS_DOT: Record<Entry["status"], string> = {
   ok: "bg-emerald-600 dark:bg-emerald-400",
   pending: "bg-sky-600 dark:bg-sky-400",
+  review: "bg-amber-600 dark:bg-amber-400",
   failed: "bg-destructive",
   refused: "bg-amber-600 dark:bg-amber-400",
   info: "bg-muted-foreground",
@@ -22,6 +23,7 @@ const STATUS_DOT: Record<Entry["status"], string> = {
 const STATUS_LABEL: Record<Entry["status"], string> = {
   ok: "Done",
   pending: "In progress",
+  review: "Needs review",
   failed: "Failed",
   refused: "Refused or cancelled",
   info: "Information",
