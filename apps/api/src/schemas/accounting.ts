@@ -19,6 +19,12 @@ export const accountingInvoiceParamSchema = z.object({
   id: z.string().uuid(),
 });
 
+export const accountingOrganisationSchema = z.object({
+  provider: accountingProviderSchema,
+  // A Xero tenant ID, from the organisations the connection reaches.
+  organisationId: z.string().trim().min(1).max(64),
+});
+
 export const accountingSettingsSchema = z.object({
   provider: accountingProviderSchema,
   expenseAccountId: z.string().trim().min(1).max(64).nullable().optional(),

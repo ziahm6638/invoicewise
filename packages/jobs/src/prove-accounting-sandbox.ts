@@ -3,8 +3,15 @@
  * (docs/accounting-integrations.md, "Sandbox proof"), with synthetic records
  * only. It forces a token refresh, then:
  *
- * - Xero: posts a draft bill with the synthetic invoice PDF attached and
- *   replays the same idempotency key to show Xero returns the original bill.
+ * - Xero (a Demo Company only): posts a draft bill whose create response is
+ *   lost in transit, retries it and gets the same bill, replays the raw
+ *   create under the same Idempotency-Key, sends the invoice again (found by
+ *   number, contact and InvoiceWise's key), uploads the PDF with a lost
+ *   response and retries the upload on its own, posts a draft credit note
+ *   twice, and counts what Xero holds: one record per reference, one
+ *   attachment each. XERO_PROOF_TENANT_ID picks the organisation when the
+ *   connection reaches several; XERO_PROOF_ACCOUNT_CODE and
+ *   XERO_PROOF_TAX_TYPE override the account and tax rate.
  * - QuickBooks: posts an open bill whose create response is lost in transit
  *   (the request reaches QuickBooks, the answer never comes back), retries it
  *   and gets the same bill, replays the raw create under the same
@@ -25,6 +32,8 @@ import {
   type DraftBill,
   attachProviderDocument,
   getQuickBooksSetupOptions,
+  getXeroSetupOptions,
+  listXeroOrganisations,
   postProviderBill,
   quickBooksRequestId,
 } from "./accounting-providers";
@@ -113,40 +122,234 @@ async function refreshToken(config: NangoConfig, connectionId: string) {
 
 async function proveXero(config: NangoConfig, connectionId: string) {
   const token = await refreshToken(config, connectionId);
-  const bill = syntheticBill(Date.now(), { currency: "GBP" });
-  const connection = { connectionId };
-  const posted = await postProviderBill(
+  const organisations = await listXeroOrganisations(config, connectionId);
+  const tenantId =
+    process.env.XERO_PROOF_TENANT_ID ??
+    (organisations.length === 1 ? organisations[0]!.id : undefined);
+  if (!tenantId) {
+    throw new Error(
+      `The connection reaches ${organisations.length} organisations; set XERO_PROOF_TENANT_ID to the Demo Company's`,
+    );
+  }
+  const setup = await getXeroSetupOptions(config, {
+    connectionId,
+    organisationId: tenantId,
+  });
+  // Synthetic records go only to Xero's resettable Demo Company.
+  if (!setup.organisation.demo) {
+    throw new Error(
+      `${setup.organisation.name ?? tenantId} is not a Xero Demo Company; the proof refuses to write to it`,
+    );
+  }
+  const account =
+    setup.accounts.find(
+      (candidate) => candidate.id === process.env.XERO_PROOF_ACCOUNT_CODE,
+    ) ??
+    setup.accounts.find((candidate) => candidate.id === "429") ??
+    setup.accounts[0];
+  if (!account) throw new Error("The organisation has no expense account");
+  const taxCode =
+    setup.taxCodes.find(
+      (candidate) => candidate.id === process.env.XERO_PROOF_TAX_TYPE,
+    ) ?? setup.taxCodes.find((candidate) => candidate.rate > 0);
+  if (!taxCode) throw new Error("The organisation has no purchase tax rate");
+  const connection = {
+    connectionId,
+    organisationId: tenantId,
+    settings: { expenseAccountId: account.id, taxCodeIds: [taxCode.id] },
+  };
+  const tax = Math.round(taxCode.rate * 100) / 100;
+  const stamp = Date.now();
+  const bill = syntheticBill(stamp, {
+    currency: setup.organisation.baseCurrency,
+    vatAmount: tax,
+    grossAmount: 100 + tax,
+    sourceUrl: "https://app.invoicewise.uk/inbox?inboxId=sandbox-proof",
+  });
+  const api = (method: "GET" | "POST", path: string, json?: unknown) =>
+    nangoProxy(config, connectionId, {
+      method,
+      path: `/api.xro/2.0${path}`,
+      headers: {
+        "Xero-Tenant-Id": tenantId,
+        ...(json ? { "Idempotency-Key": bill.idempotencyKey } : {}),
+      },
+      json,
+    }).then(asRecord);
+  const rows = (body: Record<string, unknown>, key: string) =>
+    Array.isArray(body[key]) ? body[key].map(asRecord) : [];
+
+  // 1. The create reaches Xero but its answer is lost.
+  loseNextResponse = /\/proxy\/api\.xro\/2\.0\/Invoices$/;
+  const lost = await postProviderBill(
     "xero",
     config,
     connection,
     bill,
-    await loadAttachment(),
+    null,
+  ).then(
+    () => "answered",
+    (error: Error) => error.message,
   );
-  const replayed = await postProviderBill(
+  // 2. The retry returns the bill Xero created instead of adding one.
+  const recovered = await postProviderBill(
     "xero",
     config,
     connection,
     bill,
     null,
   );
+  // 3. The raw create replayed under the same Idempotency-Key returns it.
+  const [replayed] = rows(
+    await api("POST", "/Invoices", {
+      Invoices: [{ Type: "ACCPAY", Status: "DRAFT", Contact: { Name: "-" } }],
+    }).catch((error: Error) => ({ Invoices: [{ error: error.message }] })),
+    "Invoices",
+  );
+  // 4. A repeated delivery (the invoice sent again) finds the bill by its
+  //    number, contact and InvoiceWise's key before creating anything.
+  const repeated = await postProviderBill(
+    "xero",
+    config,
+    connection,
+    bill,
+    null,
+  );
+  // 5. The upload reaches Xero but its answer is lost; retrying the
+  //    attachment on its own twice leaves one attachment.
+  const attachment = await loadAttachment();
+  loseNextResponse = /\/Invoices\/[^/]+\/Attachments\/[^/]+$/;
+  const lostUpload = await attachProviderDocument(
+    "xero",
+    config,
+    connection,
+    { providerId: recovered.providerId, entity: "bill" },
+    attachment,
+  ).then(
+    () => "answered",
+    (error: Error) => error.message,
+  );
+  for (let retry = 0; retry < 2; retry++) {
+    await attachProviderDocument(
+      "xero",
+      config,
+      connection,
+      { providerId: recovered.providerId, entity: "bill" },
+      attachment,
+    );
+  }
+  // 6. A credit note becomes a draft credit note, once.
+  const credit = syntheticBill(stamp, {
+    idempotencyKey: `invoicewise:sandbox-proof-credit-${stamp}`,
+    documentType: "credit_note",
+    invoiceNumber: `IW-CN-${stamp}`,
+    currency: setup.organisation.baseCurrency,
+    netAmount: 40,
+    vatAmount: Math.round(40 * taxCode.rate) / 100,
+    grossAmount: 40 + Math.round(40 * taxCode.rate) / 100,
+    lineItems: [
+      {
+        description: "Sandbox proof credit",
+        quantity: 1,
+        unitPrice: 40,
+        total: 40,
+      },
+    ],
+  });
+  const credited = await postProviderBill(
+    "xero",
+    config,
+    connection,
+    credit,
+    attachment,
+  );
+  const creditReplay = await postProviderBill(
+    "xero",
+    config,
+    connection,
+    credit,
+    null,
+  );
+
+  const live = (row: Record<string, unknown>) =>
+    row.Status !== "DELETED" && row.Status !== "VOIDED";
+  const bills = rows(
+    await api(
+      "GET",
+      `/Invoices?${new URLSearchParams({ where: `Type=="ACCPAY" AND InvoiceNumber=="${bill.invoiceNumber}"` })}`,
+    ),
+    "Invoices",
+  ).filter(live);
+  const credits = rows(
+    await api(
+      "GET",
+      `/CreditNotes?${new URLSearchParams({ where: `Type=="ACCPAYCREDIT" AND CreditNoteNumber=="${credit.invoiceNumber}"` })}`,
+    ),
+    "CreditNotes",
+  ).filter(live);
+  const billAttachments = rows(
+    await api("GET", `/Invoices/${recovered.providerId}/Attachments`),
+    "Attachments",
+  );
+  const creditAttachments = rows(
+    await api("GET", `/CreditNotes/${credited.providerId}/Attachments`),
+    "Attachments",
+  );
+  const [created] = bills;
   const result = {
     provider: "xero",
-    organisation: token.before.connectionConfig.tenant_id,
+    organisation: {
+      name: setup.organisation.name,
+      country: setup.organisation.countryCode,
+      baseCurrency: setup.organisation.baseCurrency,
+      demo: setup.organisation.demo,
+      tenant: `…${tenantId.slice(-4)}`,
+    },
+    account: account.name,
+    taxRate: `${taxCode.name} (${taxCode.id})`,
     tokenExpiresAt: token.tokenExpiresAt,
     tokenRefreshed: token.tokenRefreshed,
     bill: {
-      providerId: posted.providerId,
-      attached: posted.attached,
-      attachmentError: posted.attachmentError,
-      replayReturnedSameBill: replayed.providerId === posted.providerId,
+      number: bill.invoiceNumber,
+      firstAttempt: lost,
+      providerId: recovered.providerId,
+      status: created?.Status ?? null,
+      total: created?.Total ?? null,
+      url: providerBillUrl("xero", recovered.providerId),
+      idempotencyReplayId: replayed?.InvoiceID ?? replayed?.error ?? null,
+      repeatedDeliveryId: repeated.providerId,
+      uploadFirstAttempt: lostUpload,
+      billsWithThisNumber: bills.map((row) => String(row.InvoiceID)),
+      attachments: billAttachments.map((file) => String(file.FileName)),
+    },
+    creditNote: {
+      number: credit.invoiceNumber,
+      providerId: credited.providerId,
+      status: credits[0]?.Status ?? null,
+      replayReturnedSame: creditReplay.providerId === credited.providerId,
+      url: providerBillUrl("xero", credited.providerId, {
+        entity: "vendor_credit",
+      }),
+      creditsWithThisNumber: credits.length,
+      attachments: creditAttachments.length,
     },
   };
   return {
     result,
     ok:
       token.tokenRefreshed &&
-      posted.attached &&
-      result.bill.replayReturnedSameBill,
+      lost !== "answered" &&
+      bills.length === 1 &&
+      created?.InvoiceID === recovered.providerId &&
+      created.Status === "DRAFT" &&
+      repeated.providerId === recovered.providerId &&
+      lostUpload !== "answered" &&
+      billAttachments.length === 1 &&
+      credited.entity === "vendor_credit" &&
+      result.creditNote.replayReturnedSame &&
+      credits.length === 1 &&
+      credits[0]?.Status === "DRAFT" &&
+      creditAttachments.length === 1,
   };
 }
 

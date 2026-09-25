@@ -111,8 +111,7 @@ describe("validation corpus", () => {
     });
     expect(outcomes["credit-note"]).toMatchObject({
       creditsInvoice: "normal-invoice",
-      accountingReady: false,
-      blockers: ["credit_note_unsupported"],
+      accountingReady: true,
     });
     expect(outcomes["inconsistent-total"]).toMatchObject({
       status: "invalid",

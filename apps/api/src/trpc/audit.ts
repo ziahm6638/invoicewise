@@ -390,6 +390,13 @@ export const TRPC_AUDIT: Record<string, AuditSpec | null> = {
       autoPost: field(input, "autoPost") === true,
     }),
   },
+  "accounting.selectOrganisation": {
+    action: "accounting.organisation_select",
+    detail: (input) => ({
+      provider: str(field(input, "provider")),
+      organisationId: str(field(input, "organisationId")),
+    }),
+  },
   "inboxAccounts.connect": {
     action: "mailbox.connect",
     detail: (input) => ({ provider: str(field(input, "provider")) }),

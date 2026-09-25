@@ -472,12 +472,12 @@ failed VAT-number or IBAN check digits, a low-confidence selection below
 Uncertain values stay visible as uncertain in the dashboard.
 
 **Delivery policy.** `validation.accounting` says whether the invoice may be
-posted as a draft bill. The draft-bill contract (Xero and QuickBooks alike)
-requires `documentType` (invoice), supplier name, invoice number, invoice
-date, currency and gross total (`ACCOUNTING_REQUIRED_FIELDS`); every error is
-a blocker, and a credit note is `credit_note_unsupported` because a draft
-bill cannot represent a credit (a QuickBooks connection lifts only that
-blocker and posts the credit note as a vendor credit). The workspace's
+posted to accounting. The contract (Xero and QuickBooks alike) requires
+`documentType`, supplier name, invoice number, invoice date, currency and
+gross total (`ACCOUNTING_REQUIRED_FIELDS`); every error is a blocker. A
+credit note is posted too (a Xero draft credit note, a QuickBooks vendor
+credit); validations recorded before that may carry a
+`credit_note_unsupported` blocker, which the accounting job ignores. The workspace's
 [delivery rules](delivery.md#delivery-rules) hold an invoice with any error
 before a bill is scheduled, with the errors as its reasons. The accounting
 job checks again before calling the provider, so a copy that reached it
@@ -506,7 +506,7 @@ accuracy on the same corpus.
 | `normal-invoice` — 20% VAT, wrapped description, company number, payment reference | valid | ready |
 | `tax-inclusive-invoice` — prices and totals include VAT | valid, inclusive | ready |
 | `multi-rate-invoice` — 20%, 5% and 0% lines, VAT recomputed per rate | valid | ready |
-| `credit-note` — negative amounts, names `HLP-3101` | valid, linked to `normal-invoice` | not sent: credit note |
+| `credit-note` — negative amounts, names `HLP-3101` | valid, linked to `normal-invoice` | ready (as a credit note) |
 | `inconsistent-total` — gross £50 above net + VAT | invalid (`gross`) | not sent |
 | `no-vat-sole-trader` — no VAT number or VAT line | needs review (`tax_not_stated`) | ready |
 | `usd-invoice` — USD with sales tax, bare `$` amounts | valid | ready |

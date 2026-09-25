@@ -854,6 +854,17 @@ async function workflowAndStorageVerifiers() {
     timeoutMs: 10 * 60 * 1000,
   });
 
+  await v.runStep("verify:jobs-xero", {
+    command: "bun",
+    args: ["--no-env-file", "run", "verify:xero"],
+    cwd: ws(JOBS_DIR),
+    env: env({
+      DATABASE_PRIMARY_URL: databaseUrl(JOBS_DATABASE),
+      LOCAL_STORAGE_PATH: join(v.tmpDir, "jobs-storage"),
+    }),
+    timeoutMs: 10 * 60 * 1000,
+  });
+
   await v.runStep("verify:jobs-handoff", {
     command: "bun",
     args: ["--no-env-file", "run", "verify:handoff"],

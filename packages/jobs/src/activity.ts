@@ -139,6 +139,10 @@ export const AUDIT_ACTIONS = {
     category: "integration",
     label: "Changed accounting settings",
   },
+  "accounting.organisation_select": {
+    category: "integration",
+    label: "Chose the accounting organisation",
+  },
   "mailbox.connect": { category: "integration", label: "Connected a mailbox" },
   "mailbox.disconnect": {
     category: "integration",

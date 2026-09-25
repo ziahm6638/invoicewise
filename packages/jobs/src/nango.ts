@@ -169,7 +169,16 @@ export const nangoRequest = async (
   }
   const body = await parseBody(response);
   if (!response.ok) {
-    report(response.status === 429 ? "throttled" : "failed");
+    // Nango's own API answering that an integration or connection does not
+    // exist (a provider not set up, a connection already deleted) is an
+    // answer, not a provider failure, so it never trips the provider alert.
+    report(
+      response.status === 429
+        ? "throttled"
+        : response.status === 404 && !path.startsWith("/proxy")
+          ? "ok"
+          : "failed",
+    );
     throw new NangoRequestError(
       errorMessage(body, response.status),
       response.status,

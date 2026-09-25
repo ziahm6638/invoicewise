@@ -10,9 +10,10 @@ import {
 
 /**
  * Provider adapters that turn an extracted invoice into the provider's
- * non-payment document, through Nango's proxy: a Xero draft bill, or a
- * QuickBooks Online open bill or vendor credit mapped onto the company's own
- * vendors, expense account, tax codes and currency. See
+ * non-payment document, through Nango's proxy: a Xero draft bill or draft
+ * credit note, or a QuickBooks Online open bill or vendor credit, each mapped
+ * onto the organisation's own contacts or vendors, expense account, tax codes
+ * and currency. See
  * docs/accounting-integrations.md for what each provider receives.
  */
 export type DraftBill = {
@@ -29,6 +30,8 @@ export type DraftBill = {
   vatAmount: number | null;
   grossAmount: number | null;
   description: string | null;
+  /** The invoice's page in InvoiceWise, linked from the Xero bill. */
+  sourceUrl?: string | null;
   lineItems: {
     description: string | null;
     quantity: number | null;
@@ -43,7 +46,7 @@ export type BillAttachment = {
   data: ArrayBuffer;
 };
 
-/** What the provider record is: a bill, or (QuickBooks) a vendor credit. */
+/** What the provider record is: a bill, or a credit note (vendor credit). */
 export type ProviderEntity = "bill" | "vendor_credit";
 
 export type PostedBill = {
@@ -58,8 +61,9 @@ export type PostedBill = {
 
 /**
  * A workspace's choices for posting to its connected company, made in
- * Settings → Accounting (QuickBooks only): the expense account every line
- * posts to, and the purchase tax codes InvoiceWise may choose between.
+ * Settings → Accounting: the expense account every line posts to (Xero: its
+ * account code), and the purchase tax codes (Xero: tax types) InvoiceWise may
+ * choose between.
  */
 export type AccountingSettings = {
   expenseAccountId?: string | null;
@@ -69,7 +73,12 @@ export type AccountingSettings = {
 /** A reason the provider will never accept, however often it is retried. */
 export class BillRejectedError extends Error {}
 
-type Connection = { connectionId: string; settings?: AccountingSettings };
+type Connection = {
+  connectionId: string;
+  /** The organisation the workspace chose (Xero tenant, QuickBooks realm). */
+  organisationId?: string | null;
+  settings?: AccountingSettings;
+};
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
 
@@ -162,7 +171,103 @@ export const isRetryable = (error: unknown) =>
       ? error.retryable
       : true;
 
-const xeroTenant = async (config: NangoConfig, connection: Connection) => {
+// ---------------------------------------------------------------------------
+// Xero. A bill is an ACCPAY invoice and a credit note an ACCPAYCREDIT credit
+// note, both created in DRAFT: they await approval in Xero and are never
+// approved or paid by InvoiceWise. Every call names the organisation the
+// workspace chose (`Xero-Tenant-Id`), since one Xero authorisation can reach
+// several. Business idempotency is two-layered like QuickBooks': Xero replays
+// a repeated `Idempotency-Key`, and a create is preceded by a lookup of the
+// same number from the same contact that carries InvoiceWise's key (a bill's
+// `Url`, a credit note's history note), so a retry after Xero's replay window
+// still finds the record instead of adding another.
+
+const XERO_API = "/api.xro/2.0";
+
+const XERO_ENTITY = {
+  bill: {
+    collection: "Invoices",
+    idField: "InvoiceID",
+    numberField: "InvoiceNumber",
+    type: "ACCPAY",
+    label: "bill",
+  },
+  vendor_credit: {
+    collection: "CreditNotes",
+    idField: "CreditNoteID",
+    numberField: "CreditNoteNumber",
+    type: "ACCPAYCREDIT",
+    label: "credit note",
+  },
+} as const;
+
+/** Statuses of a record that still stands (not deleted or voided). */
+const XERO_LIVE_STATUSES = ["DRAFT", "SUBMITTED", "AUTHORISED", "PAID"];
+
+/** Where a bill's "Go to InvoiceWise" link points when no page is given. */
+const INVOICEWISE_APP_URL = "https://app.invoicewise.uk/inbox";
+
+const xeroEntityOf = (bill: DraftBill): ProviderEntity =>
+  bill.documentType === "credit_note" ? "vendor_credit" : "bill";
+
+/** Xero's `where` filter takes a double-quoted string literal. */
+const xeroLiteral = (value: string) =>
+  /["\\]/.test(value) ? null : `"${value}"`;
+
+/**
+ * The bill's `Url`: the invoice's page in InvoiceWise ("Go to InvoiceWise"
+ * in Xero), carrying the posting key that marks the bill as InvoiceWise's.
+ */
+const xeroSourceUrl = (bill: DraftBill) => {
+  const url = new URL(bill.sourceUrl ?? INVOICEWISE_APP_URL);
+  url.searchParams.set("posting", bill.idempotencyKey);
+  return url.toString();
+};
+
+const carriesKey = (url: unknown, key: string) => {
+  if (typeof url !== "string") return false;
+  try {
+    return new URL(url).searchParams.get("posting") === key;
+  } catch {
+    return false;
+  }
+};
+
+export type XeroOrganisationChoice = { id: string; name: string | null };
+
+/**
+ * The organisations one Xero authorisation reaches (Xero's own
+ * `/connections`, outside the accounting API), in the order Xero lists them.
+ */
+async function xeroTenants(
+  config: NangoConfig,
+  connectionId: string,
+): Promise<XeroOrganisationChoice[]> {
+  const body = await nangoProxy(config, connectionId, {
+    method: "GET",
+    path: "/connections",
+  });
+  return (Array.isArray(body) ? body : [])
+    .map(asRecord)
+    .filter(
+      (tenant) =>
+        typeof tenant.tenantId === "string" &&
+        tenant.tenantId !== "" &&
+        (tenant.tenantType === undefined ||
+          tenant.tenantType === "ORGANISATION"),
+    )
+    .map((tenant) => ({
+      id: String(tenant.tenantId),
+      name: typeof tenant.tenantName === "string" ? tenant.tenantName : null,
+    }));
+}
+
+/**
+ * The organisation a Xero connection posts to: the one the workspace chose
+ * (recorded on the connection), else the one Nango recorded at connect.
+ */
+async function xeroTenantId(config: NangoConfig, connection: Connection) {
+  if (connection.organisationId) return connection.organisationId;
   const { connectionConfig } = await getNangoConnection(
     config,
     connection.connectionId,
@@ -173,80 +278,435 @@ const xeroTenant = async (config: NangoConfig, connection: Connection) => {
       "The Xero connection has no organisation; reconnect Xero",
     );
   }
-  return { "Xero-Tenant-Id": tenantId };
+  return tenantId;
+}
+
+type XeroApi = ReturnType<typeof xeroApi>;
+
+function xeroApi(config: NangoConfig, connectionId: string, tenantId: string) {
+  const call = (
+    method: "GET" | "POST" | "PUT",
+    path: string,
+    options: {
+      params?: Record<string, string>;
+      idempotencyKey?: string;
+    } & Pick<Parameters<typeof nangoProxy>[2], "json" | "bytes"> = {},
+  ) => {
+    const query = options.params
+      ? `?${new URLSearchParams(options.params)}`
+      : "";
+    return nangoProxy(config, connectionId, {
+      method,
+      path: `${XERO_API}${path}${query}`,
+      headers: {
+        "Xero-Tenant-Id": tenantId,
+        ...(options.idempotencyKey
+          ? { "Idempotency-Key": options.idempotencyKey }
+          : {}),
+      },
+      json: options.json,
+      bytes: options.bytes,
+    }).then(asRecord);
+  };
+  const list = async (
+    path: string,
+    key: string,
+    params?: Record<string, string>,
+  ) => {
+    const rows = (await call("GET", path, { params }))[key];
+    return Array.isArray(rows) ? rows.map(asRecord) : [];
+  };
+  return { tenantId, call, list };
+}
+
+export type XeroOrganisation = {
+  id: string;
+  name: string | null;
+  countryCode: string | null;
+  baseCurrency: string | null;
+  demo: boolean;
 };
 
-/** The bill's content as Xero reads it, for a create and an update alike. */
-const xeroBillFields = (bill: DraftBill) => ({
-  Contact: { Name: bill.supplierName ?? "Unknown supplier" },
-  InvoiceNumber: bill.invoiceNumber ?? undefined,
-  Date: bill.invoiceDate ?? undefined,
-  DueDate: bill.dueDate ?? undefined,
-  CurrencyCode: bill.currency ?? undefined,
-  LineAmountTypes: "Exclusive",
-  LineItems: billLines(bill).map((line) => ({
-    Description: line.description,
-    Quantity: line.quantity,
-    UnitAmount: line.unitPrice,
-  })),
-});
+async function readXeroOrganisation(api: XeroApi): Promise<XeroOrganisation> {
+  const [organisation] = await api.list("/Organisation", "Organisations");
+  const text = (value: unknown) =>
+    typeof value === "string" && value ? value : null;
+  return {
+    id: api.tenantId,
+    name: text(organisation?.Name),
+    countryCode: text(organisation?.CountryCode),
+    baseCurrency: text(organisation?.BaseCurrency),
+    demo: organisation?.IsDemoCompany === true,
+  };
+}
 
-// Xero: an ACCPAY invoice in DRAFT is a bill awaiting review; it is neither
-// approved nor paid. Xero replays the original response for a repeated
-// Idempotency-Key, so an ambiguous timeout retried with the same key returns
-// the bill it already created.
-async function postXeroBill(
+/** Active tax rates that apply to purchases, with their effective rate (%). */
+async function xeroPurchaseTaxRates(api: XeroApi): Promise<TaxCode[]> {
+  return (await api.list("/TaxRates", "TaxRates"))
+    .filter(
+      (rate) =>
+        rate.Status === "ACTIVE" &&
+        rate.CanApplyToExpenses === true &&
+        typeof rate.TaxType === "string",
+    )
+    .map((rate) => ({
+      id: String(rate.TaxType),
+      name: String(rate.Name ?? rate.TaxType),
+      rate: Number(rate.EffectiveRate ?? rate.DisplayTaxRate ?? 0),
+    }));
+}
+
+/**
+ * What an admin chooses from before Xero posting can start: the
+ * organisations the authorisation reaches, the chosen organisation's active
+ * expense accounts (by code, which bill lines carry) and purchase tax rates,
+ * and the currencies it takes.
+ */
+export async function getXeroSetupOptions(
+  config: NangoConfig,
+  connection: Connection,
+) {
+  const tenantId = await xeroTenantId(config, connection);
+  const api = xeroApi(config, connection.connectionId, tenantId);
+  const [organisations, organisation, accounts, taxCodes, currencies] =
+    await Promise.all([
+      xeroTenants(config, connection.connectionId),
+      readXeroOrganisation(api),
+      api.list("/Accounts", "Accounts"),
+      xeroPurchaseTaxRates(api),
+      api.list("/Currencies", "Currencies"),
+    ]);
+  return {
+    organisation,
+    organisations,
+    currencies: currencies
+      .map((currency) => currency.Code)
+      .filter((code): code is string => typeof code === "string"),
+    accounts: accounts
+      .filter(
+        (account) =>
+          account.Status === "ACTIVE" &&
+          account.Class === "EXPENSE" &&
+          typeof account.Code === "string" &&
+          account.Code !== "",
+      )
+      .map((account) => ({
+        id: String(account.Code),
+        name: `${String(account.Code)} · ${String(account.Name ?? "")}`,
+        type: String(account.Type ?? ""),
+      })),
+    taxCodes,
+  };
+}
+
+/**
+ * The supplier's Xero contact, found by name (Xero names are unique, ignoring
+ * case) or created. A contact created by a concurrent post is found again; an
+ * archived one is refused with the fix.
+ */
+async function resolveXeroContact(api: XeroApi, name: string) {
+  const find = async () =>
+    (
+      await api.list("/Contacts", "Contacts", {
+        searchTerm: name,
+        includeArchived: "true",
+      })
+    ).find(
+      (contact) =>
+        typeof contact.Name === "string" &&
+        contact.Name.trim().toLowerCase() === name.toLowerCase(),
+    );
+  let contact = await find();
+  if (!contact) {
+    try {
+      const created = await api.call("POST", "/Contacts", {
+        idempotencyKey: `invoicewise-contact:${createHash("sha256")
+          .update(`${api.tenantId}:${name.toLowerCase()}`)
+          .digest("hex")
+          .slice(0, 40)}`,
+        json: { Contacts: [{ Name: name }] },
+      });
+      contact = asRecord(
+        Array.isArray(created.Contacts) ? created.Contacts[0] : undefined,
+      );
+    } catch (error) {
+      if (!(error instanceof NangoRequestError && error.status === 400)) {
+        throw error;
+      }
+      // Xero refuses a second contact with the same name: another post
+      // created it meanwhile.
+      contact = await find();
+      if (!contact) {
+        throw new BillRejectedError(
+          `Xero refused the contact "${name}": ${error.message}`,
+        );
+      }
+    }
+  }
+  if (typeof contact.ContactID !== "string") {
+    throw new Error("Xero did not return the contact ID");
+  }
+  if (contact.ContactStatus === "ARCHIVED") {
+    throw new BillRejectedError(
+      `The Xero contact "${name}" is archived; restore it in Xero and retry`,
+    );
+  }
+  return contact.ContactID;
+}
+
+/**
+ * Everything a Xero bill or credit note is written against: the chosen
+ * organisation, the contact, the configured account and each line's tax
+ * rate. Every refusal names what to change.
+ */
+async function xeroContext(
+  config: NangoConfig,
+  connection: Connection,
+  bill: DraftBill,
+) {
+  const accountCode = connection.settings?.expenseAccountId;
+  if (!accountCode) {
+    throw new BillRejectedError(
+      "Choose the Xero account for bill lines in Settings → Accounting",
+    );
+  }
+  const supplierName = bill.supplierName?.trim().slice(0, 255);
+  if (!supplierName) {
+    throw new BillRejectedError("Xero needs the supplier name");
+  }
+  const tenantId = await xeroTenantId(config, connection);
+  const api = xeroApi(config, connection.connectionId, tenantId);
+  const [organisation, currencies, taxRates] = await Promise.all([
+    readXeroOrganisation(api),
+    api.list("/Currencies", "Currencies"),
+    xeroPurchaseTaxRates(api),
+  ]);
+  if (
+    bill.currency &&
+    bill.currency !== organisation.baseCurrency &&
+    !currencies.some((currency) => currency.Code === bill.currency)
+  ) {
+    throw new BillRejectedError(
+      `The invoice is in ${bill.currency}, which the Xero organisation does not use (base currency ${organisation.baseCurrency ?? "unknown"}); add ${bill.currency} in Xero's currency settings, or record it by hand`,
+    );
+  }
+  const lines = billLines(bill);
+  const net = round2(lines.reduce((sum, line) => sum + line.total, 0));
+  const tax = round2(bill.vatAmount ?? 0);
+  if (tax !== 0 && bill.netAmount === null) {
+    throw new BillRejectedError(
+      "Xero needs the invoice's net amount to apply its tax",
+    );
+  }
+  const taxType = chooseTaxCode(
+    "Xero",
+    taxRates,
+    connection.settings?.taxCodeIds ?? [],
+    net,
+    tax,
+    lines.length,
+  ).id;
+  const contactId = await resolveXeroContact(api, supplierName);
+  const entity = xeroEntityOf(bill);
+  const fields = {
+    Contact: { ContactID: contactId },
+    [XERO_ENTITY[entity].numberField]: bill.invoiceNumber ?? undefined,
+    Date: bill.invoiceDate ?? undefined,
+    ...(entity === "bill" ? { DueDate: bill.dueDate ?? undefined } : {}),
+    CurrencyCode: bill.currency ?? undefined,
+    LineAmountTypes: "Exclusive",
+    LineItems: lines.map((line) => ({
+      Description: line.description,
+      Quantity: line.quantity,
+      UnitAmount: line.unitPrice,
+      AccountCode: accountCode,
+      TaxType: taxType,
+    })),
+  };
+  return { api, organisation, contactId, fields };
+}
+
+/** Provider refusals as reasons a user can act on; see `isRetryable`. */
+function xeroFailure(error: unknown, entity: ProviderEntity): unknown {
+  if (!(error instanceof NangoRequestError) || error.status !== 400) {
+    return error;
+  }
+  return new BillRejectedError(
+    `Xero refused the ${XERO_ENTITY[entity].label}: ${error.message}`,
+  );
+}
+
+/**
+ * The record this post already created, found by number and contact with
+ * InvoiceWise's key on it. A same-numbered record from the same contact that
+ * InvoiceWise did not create is someone else's entry of this invoice:
+ * refused rather than duplicated.
+ */
+async function findXeroRecord(
+  context: Awaited<ReturnType<typeof xeroContext>>,
+  entity: ProviderEntity,
+  bill: DraftBill,
+) {
+  const number = bill.invoiceNumber;
+  if (!number) return null;
+  const { collection, idField, numberField, type, label } = XERO_ENTITY[entity];
+  const literal = xeroLiteral(number);
+  const where = [
+    `Type=="${type}"`,
+    `Contact.ContactID=guid("${context.contactId}")`,
+    ...(literal ? [`${numberField}==${literal}`] : []),
+  ].join(" AND ");
+  const sameNumber = (
+    await context.api.list(`/${collection}`, collection, { where, page: "1" })
+  ).filter(
+    (row) =>
+      row[numberField] === number &&
+      typeof row.Status === "string" &&
+      XERO_LIVE_STATUSES.includes(row.Status),
+  );
+  for (const row of sameNumber) {
+    const id = String(row[idField]);
+    const ours =
+      entity === "bill"
+        ? carriesKey(row.Url, bill.idempotencyKey)
+        : (
+            await context.api.list(
+              `/${collection}/${encodeURIComponent(id)}/History`,
+              "HistoryRecords",
+            )
+          ).some(
+            (record) =>
+              typeof record.Details === "string" &&
+              record.Details.includes(bill.idempotencyKey),
+          );
+    if (ours) return id;
+  }
+  if (sameNumber.length) {
+    throw new BillRejectedError(
+      `Xero already has ${label} ${number} from ${bill.supplierName} (ID ${String(sameNumber[0]![idField])}) that InvoiceWise did not create; check whether it is this invoice, then delete or renumber one of them in Xero and retry`,
+    );
+  }
+  return null;
+}
+
+async function postXeroDocument(
   config: NangoConfig,
   connection: Connection,
   bill: DraftBill,
   attachment: BillAttachment | null,
 ): Promise<PostedBill> {
-  if (bill.documentType !== "invoice") {
-    throw new BillRejectedError(
-      "Xero delivery creates draft bills only; record the credit note in Xero by hand",
+  const entity = xeroEntityOf(bill);
+  const { collection, idField } = XERO_ENTITY[entity];
+  const context = await xeroContext(config, connection, bill);
+  let providerId = await findXeroRecord(context, entity, bill);
+  if (!providerId) {
+    const created = await context.api
+      .call("POST", `/${collection}`, {
+        idempotencyKey: bill.idempotencyKey,
+        json: {
+          [collection]: [
+            {
+              Type: XERO_ENTITY[entity].type,
+              Status: "DRAFT",
+              ...context.fields,
+              ...(entity === "bill" ? { Url: xeroSourceUrl(bill) } : {}),
+            },
+          ],
+        },
+      })
+      .catch((error) => {
+        throw xeroFailure(error, entity);
+      });
+    const record = asRecord(
+      Array.isArray(created[collection]) ? created[collection][0] : undefined,
     );
+    if (typeof record[idField] !== "string") {
+      throw new Error(
+        `Xero did not return the ${XERO_ENTITY[entity].label} ID`,
+      );
+    }
+    providerId = record[idField];
+    if (entity === "vendor_credit") {
+      // A credit note has no Url, so its key goes in its history, where a
+      // later lookup recognises it.
+      await context.api.call(
+        "PUT",
+        `/${collection}/${encodeURIComponent(providerId)}/History`,
+        {
+          json: {
+            HistoryRecords: [{ Details: `InvoiceWise ${bill.idempotencyKey}` }],
+          },
+        },
+      );
+    }
   }
-  const tenant = await xeroTenant(config, connection);
-  const body = asRecord(
-    await nangoProxy(config, connection.connectionId, {
-      method: "POST",
-      path: "/api.xro/2.0/Invoices",
-      headers: { ...tenant, "Idempotency-Key": bill.idempotencyKey },
-      json: {
-        Invoices: [
-          { Type: "ACCPAY", Status: "DRAFT", ...xeroBillFields(bill) },
-        ],
-      },
-    }),
-  );
-  const invoice = asRecord(
-    Array.isArray(body.Invoices) ? body.Invoices[0] : undefined,
-  );
-  if (typeof invoice.InvoiceID !== "string") {
-    throw new Error("Xero did not return the bill ID");
-  }
-  const providerId = invoice.InvoiceID;
-  return withAttachment({ providerId, entity: "bill" }, attachment, () =>
-    attachXeroDocument(config, connection, providerId, attachment!, tenant),
+  const id = providerId;
+  return withAttachment({ providerId: id, entity }, attachment, () =>
+    attachXeroDocument(context.api, entity, id, attachment!),
   );
 }
 
-// POST replaces an attachment of the same name, so a repeated upload never
-// duplicates the document on the bill.
+/**
+ * Attaches the source document unless a file of that name is already on the
+ * record, so a retried upload (including one whose response was lost) never
+ * adds a copy.
+ */
 async function attachXeroDocument(
-  config: NangoConfig,
-  connection: Connection,
+  api: XeroApi,
+  entity: ProviderEntity,
   providerId: string,
   attachment: BillAttachment,
-  tenant?: Record<string, string>,
 ) {
-  await nangoProxy(config, connection.connectionId, {
-    method: "POST",
-    path: `/api.xro/2.0/Invoices/${encodeURIComponent(providerId)}/Attachments/${encodeURIComponent(attachment.fileName)}`,
-    headers: tenant ?? (await xeroTenant(config, connection)),
-    bytes: { data: attachment.data, contentType: attachment.contentType },
-  });
+  const base = `/${XERO_ENTITY[entity].collection}/${encodeURIComponent(providerId)}/Attachments`;
+  const existing = await api.list(base, "Attachments");
+  if (existing.some((file) => file.FileName === attachment.fileName)) return;
+  await api
+    .call("POST", `${base}/${encodeURIComponent(attachment.fileName)}`, {
+      bytes: { data: attachment.data, contentType: attachment.contentType },
+    })
+    .catch((error) => {
+      throw error instanceof NangoRequestError && error.status === 400
+        ? new BillRejectedError(`Xero refused the attachment: ${error.message}`)
+        : error;
+    });
 }
+
+/**
+ * The organisation a Xero connection reaches: `preferred` (the one the
+ * workspace chose) while the authorisation still reaches it, else the one
+ * Nango recorded at connect, else the first Xero lists. Its details are read
+ * with its own tenant header, so the organisation is proven to answer.
+ */
+async function readXeroConnectionOrganisation(
+  config: NangoConfig,
+  connectionId: string,
+  preferred: string | null,
+) {
+  const organisations = await xeroTenants(config, connectionId);
+  const recorded = asRecord(
+    (await getNangoConnection(config, connectionId)).connectionConfig,
+  ).tenant_id;
+  const chosen =
+    organisations.find((organisation) => organisation.id === preferred) ??
+    organisations.find((organisation) => organisation.id === recorded) ??
+    organisations[0];
+  if (!chosen) {
+    throw new BillRejectedError(
+      "The Xero authorisation reaches no organisation; reconnect Xero and choose one",
+    );
+  }
+  const details = await readXeroOrganisation(
+    xeroApi(config, connectionId, chosen.id),
+  );
+  return {
+    id: chosen.id,
+    name: details.name ?? chosen.name,
+    organisations,
+  };
+}
+
+/** The organisations a Xero connection may post to, for the admin's choice. */
+export const listXeroOrganisations = xeroTenants;
 
 // ---------------------------------------------------------------------------
 // QuickBooks Online. There is no draft bill: a Bill is created open and
@@ -366,12 +826,10 @@ export async function getQuickBooksCompany(
   return readQuickBooksCompany(quickBooksApi(config, connectionId, realmId));
 }
 
-export type QuickBooksTaxCode = { id: string; name: string; rate: number };
+export type TaxCode = { id: string; name: string; rate: number };
 
 /** Active tax codes that apply to purchases, with their combined rate (%). */
-async function purchaseTaxCodes(
-  api: QuickBooksApi,
-): Promise<QuickBooksTaxCode[]> {
+async function purchaseTaxCodes(api: QuickBooksApi): Promise<TaxCode[]> {
   const [codes, rates] = await Promise.all([
     api.query("TaxCode", "select * from TaxCode maxresults 1000"),
     api.query("TaxRate", "select * from TaxRate maxresults 1000"),
@@ -432,7 +890,8 @@ export async function getQuickBooksSetupOptions(
  * is refused with the reason rather than guessed.
  */
 function chooseTaxCode(
-  codes: QuickBooksTaxCode[],
+  provider: "Xero" | "QuickBooks",
+  codes: TaxCode[],
   preferred: readonly string[],
   net: number,
   tax: number,
@@ -453,8 +912,8 @@ function chooseTaxCode(
   const rate = net ? round2((tax / net) * 100) : 0;
   throw new BillRejectedError(
     matching.length
-      ? `Several QuickBooks purchase tax codes match the ${rate}% tax on this invoice (${matching.map((code) => code.name).join(", ")}); choose the one InvoiceWise should use in Settings → Accounting`
-      : `No active QuickBooks purchase tax code matches the ${rate}% tax on this invoice (${tax.toFixed(2)} on ${net.toFixed(2)}); an invoice with mixed tax rates is not mapped, so record it in QuickBooks by hand`,
+      ? `Several ${provider} purchase tax codes match the ${rate}% tax on this invoice (${matching.map((code) => code.name).join(", ")}); choose the one InvoiceWise should use in Settings → Accounting`
+      : `No active ${provider} purchase tax code matches the ${rate}% tax on this invoice (${tax.toFixed(2)} on ${net.toFixed(2)}); an invoice with mixed tax rates is not mapped, so record it in ${provider} by hand`,
   );
 }
 
@@ -580,6 +1039,7 @@ async function quickBooksContext(
       );
     }
     taxCodeId = chooseTaxCode(
+      "QuickBooks",
       await purchaseTaxCodes(api),
       connection.settings?.taxCodeIds ?? [],
       net,
@@ -792,7 +1252,7 @@ export const postProviderBill = (
   attachment: BillAttachment | null,
 ) =>
   provider === "xero"
-    ? postXeroBill(config, connection, bill, attachment)
+    ? postXeroDocument(config, connection, bill, attachment)
     : postQuickBooksDocument(config, connection, bill, attachment);
 
 /**
@@ -808,7 +1268,16 @@ export async function attachProviderDocument(
   attachment: BillAttachment,
 ) {
   if (provider === "xero") {
-    await attachXeroDocument(config, connection, record.providerId, attachment);
+    await attachXeroDocument(
+      xeroApi(
+        config,
+        connection.connectionId,
+        await xeroTenantId(config, connection),
+      ),
+      record.entity,
+      record.providerId,
+      attachment,
+    );
     return;
   }
   const realmId = await quickBooksRealm(config, connection.connectionId);
@@ -822,32 +1291,26 @@ export async function attachProviderDocument(
 
 /**
  * The organisation a connection reaches, read live through the proxy: the
- * health check and the connect-time record of which company was bound.
+ * health check and the connect-time record of which company was bound. A
+ * Xero authorisation can reach several organisations: `preferred` (the one
+ * the workspace chose) is kept while it is still reachable.
  */
 export async function readProviderOrganisation(
   provider: AccountingProvider,
   config: NangoConfig,
   connectionId: string,
+  preferred: string | null = null,
 ): Promise<{ id: string; name: string | null }> {
   if (provider === "quickbooks") {
     const company = await getQuickBooksCompany(config, connectionId);
     return { id: company.realmId, name: company.name };
   }
-  const tenant = await xeroTenant(config, { connectionId });
-  const body = asRecord(
-    await nangoProxy(config, connectionId, {
-      method: "GET",
-      path: "/api.xro/2.0/Organisation",
-      headers: tenant,
-    }),
+  const { id, name } = await readXeroConnectionOrganisation(
+    config,
+    connectionId,
+    preferred,
   );
-  const [organisation] = Array.isArray(body.Organisations)
-    ? body.Organisations.map(asRecord)
-    : [];
-  return {
-    id: tenant["Xero-Tenant-Id"]!,
-    name: typeof organisation?.Name === "string" ? organisation.Name : null,
-  };
+  return { id, name };
 }
 
 /**
@@ -864,24 +1327,28 @@ export async function updateProviderBill(
   entity: ProviderEntity = "bill",
 ): Promise<{ providerId: string }> {
   if (provider === "xero") {
-    const tenant = await xeroTenant(config, connection);
-    // The bill's status is left as it is: an approved bill stays approved,
-    // and one Xero no longer lets anyone edit (paid, voided) is refused.
-    const body = asRecord(
-      await nangoProxy(config, connection.connectionId, {
-        method: "POST",
-        path: `/api.xro/2.0/Invoices/${encodeURIComponent(providerId)}`,
-        headers: { ...tenant, "Idempotency-Key": bill.idempotencyKey },
-        json: {
-          Invoices: [{ InvoiceID: providerId, ...xeroBillFields(bill) }],
-        },
-      }),
+    if (xeroEntityOf(bill) !== entity) {
+      throw new BillRejectedError(
+        `The correction changes the document type, but Xero cannot turn a ${XERO_ENTITY[entity].label} into a ${XERO_ENTITY[xeroEntityOf(bill)].label}; change it in Xero yourself`,
+      );
+    }
+    const { collection, idField, label } = XERO_ENTITY[entity];
+    const context = await xeroContext(config, connection, bill);
+    // The status is left as it is: an approved bill stays approved, and one
+    // Xero no longer lets anyone edit (paid, voided) is refused.
+    const body = await context.api
+      .call("POST", `/${collection}/${encodeURIComponent(providerId)}`, {
+        idempotencyKey: bill.idempotencyKey,
+        json: { [collection]: [{ [idField]: providerId, ...context.fields }] },
+      })
+      .catch((error) => {
+        throw xeroFailure(error, entity);
+      });
+    const record = asRecord(
+      Array.isArray(body[collection]) ? body[collection][0] : undefined,
     );
-    const invoice = asRecord(
-      Array.isArray(body.Invoices) ? body.Invoices[0] : undefined,
-    );
-    if (invoice.InvoiceID !== providerId) {
-      throw new Error("Xero did not confirm the bill update");
+    if (record[idField] !== providerId) {
+      throw new Error(`Xero did not confirm the ${label} update`);
     }
     return { providerId };
   }

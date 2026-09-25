@@ -59,8 +59,8 @@ export async function getActiveAccountingConnectionByProvider(
  * Stores a verified connection. Reconnecting to the same organisation keeps
  * the workspace's settings and its automatic-posting opt-in; a connection to
  * another organisation starts over, so nothing posts to a company the admin
- * has not set up and opted in for. `autoPostOnConnect` opts in at connect
- * (Xero drafts), otherwise an admin opts in later.
+ * has not set up and opted in for. An admin opts in once the setup is
+ * complete; `autoPostOnConnect` opts in at connect (test fixtures only).
  */
 export async function upsertAccountingConnection(
   db: Database,
@@ -72,14 +72,14 @@ export async function upsertAccountingConnection(
     organisationId: string | null;
     organisationName: string | null;
     sandbox: boolean;
-    autoPostOnConnect: boolean;
+    autoPostOnConnect?: boolean;
   },
 ) {
   const now = new Date().toISOString();
-  const { autoPostOnConnect, ...values } = input;
+  const { autoPostOnConnect = false, ...values } = input;
   const capabilities =
     input.provider === "xero"
-      ? ["draft_bills"]
+      ? ["draft_bills", "draft_credit_notes"]
       : ["open_bills", "vendor_credits"];
   const sameOrganisation = sql`${accountingConnections.organisationId} is not distinct from excluded.organisation_id`;
   const [connection] = await db
@@ -139,6 +139,46 @@ export async function updateAccountingConnectionSettings(
       autoPostEnabledBy: input.autoPost
         ? sql`case when ${accountingConnections.autoPostEnabledAt} is null then ${input.autoPost.enabledBy}::uuid else ${accountingConnections.autoPostEnabledBy} end`
         : null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(accountingConnections.teamId, input.teamId),
+        eq(accountingConnections.provider, input.provider),
+        isNull(accountingConnections.disconnectedAt),
+      ),
+    )
+    .returning();
+  return connection;
+}
+
+/**
+ * Points the active connection at another organisation its authorisation
+ * reaches (a Xero tenant). The previous organisation's settings and the
+ * automatic-posting opt-in are cleared: nothing posts to the new one until
+ * an admin sets it up and confirms it.
+ */
+export async function setAccountingConnectionOrganisation(
+  db: Database,
+  input: {
+    teamId: string;
+    provider: AccountingProvider;
+    organisationId: string;
+    organisationName: string | null;
+  },
+) {
+  const now = new Date().toISOString();
+  const [connection] = await db
+    .update(accountingConnections)
+    .set({
+      organisationId: input.organisationId,
+      organisationName: input.organisationName,
+      settings: {},
+      autoPostEnabledAt: null,
+      autoPostEnabledBy: null,
+      healthStatus: "ok",
+      healthError: null,
+      healthCheckedAt: now,
       updatedAt: now,
     })
     .where(

@@ -146,6 +146,12 @@ export const REST_AUDIT_ROUTES: RestAuditRoute[] = [
     detail: (match) => ({ provider: match[1] }),
   },
   {
+    method: "PUT",
+    pattern: /^\/accounting\/connections\/([^/]+)\/organisation$/,
+    action: "accounting.organisation_select",
+    detail: (match) => ({ provider: match[1] }),
+  },
+  {
     method: "POST",
     pattern: /^\/accounting\/invoices\/([^/]+)\/retry$/,
     action: "accounting.retry",

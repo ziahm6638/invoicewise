@@ -204,25 +204,22 @@ export async function decideRevision(
     invoice.accountingPostStatus === "posted" ||
     invoice.accountingPostStatus === "already_posted";
   const connection = await getActiveAccountingConnection(db, invoice.teamId);
-  // A credit note has no draft-bill form in Xero; QuickBooks takes it as a
-  // vendor credit.
-  const applicable =
-    evaluation.accountingApplicable || connection?.provider === "quickbooks";
+  // A credit note posts like an invoice: a Xero draft credit note, a
+  // QuickBooks vendor credit.
   const accounting = !current.policy.destinations.accounting
     ? "off"
-    : !applicable
-      ? "not_applicable"
-      : posted
-        ? "already_posted"
-        : !connection
-          ? "not_connected"
-          : outcome === "hold"
-            ? "held"
-            : // Not opted in to automatic creation (QuickBooks bills are
-              // open and unpaid), or a correction that does not re-post.
-              options.accounting === false || !connection.autoPostEnabledAt
-              ? "not_scheduled"
-              : "deliver";
+    : posted
+      ? "already_posted"
+      : !connection
+        ? "not_connected"
+        : outcome === "hold"
+          ? "held"
+          : // Not opted in to automatic creation (the setup is incomplete or
+            // the organisation unconfirmed), or a correction that does not
+            // re-post.
+            options.accounting === false || !connection.autoPostEnabledAt
+            ? "not_scheduled"
+            : "deliver";
   const webhooks =
     outcome === "hold" && current.policy.destinations.webhooks === "eligible"
       ? "held"

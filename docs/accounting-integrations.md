@@ -44,12 +44,15 @@ admin dashboard:
 
 | Integration unique key | Nango provider | Scopes |
 | --- | --- | --- |
-| `xero` | `xero` | `offline_access accounting.invoices accounting.contacts accounting.attachments` (apps created before March 2026 may use `accounting.transactions` in place of `accounting.invoices`) |
+| `xero` | `xero` | `offline_access accounting.invoices accounting.contacts accounting.attachments accounting.settings.read` (apps created before March 2026 may use `accounting.transactions` in place of `accounting.invoices`) |
 | `quickbooks` | `quickbooks` (production companies) or `quickbooks-sandbox` (sandbox companies) | `com.intuit.quickbooks.accounting` |
 
 Nango records the organisation at connect time: Xero's `tenant_id` (its
 `xeroPostConnection` script) and QuickBooks' `realmId` (from the OAuth
-callback). The bill adapters read them from the connection.
+callback). One Xero authorisation can reach several organisations, so
+InvoiceWise records the one the workspace chose on the connection
+(`accounting_connections.organisation_id`) and sends it as `Xero-Tenant-Id`
+on every Xero call; Nango's `tenant_id` is only the default at connect.
 
 ### Deployment contract
 
@@ -61,7 +64,13 @@ never by hand, with one idempotent command per provider, run from
 NANGO_BASE_URL=https://nango.invoicewise.uk NANGO_QUICKBOOKS_INTEGRATION_ID=quickbooks \
 QUICKBOOKS_NANGO_PROVIDER=quickbooks-sandbox \
   infisical run --env prod -- bun run nango:configure-integration quickbooks
+
+NANGO_BASE_URL=https://nango.invoicewise.uk NANGO_XERO_INTEGRATION_ID=xero \
+  infisical run --env prod -- bun run nango:configure-integration xero
 ```
+
+(Xero has no separate sandbox provider: a Xero app reaches any organisation
+its user authorises, including Xero's free, resettable Demo Company.)
 
 It creates the integration (unique key from `NANGO_<PROVIDER>_INTEGRATION_ID`,
 the Nango provider, `client_id`/`client_secret` from `INTUIT_CLIENT_ID` /
@@ -74,9 +83,13 @@ connection made under it, so it is an operator decision.
 
 The self-hosted edition runs no Nango actions or syncs, so there is no Nango
 action code to deploy: the bill "action" is the InvoiceWise adapter in
-`src/accounting-providers.ts`, calling the provider through `POST /proxy`.
-The contract with Nango is therefore only the integration above, the
-connection's `realmId` / `tenant_id`, token refresh and the proxy.
+`src/accounting-providers.ts` (versioned with the application and deployed
+with it), calling the provider through `POST /proxy`. The contract with
+Nango is therefore only the integration above, the connection's `realmId` /
+`tenant_id`, token refresh and the proxy. Reproducing a provider end to end
+is: its developer app (redirect URI above), the configure command, a
+connection through Settings → Accounting, then the [sandbox
+proof](#sandbox-proof).
 
 The Intuit app's **development** keys reach only sandbox companies, so the
 `quickbooks` integration uses the `quickbooks-sandbox` provider until Intuit
@@ -88,7 +101,7 @@ their real companies.
 ## What each provider receives
 
 Only an invoice whose validation allows it (`validation.accounting.ready`) is
-posted: an invoice document (not a credit note) with supplier name, invoice
+posted: an invoice or credit note with supplier name, invoice
 number, invoice date, currency and gross total, whose totals reconcile and
 which is not a duplicate. Otherwise nothing is sent and the invoice's
 accounting status is `failed` with `Not sent to Xero: <reasons>` (or
@@ -113,13 +126,10 @@ A document that loses the claim is not sent:
 The claim is kept after a successful post and released only when the
 provider refuses the bill for good, so a retry can take it.
 
-- **Xero**: an `ACCPAY` invoice in `DRAFT` (a bill awaiting approval, never
-  approved or paid), contact by supplier name, line items, amounts exclusive
-  of tax. The request carries
-  `Idempotency-Key: invoicewise:<hash of workspace, type and number>`, so a
-  retried post, or another copy of the same invoice, returns the original
-  bill. The source document is then uploaded to the bill's
-  attachments by file name (a repeat replaces it rather than duplicating it).
+- **Xero**: see [Xero](#xero) below: a draft bill (`ACCPAY` invoice in
+  `DRAFT`; a credit note becomes a draft `ACCPAYCREDIT` credit note), never
+  approved or paid, created only after the workspace chooses the
+  organisation, completes setup and opts in.
 - **QuickBooks Online**: see [QuickBooks Online](#quickbooks-online) below:
   an open, unpaid `Bill` (a credit note becomes a `VendorCredit`), created
   only after the workspace completes setup and opts in.
@@ -144,6 +154,81 @@ per-invoice delivery retry and `POST /accounting/invoices/{id}/retry` re-drive
 a failed attachment on its own (`attachment_queued`); neither posts the record
 again.
 
+## Xero
+
+**States.** A bill is an `ACCPAY` invoice and a credit note an
+`ACCPAYCREDIT` credit note, both created in `DRAFT`: they wait in Xero's
+*Bills to pay → Draft* for someone to approve them, and InvoiceWise never
+approves, pays or allocates anything. Nothing is created on processing
+until an owner or admin completes the setup and switches on **Create bills
+automatically** in Settings → Accounting, confirming the organisation by
+name and ID (the same opt-in as [QuickBooks](#quickbooks-online), re-checked
+when each post runs).
+
+**Connecting and the organisation.** One Xero authorisation can reach
+several organisations (the user ticks them on Xero's consent screen). On
+Connect UI's `connect` event the API checks the connection's workspace tag,
+lists the organisations the authorisation reaches (Xero's own
+`GET /connections`, through the proxy), binds the one Nango recorded
+(`tenant_id`), and reads it with that tenant header, so it is proven to
+answer. Settings → Accounting shows "Company: name (ID …)"; when the
+connection reaches more than one, the admin chooses the organisation bills
+go to (`accounting.selectOrganisation`, REST
+`PUT /accounting/connections/xero/organisation` with `{ "organisationId" }`),
+and only one the connection reaches. Choosing another organisation clears the
+account, tax rates and opt-in, because they belong to the organisation. A
+reconnect keeps the chosen organisation, its setup and opt-in while the new
+authorisation still reaches it; otherwise it starts over. Each posted invoice
+records the organisation it was posted to, and a bill update or attachment
+retry for an invoice posted to another organisation is refused, as for
+QuickBooks. **Check** reports `ok`, `unavailable` (Nango, a token refresh or
+Xero failing or throttling) or `reconnect` (the connection is gone, Xero
+refuses the authorisation, or the chosen organisation is no longer
+authorised).
+
+**Mapping** (`xeroContext`), all with provider-supported values read live:
+
+| Invoice | Xero |
+| --- | --- |
+| Supplier name | `Contact` by name (Xero names are unique ignoring case; archived contacts included in the search), else created with that name. An archived contact is refused with the fix. |
+| Lines | Extracted lines, or one net line (see below), each on the **account the admin chose** (`AccountCode`, required setup; active `EXPENSE`-class accounts with a code), `LineAmountTypes: Exclusive`. |
+| Tax | One purchase `TaxType` per line: the active rate that can apply to expenses and whose effective rate reproduces the invoice's tax on its net (to a penny a line), preferring the rates the admin ticked where several share a rate (0% zero-rated, exempt, no VAT). An ambiguous or unmatched rate (including mixed-rate invoices) is refused rather than guessed. |
+| Currency | `CurrencyCode`: the base currency, or one added in Xero's currency settings; any other is refused with the fix. |
+| Invoice number | `InvoiceNumber` (a bill's *Reference* in Xero) or `CreditNoteNumber`. |
+| Dates | `Date`, `DueDate` (bills). |
+| Credit note | Draft `ACCPAYCREDIT` credit note with the amounts credited (positive), same mapping. |
+| Source document | Attachment on the record, by file name. |
+| Link back | A bill's `Url` is the invoice's page in InvoiceWise (Xero shows it as *Go to InvoiceWise*), from `BETTER_AUTH_URL`. |
+
+Setup choices live in `accounting_connections.settings` (`expenseAccountId`
+holds the account code, `taxCodeIds` the tax types) and are checked against
+the live organisation when saved; the REST routes are those under
+[Connecting](#connecting).
+
+**Business idempotency.** Every create carries
+`Idempotency-Key: <posting key>` (per workspace, document type and number),
+so Xero replays the original response to a repeated request. Because that
+replay window is Xero's, a create is also preceded by a lookup of the same
+number from the same contact that is not deleted or voided and carries
+InvoiceWise's key: a bill's `Url` holds it (`posting=<key>`), written in the
+same create, and a credit note, which has no `Url`, gets it as a history
+note right after it is created. A retry long after an ambiguous timeout, or
+a repeated delivery of the same invoice, therefore finds the record instead
+of adding one, and a same-numbered record from that contact that InvoiceWise
+did not create is refused ("check whether it is this invoice"). The one gap
+is a credit note whose create answer was lost before its history note was
+written and whose retry comes after Xero's replay window: it is refused for
+a person to check rather than duplicated. The attachment upload first lists
+the record's attachments and skips a file of the same name, so a retried
+upload (including one whose answer was lost) never adds a copy. Nango
+refreshes the token before proxied calls and retries nothing itself
+(`Retries: 0`), so each retry is InvoiceWise's, under the same keys.
+
+**Links.** Bills open at
+`https://go.xero.com/AccountsPayable/Edit.aspx?InvoiceID=<id>`, credit notes
+at `https://go.xero.com/AccountsPayable/ViewCreditNote.aspx?creditNoteID=<id>`
+(the user's current Xero organisation must be the one posted to).
+
 ## QuickBooks Online
 
 **States.** QuickBooks Online has no draft or "awaiting approval" bill:
@@ -160,9 +245,8 @@ can still be sent from that invoice. Invoices processed while it is off show
 accounting as not scheduled, and a post already queued when it is switched
 off runs but creates nothing: it settles `cancelled` with that reason, and a
 person's retry of that invoice sends it (the retry is marked explicit in the
-job payload; releasing a held invoice is not, and follows the opt-in). (Xero
-drafts await approval in Xero, so a Xero connection is opted in at connect,
-as before.)
+job payload; releasing a held invoice is not, and follows the opt-in). A
+Xero connection follows the same opt-in (see [Xero](#xero)).
 
 **Connecting and the company.** On Connect UI's `connect` event the API
 checks the connection's workspace tag, then reads the company through the
@@ -227,10 +311,11 @@ an admin chooses to update the bill (see
 [Corrections](delivery.md#corrections)), the `update-accounting-bill` job
 sends the corrected invoice to the **same** bill (`updateProviderBill`):
 
-- **Xero**: `POST /Invoices/{InvoiceID}` with the bill's contact, number,
-  dates, currency and lines; the status is left as it is, so an approved bill
-  stays approved, and Xero refuses a bill it no longer lets anyone edit (paid
-  or voided).
+- **Xero**: `POST /Invoices/{InvoiceID}` (or `/CreditNotes/{CreditNoteID}`)
+  with the same mapping (contact, number, dates, currency, account and tax
+  lines); the status is left as it is, so an approved bill stays approved,
+  Xero refuses a bill it no longer lets anyone edit (paid or voided), and a
+  correction that changes the document type is refused.
 - **QuickBooks**: the bill (or vendor credit) is read for its `SyncToken`,
   then a sparse update of the same `Id` with the same mapping; a correction
   that changes the document type is refused.
@@ -243,10 +328,9 @@ provider applies the same values afresh instead of replaying the failure; a refu
 corrected invoice that could no longer be posted fails for good with the
 reason. The update never creates a bill.
 
-Each bill links to the provider's own page: Xero
-`https://go.xero.com/AccountsPayable/Edit.aspx?InvoiceID=<id>`, QuickBooks as
-above (`https://app.qbo.intuit.com`, or the sandbox host for a connection made
-through a sandbox integration).
+Each record links to the provider's own page: Xero as [above](#xero),
+QuickBooks as above (`https://app.qbo.intuit.com`, or the sandbox host for a
+connection made through a sandbox integration).
 
 ## Connecting
 
@@ -262,8 +346,18 @@ through a sandbox integration).
    workspace's tag and the configured integration, reads the organisation it
    reaches through the proxy, then stores the connection ID and organisation
    in `accounting_connections`. One connection is active per workspace.
-5. Disconnect deletes the Nango connection and marks the local row
-   disconnected.
+5. The admin chooses the organisation (Xero, when the authorisation reaches
+   several), the account and tax codes, and switches on automatic posting,
+   confirming the organisation. Until then nothing is posted automatically.
+6. Disconnect deletes the Nango connection and marks the local row
+   disconnected. Reconnect reruns Connect UI and deletes the connection it
+   replaced.
+
+Settings → Accounting shows each provider as connected (with its
+organisation, health and last check), as connectable, or as *not set up for
+InvoiceWise yet* when its Nango settings or integration are missing. That
+last read is Nango answering that the integration does not exist, so it is
+not counted as a provider failure in `/ops/metrics`.
 
 Nango refreshes access tokens on its own schedule and before proxied calls; a
 refresh the provider refuses surfaces as a retryable `424` until the user
@@ -278,7 +372,8 @@ The same operations are REST endpoints for API clients:
 - `DELETE /accounting/connections/:provider`
 - `GET /accounting/connections/:provider/setup`,
   `PUT /accounting/connections/:provider/settings` (`expenseAccountId`,
-  `taxCodeIds`, `autoPost`, `confirmOrganisationId`) and
+  `taxCodeIds`, `autoPost`, `confirmOrganisationId`),
+  `PUT /accounting/connections/xero/organisation` (`organisationId`) and
   `POST /accounting/connections/:provider/health-check`
 - `POST /accounting/invoices/:id/retry` (also posts an invoice that has no
   post yet, such as one processed while automatic posting was off)
@@ -307,9 +402,9 @@ bill or updates it in place (above). See
 
 The only Nango stand-ins are test code: `src/accounting-providers.test.ts`
 (the Xero and QuickBooks request shapes, mapping, idempotency and error
-handling, the QuickBooks side against the stateful fake company in
-`src/quickbooks-fake.ts`), `src/verify-accounting.ts` and
-`src/verify-quickbooks.ts`, which `bun run verify` runs against loopback
+handling, against the stateful fakes in `src/xero-fake.ts` and
+`src/quickbooks-fake.ts`), `src/verify-accounting.ts`, `src/verify-xero.ts`
+and `src/verify-quickbooks.ts`, which `bun run verify` runs against loopback
 stubs. Verification pins `NANGO_BASE_URL` to loopback, so it can never reach a
 real Nango.
 
@@ -320,6 +415,24 @@ refuses an invoice whose total does not reconcile without calling the
 provider, sends exactly one bill for copies of one invoice (processed out of
 order, posting concurrently, or read with and without the VAT number), holds
 another supplier's same-numbered invoice for review, then disconnects.
+
+`verify-xero.ts` runs the real processing, scheduling and workflow runner
+against a fake authorisation reaching two organisations: another
+workspace's connection is refused and the organisation Nango bound is
+recorded; nothing posts before the setup, the admin chooses the other
+organisation (one the connection does not reach is refused), and incomplete,
+unconfirmed or foreign choices are refused; then an ambiguous timeout (inside
+Xero's replay window, and again after it with the worker retrying later),
+throttling followed by a failed token refresh, a failed and a lost upload,
+and a refused upload retried explicitly each end as exactly one draft bill
+with one attachment, in the chosen organisation only; a currency the
+organisation does not use is refused with the fix; the opt-in switched off
+under a queued post creates nothing until a person sends it; a credit note
+becomes one draft credit note with its link and is corrected in place; a
+record from the other organisation is never updated or attached; the health
+check reports ok, unreachable and a withdrawn organisation; a reconnect
+keeps the organisation and opt-in and deletes the old connection; disconnect
+revokes the Nango connection.
 
 `verify-quickbooks.ts` runs the real processing, scheduling and workflow
 runner: another workspace's connection is refused and the company is
@@ -341,15 +454,37 @@ NANGO_XERO_INTEGRATION_ID=xero NANGO_QUICKBOOKS_INTEGRATION_ID=quickbooks \
   infisical run --env prod -- bun run prove:accounting-sandbox quickbooks <connection id>
 ```
 
-It uses synthetic records only. It forces a token refresh; for Xero it posts a
-draft bill with the synthetic PDF and replays its key. For QuickBooks it
+It uses synthetic records only. It forces a token refresh. For Xero it
+refuses any organisation that is not a Xero Demo Company
+(`XERO_PROOF_TENANT_ID` picks it when the connection reaches several), chooses
+account `429` or the first expense account (`XERO_PROOF_ACCOUNT_CODE`) and
+the first purchase tax rate above 0% (`XERO_PROOF_TAX_TYPE`), posts a draft
+bill whose create reaches Xero but whose answer is dropped, retries it and
+gets that bill, replays the raw create under the same `Idempotency-Key`,
+delivers the same invoice again (found by number, contact and key), uploads
+the PDF with its answer dropped and retries the upload twice on its own,
+posts and repeats a draft credit note, then counts what Xero holds per
+reference. For QuickBooks it
 chooses the first expense account (or `QUICKBOOKS_PROOF_ACCOUNT_ID`), posts a
 bill whose create reaches QuickBooks but whose answer is dropped, retries it
 and gets that bill, replays the raw create under the same `requestid`, uploads
 the PDF with its answer dropped and retries the upload twice on its own, posts
 and replays a vendor credit, then counts what QuickBooks holds per reference.
 It exits non-zero unless the token refreshed, each reference has exactly one
-record with one attachment, and every replay returned the original.
+record (Xero: in `DRAFT`) with one attachment, and every retry and repeated
+delivery returned the original. Its output is the evidence: the organisation,
+record IDs and links, never a credential.
+
+### Xero Demo Company connection
+
+Xero's Demo Company is free and resettable (Xero → My Xero → Try the Demo
+Company, or reset it there). Connecting it needs a person signed in to Xero:
+an admin of a test workspace chooses **Connect** for Xero in Settings →
+Accounting, signs in on Xero's consent screen, ticks the Demo Company, and
+then chooses it, account `429` and the tax rates in the setup. The proof then
+runs against that connection ID (Settings shows it as the connected
+organisation; the Nango connection ID is on the workspace's
+`accounting_connections` row).
 
 ### QuickBooks sandbox connection
 
@@ -397,7 +532,15 @@ tax) company is proven against the fake only, since the sandbox company is
 US.
 
 Still waiting on the account owner: Intuit's production approval and keys
-(then the integration moves to the `quickbooks` provider, above). **Xero**:
-the app credentials are in Infisical; its integration (the same
-`nango:configure-integration xero`) and Demo Company proof are the Xero
-follow-up.
+(then the integration moves to the `quickbooks` provider, above).
+
+**Xero**: the `xero` integration was created on production Nango from the
+app credentials in Infisical with `nango:configure-integration xero` (a rerun
+updates it in place), with the scopes above. Nango's OAuth start for a
+connect session sends the browser to Xero's authorize endpoint with
+`redirect_uri=https://nango.invoicewise.uk/oauth/callback`, which Xero
+currently refuses as `invalid_request: Invalid redirect_uri`: the Xero app
+must list that redirect URI (developer.xero.com → the app → Configuration).
+Waiting on the account owner for that and for a Xero sign-in to connect the
+Demo Company, after which the [Demo Company proof](#xero-demo-company-connection)
+runs. Everything else is proven against the fake (`verify-xero.ts`).

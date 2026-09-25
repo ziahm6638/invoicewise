@@ -715,20 +715,18 @@ const ACCOUNTING_PROVIDER_NAME: Record<string, string> = {
 
 /**
  * Whether an invoice can be sent to the connected provider as it stands:
- * the shared accounting readiness, except that QuickBooks takes a credit
- * note as a vendor credit where Xero receives bills only
+ * the shared accounting readiness. Every provider takes a credit note (a Xero
+ * draft credit note, a QuickBooks vendor credit), so the blocker validations
+ * recorded before that still carry is ignored
  * (docs/accounting-integrations.md).
  */
 export function providerAccountingReadiness(
-  provider: string,
+  _provider: string,
   extraction: unknown,
   validation: unknown,
 ) {
   const blockers = accountingReadiness(extraction, validation).blockers.filter(
-    (blocker) =>
-      !(
-        provider === "quickbooks" && blocker.code === "credit_note_unsupported"
-      ),
+    (blocker) => blocker.code !== "credit_note_unsupported",
   );
   return { ready: blockers.length === 0, blockers };
 }

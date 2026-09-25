@@ -1,6 +1,7 @@
 import {
   accountingConnectSessionSchema,
   accountingConnectionSchema,
+  accountingOrganisationSchema,
   accountingSettingsSchema,
 } from "@api/schemas/accounting";
 import {
@@ -18,6 +19,7 @@ import {
   disconnectAccountingConnection,
   getAccountingProviderAvailability,
   getAccountingSetup,
+  selectAccountingOrganisation,
   updateAccountingSettings,
 } from "@invoicewise/jobs/accounting";
 import { TRPCError } from "@trpc/server";
@@ -93,8 +95,9 @@ export const accountingRouter = createTRPCRouter({
     }),
 
   /**
-   * What an admin chooses from to set up posting (QuickBooks: the company's
-   * expense accounts and purchase tax codes), read live from the provider.
+   * What an admin chooses from to set up posting (the company's expense
+   * accounts and purchase tax codes; for Xero also the organisations the
+   * authorisation reaches), read live from the provider.
    */
   setup: adminProcedure.query(async ({ ctx: { db, teamId } }) => {
     try {
@@ -122,6 +125,31 @@ export const accountingRouter = createTRPCRouter({
           throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
         }
         throw failure(error, "Unable to save the accounting settings");
+      }
+    }),
+
+  /**
+   * Chooses which organisation a Xero connection posts to; another
+   * organisation starts its setup and opt-in over.
+   */
+  selectOrganisation: adminProcedure
+    .input(accountingOrganisationSchema)
+    .mutation(async ({ ctx: { db, teamId }, input }) => {
+      try {
+        const connection = await selectAccountingOrganisation(db, {
+          ...input,
+          teamId: teamId!,
+        });
+        return {
+          id: connection?.id ?? null,
+          organisationId: connection?.organisationId ?? null,
+          organisationName: connection?.organisationName ?? null,
+        };
+      } catch (error) {
+        if (error instanceof AccountingSettingsError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
+        }
+        throw failure(error, "Unable to choose the organisation");
       }
     }),
 
