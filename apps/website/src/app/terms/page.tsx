@@ -13,14 +13,14 @@ export default function Page() {
       </h1>
 
       <p className="mt-8 text-sm text-[#878787]">
-        Last updated: 24 September 2026
+        Last updated: 25 September 2026
       </p>
 
       <p className="mt-8">
         These terms govern your use of the InvoiceWise application and website
-        (the "Service"), operated by Sortx Software Ltd, company number
-        17132112, registered office Flat 9 Lowood House, Bewley Street, London,
-        E1 0BT, England ("we", "us").
+        (the "Service"), operated by SortX Software Ltd ("we", "us"), a company
+        registered in England and Wales, company number 17132612, registered
+        office Flat 9 Lowood House, Bewley Street, London E1 0BT.
       </p>
 
       <p className="mt-4">

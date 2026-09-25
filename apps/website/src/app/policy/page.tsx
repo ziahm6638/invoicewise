@@ -11,13 +11,14 @@ export default function Page() {
       <h1 className="text-2xl tracking-tight lg:text-3xl">Privacy Policy</h1>
 
       <p className="mt-8 text-sm text-[#878787]">
-        Last updated: 24 September 2026
+        Last updated: 25 September 2026
       </p>
 
       <p className="mt-8">
-        InvoiceWise is operated by Sortx Software Ltd ("we", "us"), company
-        number 17132112, registered office Flat 9 Lowood House, Bewley Street,
-        London, E1 0BT, England. This page explains what we collect on{" "}
+        InvoiceWise is operated by SortX Software Ltd ("we", "us"), a company
+        registered in England and Wales, company number 17132612, registered
+        office Flat 9 Lowood House, Bewley Street, London E1 0BT. This page
+        explains what we collect on{" "}
         <a href="https://invoicewise.uk" className="underline">
           invoicewise.uk
         </a>{" "}
