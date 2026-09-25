@@ -74,6 +74,19 @@ export const workflowKey = {
    * `listStalledWebhookDeliveries` (packages/db) must build the same key.
    */
   webhook: (eventId: string, endpointId: string) => `${eventId}:${endpointId}`,
+  /**
+   * One question rerun per invoice revision, so repeated clicks share it.
+   * The SQL mirror in `listStalledJudgmentReruns` (packages/db) must build
+   * the same key.
+   */
+  judgments: (teamId: string, invoiceId: string, revision: number) =>
+    `${teamId}:${invoiceId}:judgments:r${revision}`,
+  /**
+   * One in-place bill update per correction. The SQL mirror in
+   * `listStalledBillUpdates` (packages/db) must build the same key.
+   */
+  billUpdate: (teamId: string, invoiceId: string, correctionId: string) =>
+    `${teamId}:${invoiceId}:bill-update:${correctionId}`,
   /** A cleanup run deferred until the deletion's quiesce time. */
   deletionResume: (deletionId: string, resumeAt: string) =>
     `${deletionId}:after:${resumeAt}`,

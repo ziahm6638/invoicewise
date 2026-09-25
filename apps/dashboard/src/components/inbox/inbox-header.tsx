@@ -2,6 +2,7 @@
 
 import { InboxOrdering } from "@/components/inbox/inbox-ordering";
 import { InboxSearch } from "@/components/inbox/inbox-search";
+import { InboxStateFilter } from "@/components/inbox/inbox-state-filter";
 import { Button } from "@invoicewise/ui/button";
 import { Upload } from "lucide-react";
 
@@ -9,6 +10,7 @@ export function InboxHeader() {
   return (
     <div className="mb-3 mt-4 flex w-full items-center gap-3">
       <InboxSearch />
+      <InboxStateFilter />
       <InboxOrdering />
       <Button
         className="shrink-0"

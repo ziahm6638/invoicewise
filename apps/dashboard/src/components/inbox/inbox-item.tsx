@@ -7,6 +7,7 @@ import { useInboxParams } from "@/hooks/use-inbox-params";
 import { useUserQuery } from "@/hooks/use-user";
 import { formatDate } from "@/utils/format";
 import type { RouterOutputs } from "@api/trpc/routers/_app";
+import { Checkbox } from "@invoicewise/ui/checkbox";
 import { cn } from "@invoicewise/ui/cn";
 import { forwardRef } from "react";
 import { InboxStatus } from "./inbox-status";
@@ -14,10 +15,13 @@ import { InboxStatus } from "./inbox-status";
 type Props = {
   item: RouterOutputs["inbox"]["get"]["data"][number];
   index: number;
+  /** Included in the bulk selection. */
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
 };
 
 export const InboxItem = forwardRef<HTMLButtonElement, Props>(
-  function InboxItem({ item, index }, ref) {
+  function InboxItem({ item, index, checked, onCheckedChange }, ref) {
     const { params, setParams } = useInboxParams();
     const { data: user } = useUserQuery();
     const extraction = item.extraction as Record<string, unknown> | null;
@@ -32,43 +36,55 @@ export const InboxItem = forwardRef<HTMLButtonElement, Props>(
       params.inboxId === item.id || (!params.inboxId && index === 0);
 
     return (
-      <button
-        ref={ref}
-        type="button"
-        onClick={() => setParams({ inboxId: item.id })}
+      <div
         className={cn(
-          "w-full border-b px-4 py-3.5 text-left transition-colors last:border-b-0 hover:bg-secondary/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          "flex border-b transition-colors hover:bg-secondary/40",
           isSelected && "bg-secondary/60",
+          checked && "bg-sky-50/60 dark:bg-sky-950/20",
         )}
       >
-        <div className="flex items-start justify-between gap-3">
-          <p className="min-w-0 truncate text-sm font-semibold">{supplier}</p>
-          <p className="shrink-0 text-sm font-medium tabular-nums">
-            {item.currency && item.amount != null ? (
-              <FormatAmount amount={item.amount} currency={item.currency} />
-            ) : (
-              <span className="text-muted-foreground">Amount pending</span>
-            )}
-          </p>
+        <div className="flex shrink-0 items-start pl-3 pt-4">
+          <Checkbox
+            checked={checked}
+            onCheckedChange={(value) => onCheckedChange(value === true)}
+            aria-label={`Select ${supplier}${invoiceNumber ? ` ${invoiceNumber}` : ""}`}
+          />
         </div>
-        <div className="mt-1.5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-          <span className="min-w-0 truncate font-mono">
-            {invoiceNumber ??
-              (state === "processing"
-                ? "Reading invoice…"
-                : "No invoice number")}
-          </span>
-          <span className="shrink-0">
-            Received {formatDate(item.createdAt, user?.dateFormat)}
-          </span>
-        </div>
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <InboxStatus state={state} />
-          <span className="truncate text-[11px] text-muted-foreground">
-            {item.currency ?? "Currency pending"}
-          </span>
-        </div>
-      </button>
+        <button
+          ref={ref}
+          type="button"
+          onClick={() => setParams({ inboxId: item.id })}
+          className="min-w-0 flex-1 px-3 py-3.5 text-left focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <p className="min-w-0 truncate text-sm font-semibold">{supplier}</p>
+            <p className="shrink-0 text-sm font-medium tabular-nums">
+              {item.currency && item.amount != null ? (
+                <FormatAmount amount={item.amount} currency={item.currency} />
+              ) : (
+                <span className="text-muted-foreground">Amount pending</span>
+              )}
+            </p>
+          </div>
+          <div className="mt-1.5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span className="min-w-0 truncate font-mono">
+              {invoiceNumber ??
+                (state === "processing"
+                  ? "Reading invoice…"
+                  : "No invoice number")}
+            </span>
+            <span className="shrink-0">
+              Received {formatDate(item.createdAt, user?.dateFormat)}
+            </span>
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <InboxStatus state={state} />
+            <span className="truncate text-[11px] text-muted-foreground">
+              {item.currency ?? "Currency pending"}
+            </span>
+          </div>
+        </button>
+      </div>
     );
   },
 );

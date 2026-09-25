@@ -100,6 +100,34 @@ Nango `424` (provider or refresh failure), `429` and `5xx` are retried by the
 workflow runner with the same idempotency key. A bill that posts but whose
 attachment fails is recorded as posted and logs the attachment error.
 
+## Updating a bill after a correction
+
+A posted invoice keeps its provider ID for good. When a user corrects it and
+an admin chooses to update the bill (see
+[Corrections](delivery.md#corrections)), the `update-accounting-bill` job
+sends the corrected invoice to the **same** bill (`updateProviderBill`):
+
+- **Xero**: `POST /Invoices/{InvoiceID}` with the bill's contact, number,
+  dates, currency and lines; the status is left as it is, so an approved bill
+  stays approved, and Xero refuses a bill it no longer lets anyone edit (paid
+  or voided).
+- **QuickBooks**: the bill is read for its `SyncToken`, then a sparse update
+  of the same `Id`.
+
+The request carries `invoicewise-update:<correction id>:<attempt>` as its
+idempotency key, so the runner's retries after an ambiguous timeout replay the
+update. A retryable failure is retried by the runner and, once exhausted, is a
+failed delivery an admin can retry; each such retry bumps the attempt, so the
+provider applies the same values afresh instead of replaying the failure; a refusal, a different provider connected since, or a
+corrected invoice that could no longer be posted fails for good with the
+reason. The update never creates a bill.
+
+Each bill links to the provider's own page: Xero
+`https://go.xero.com/AccountsPayable/Edit.aspx?InvoiceID=<id>`, QuickBooks
+`<QUICKBOOKS_APP_URL>/app/bill?txnId=<id>` (default
+`https://app.qbo.intuit.com`; set `QUICKBOOKS_APP_URL=https://app.sandbox.qbo.intuit.com`
+on the API for a sandbox company).
+
 ## Connecting
 
 1. An admin opens **Settings → Accounting** and chooses Connect.
@@ -141,7 +169,8 @@ error), `needs_review` (held as a possible duplicate, above) or `cancelled`
 (the connection was disconnected or the invoice deleted before it ran). The
 per-invoice delivery retry re-drives `failed`, `needs_review` and `cancelled`
 posts the same way this route does. Reprocessing an invoice
-never posts a second bill. See
+never posts a second bill, and a correction of a posted invoice keeps its
+bill or updates it in place (above). See
 [Processing-to-delivery handoff](delivery.md#processing-to-delivery-handoff).
 
 ## Local proof (test-only stub)

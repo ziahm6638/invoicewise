@@ -14,7 +14,7 @@ export function NoResults() {
         <div className="text-center mb-6 space-y-2">
           <h2 className="font-medium text-lg">No invoices match</h2>
           <p className="text-[#606060] text-sm">
-            Try another supplier or received date.
+            Try another supplier, invoice number, state or received date.
           </p>
         </div>
 

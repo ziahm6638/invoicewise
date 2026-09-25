@@ -2438,6 +2438,20 @@ export const inbox = pgTable(
     // and schedules its deliveries, so (id, revision) names one accepted
     // invoice revision across worker retries and replays.
     processingRevision: integer("processing_revision").default(0).notNull(),
+    // The extraction as read from the document, kept when a user first
+    // corrects it; `extraction` then holds the corrected record. Null while
+    // the current reading is uncorrected, and reset by a re-extraction.
+    extractionOriginal: jsonb("extraction_original").$type<
+      Record<string, unknown>
+    >(),
+    // Explicit question rerun: `queued` while its job runs for
+    // `judgments_rerun_revision`, `failed` with the reason when it could not
+    // finish; null when no rerun is outstanding.
+    judgmentsRerunStatus: text("judgments_rerun_status", {
+      enum: ["queued", "failed"],
+    }),
+    judgmentsRerunError: text("judgments_rerun_error"),
+    judgmentsRerunRevision: integer("judgments_rerun_revision"),
     status: inboxStatusEnum().default("new"),
     website: text(),
     displayName: text("display_name"),
@@ -3219,6 +3233,78 @@ export const accountingPostClaims = pgTable(
       foreignColumns: [inbox.id],
       name: "accounting_post_claims_invoice_id_fkey",
     }).onDelete("cascade"),
+  ],
+);
+
+/**
+ * One user correction of an invoice's extracted fields: who made it, when,
+ * why, each field's value before and after, and what it meant for the bill
+ * already in the accounting provider (docs/delivery.md#corrections).
+ */
+export const invoiceCorrections = pgTable(
+  "invoice_corrections",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    invoiceId: uuid("invoice_id").notNull(),
+    // 1, 2, 3… per invoice, across re-extractions.
+    version: integer("version").notNull(),
+    // The processing revision the user corrected and the one it created.
+    baseRevision: integer("base_revision").notNull(),
+    revision: integer("revision").notNull(),
+    actorId: uuid("actor_id"),
+    reason: text("reason").notNull(),
+    changes: jsonb("changes")
+      .$type<{ field: string; from: unknown; to: unknown }[]>()
+      .notNull(),
+    // The corrected extraction, which a bill update sends as it was approved.
+    extraction: jsonb("extraction").$type<Record<string, unknown>>().notNull(),
+    // not_posted: no bill existed; keep_bill: the bill was left as posted;
+    // update_bill: the same bill is updated in place at the provider.
+    accountingOutcome: text("accounting_outcome", {
+      enum: ["not_posted", "keep_bill", "update_bill"],
+    }).notNull(),
+    provider: accountingProviderEnum("provider"),
+    providerId: text("provider_id"),
+    // superseded: a re-extraction replaced the corrected reading before the
+    // update was sent, so it is never sent.
+    updateStatus: text("update_status", {
+      enum: ["queued", "updated", "failed", "cancelled", "superseded"],
+    }),
+    updateError: text("update_error"),
+    updateRetryable: boolean("update_retryable"),
+    // Bumped by each explicit retry, so a retry is a new provider request
+    // while the runner's own attempts share one idempotency key.
+    updateAttempt: integer("update_attempt").default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("invoice_corrections_invoice_version_key").on(
+      table.invoiceId,
+      table.version,
+    ),
+    index("invoice_corrections_team_invoice_idx").on(
+      table.teamId,
+      table.invoiceId,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "invoice_corrections_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [inbox.id],
+      name: "invoice_corrections_invoice_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.actorId],
+      foreignColumns: [users.id],
+      name: "invoice_corrections_actor_id_fkey",
+    }).onDelete("set null"),
   ],
 );
 

@@ -17,7 +17,8 @@ TypeSafe is the only model involved, and only as described under
 
 Saving a processed revision queues a `match-invoice` job in the same
 transaction (one per revision), so a completed invoice always has its match
-intent. The job runs after processing: an invoice's accounting and webhook
+intent. A [correction](delivery.md#corrections) of the invoice's values is a new revision
+and queues matching again the same way. The job runs after processing: an invoice's accounting and webhook
 deliveries are not held back by matching. The job counts against the TypeSafe daily call budget like processing does.
 
 ## How a source is chosen

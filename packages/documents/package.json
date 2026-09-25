@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./authorization-source": "./src/authorization-source.ts",
+    "./correction": "./src/correction.ts",
     "./embed": "./src/embed/embed.ts",
     "./utils": "./src/utils.ts"
   },

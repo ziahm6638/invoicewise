@@ -188,7 +188,12 @@ describe("Effect workflow runner", () => {
 
     expect(claims).toEqual([
       [],
-      ["process-attachment", "rerun-question", "match-invoice"],
+      [
+        "process-attachment",
+        "rerun-judgments",
+        "rerun-question",
+        "match-invoice",
+      ],
       [],
     ]);
   });

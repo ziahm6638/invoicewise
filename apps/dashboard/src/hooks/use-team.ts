@@ -25,6 +25,7 @@ export function useTeamPermissions() {
       manageQuestions: false,
       manageIntegrations: false,
       manageWorkspaceSettings: false,
+      postToAccounting: false,
       manageBilling: false,
       deleteWorkspace: false,
       transferOwnership: false,

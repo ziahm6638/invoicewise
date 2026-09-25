@@ -1,4 +1,5 @@
 export * from "./client";
+export * from "./correction";
 export * from "./types";
 export * from "./typesafe/client";
 export * from "./typesafe/invoice";

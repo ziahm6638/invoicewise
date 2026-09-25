@@ -183,10 +183,11 @@ named `invoicewise-export-<date>-<id>.zip`:
 | --- | --- |
 | `manifest.json` | format and version, export and workspace ids, requester, times, counts, the identifier scheme, the retention policy in force, every data file with its record count, size and SHA-256, and every document with its status, size and SHA-256 |
 | `documents/<invoice id>/<file name>` | each original exactly as received |
-| `invoices.json` | every invoice (accepted or legacy, not deleted): amounts, status, extraction, judgment ids, the supplier it is assigned to (`supplierId`) with how it was resolved (`supplierResolution`) and its supplier-history checks (`supplierChecks`), source mailbox id and message reference, its re-deliveries (time, file name, mailbox, message reference until it expires), accounting delivery state, and its document entry |
+| `invoices.json` | every invoice (accepted or legacy, not deleted): amounts, status, extraction, judgment ids, the supplier it is assigned to (`supplierId`) with how it was resolved (`supplierResolution`) and its supplier-history checks (`supplierChecks`), source mailbox id and message reference, its re-deliveries (time, file name, mailbox, message reference until it expires), accounting delivery state, the reading it was corrected from (`extractionOriginal`, when a user corrected it), and its document entry |
 | `judgments.json` | every judgment with its invoice id |
 | `suppliers.json` | the workspace's supplier records: name, normalised name, VAT and company number keys, `mergedIntoId` for a merged supplier, times, and the ids of the invoices assigned to it |
 | `supplier-events.json` | every supplier correction (invoice reassigned, suppliers merged, change reverted) with its actor, what it replaced and whether it was reverted |
+| `invoice-corrections.json` | every correction of an invoice's extracted fields: version, actor, reason, each field before and after, the revisions it corrected and created, and what happened to the bill (kept, or updated in place, with its provider ID and outcome) |
 | `authorization-sources.json` | every job, purchase order and contract with every immutable version (terms, supplier as given and as linked, effective date, change reason, origin, who recorded it) and its retained documents, each with its archive path, status and SHA-256 |
 | `authorization-sources/<source id>/<document id>-<file name>` | each retained authorization-source document exactly as attached |
 | `source-matches.json` | every decision about which authorization sources an exported invoice bills ([matching](authorization-matching.md)), oldest first per invoice: status, how and by whom it was made, the reason, the full result with its evidence, whether it is `current`, and its links (source and version ids) with their allocations |
@@ -194,11 +195,11 @@ named `invoicewise-export-<date>-<id>.zip`:
 | `question-runs.json` | every question rerun: the revision, the invoices chosen, who asked, status and counts |
 | `question-answers.json` | every answer a rerun recorded on an exported invoice, with the answer it replaced |
 | `inbound-emails.json` | every message received at the workspace address: receipt time, recipient address, header and envelope sender and subject (until they expire), outcome and note, delivery count, attachment outcomes and the ids of the invoices it became (`invoiceIds`); never the MIME source |
-| `audit.json` | invoice received and posted to accounting, supplier corrections, webhook deliveries, workflow runs and export requests, in time order |
+| `audit.json` | invoice received, posted to accounting and corrected, supplier corrections, webhook deliveries, workflow runs and export requests, in time order |
 | `workspace.json` | the workspace, its members and roles, mailboxes, accounting connections and webhook endpoints |
 
 Stable identifiers: invoices keep their InvoiceWise UUID; a document is
-identified by its invoice id and SHA-256; suppliers and supplier events keep
+identified by its invoice id and SHA-256; suppliers, supplier events and invoice corrections keep
 their InvoiceWise UUID, so an invoice's `supplierId` names the same supplier
 in every export (follow `mergedIntoId` to the supplier it was merged into);
 authorization sources and their versions keep their UUIDs (and version

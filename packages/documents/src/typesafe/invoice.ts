@@ -1885,3 +1885,42 @@ export const processInvoice = (
       },
     };
   });
+
+export type StoredInvoiceJudgmentRequest = GetDocumentRequest & {
+  /** The stored (possibly corrected) extraction the questions are about. */
+  extraction: InvoiceExtraction;
+  validation: InvoiceValidation | null;
+};
+
+/**
+ * Answers the configured questions again for an invoice that was already
+ * read: the document is read again only for its text, and the stored
+ * extraction (with any user corrections) is what the questions judge.
+ * Unlike a full processing run, a TypeSafe failure fails the rerun instead of
+ * recording every answer as failed, so the caller can retry it.
+ */
+export const judgeStoredInvoice = (
+  request: StoredInvoiceJudgmentRequest,
+): Effect.Effect<InvoiceJudgment[], TypeSafeError, TypeSafe> =>
+  Effect.gen(function* () {
+    const { document } = yield* readDocument(request);
+    const history = request.loadHistory
+      ? yield* Effect.tryPromise({
+          try: () => request.loadHistory!(request.extraction),
+          catch: () =>
+            readError("Unable to load the supplier's earlier invoices", true),
+        })
+      : {
+          previousInvoices: request.previousInvoices ?? [],
+          scope: { scoped: false },
+        };
+    return yield* judgeInvoice(
+      request.extraction,
+      history.previousInvoices,
+      request.judgmentQuestions ?? [],
+      request.defaultJudgmentQuestions ?? DEFAULT_INVOICE_JUDGMENTS,
+      documentPlainText(document.lines),
+      request.validation,
+      history.scope,
+    );
+  });

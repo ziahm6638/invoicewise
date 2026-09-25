@@ -1,5 +1,6 @@
 import { InvoiceProcessor } from "./processors/invoice/invoice-processor";
 import type { GetDocumentRequest, GetInvoiceResponse } from "./types";
+import type { StoredInvoiceJudgmentRequest } from "./typesafe/invoice";
 
 /**
  * Entry point for document processing. Every supported input (text PDF,
@@ -12,5 +13,13 @@ export class DocumentClient {
     params: GetDocumentRequest,
   ): Promise<GetInvoiceResponse> {
     return new InvoiceProcessor().getInvoice(params);
+  }
+
+  /**
+   * Answers the configured questions again for a stored extraction, reading
+   * the document only for its text.
+   */
+  public async getJudgments(params: StoredInvoiceJudgmentRequest) {
+    return new InvoiceProcessor().getJudgments(params);
   }
 }
