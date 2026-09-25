@@ -211,8 +211,9 @@ Every webhook request goes through one transport (`packages/jobs/src/egress.ts`)
   refuses it if any address it resolves to is not public, so a
   public-looking name pointing at a private address is rejected up front.
 - **Checked on every connection.** Each attempt resolves the name again,
-  requires every address to be public and connects to exactly the validated
-  address, so a DNS answer that changes after registration (rebinding) is
+  requires every address to be public and connects only to those validated
+  addresses (IPv4 first; the next is tried only when a connection cannot be
+  opened, before any request bytes are sent), so a DNS answer that changes after registration (rebinding) is
   refused before any connection. TLS still verifies the certificate against
   the hostname. Requests are written on that socket directly, so proxy
   environment variables, redirects and connection pools cannot send them

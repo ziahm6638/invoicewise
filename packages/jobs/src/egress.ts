@@ -8,9 +8,10 @@ import { connect as tlsConnect } from "node:tls";
  *
  * A URL is checked as written, its hostname is resolved once, every resolved
  * address must be public, and the connection is opened to exactly one of the
- * validated addresses: the socket never resolves the name again, so a DNS
- * answer that changes between the check and the connection (rebinding) cannot
- * reach a private address. TLS still verifies the certificate against the
+ * validated addresses, trying the next one only when a connection cannot be
+ * opened: the socket never resolves the name again, so a DNS answer that
+ * changes between the check and the connection (rebinding) cannot reach a
+ * private address. TLS still verifies the certificate against the
  * hostname. The request is written on that socket directly: no proxy
  * environment variable, redirect or keep-alive pool can route it elsewhere,
  * only the status line and headers are read (bounded), the body is never
@@ -198,12 +199,12 @@ export type Destination = {
   url: URL;
   hostname: string;
   port: number;
-  /** The validated address the connection must use. */
-  address: ResolvedAddress;
+  /** The validated addresses a connection may use, IPv4 first. */
+  addresses: ResolvedAddress[];
 };
 
 /**
- * Resolves a URL to one address the policy allows. Every address the name
+ * Resolves a URL to the addresses the policy allows. Every address the name
  * resolves to must be allowed, so a record set that mixes a public and a
  * private address is refused rather than raced.
  */
@@ -242,7 +243,12 @@ export async function resolveDestination(
       false,
     );
   }
-  return { url, hostname, port, address: addresses[0]! };
+  return {
+    url,
+    hostname,
+    port,
+    addresses: [...addresses].sort((a, b) => a.family - b.family),
+  };
 }
 
 export type ConnectOptions = {
@@ -314,7 +320,8 @@ export async function guardedPost(
   policy: EgressPolicy & { connect?: Connector; limits?: PostLimits },
 ): Promise<{ status: number; address: string }> {
   const limits = policy.limits ?? DEFAULT_POST_LIMITS;
-  let socket: Socket | undefined;
+  const sockets: Socket[] = [];
+  let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -327,9 +334,69 @@ export async function guardedPost(
     }, limits.timeoutMs);
   });
 
+  const toEgressError = (error: Error) =>
+    error instanceof EgressError
+      ? error
+      : new EgressError(`Webhook request failed: ${error.message}`, true);
+
+  /** Opens a connection to one validated address; nothing is written yet. */
+  const open = (
+    address: string,
+    port: number,
+    tls: boolean,
+    servername: string | undefined,
+  ) =>
+    new Promise<Socket>((resolve, reject) => {
+      if (settled) {
+        reject(new EgressError("Webhook request already finished", true));
+        return;
+      }
+      let opened: Socket;
+      try {
+        opened = (policy.connect ?? defaultConnector)({
+          address,
+          port,
+          servername,
+          tls,
+        });
+      } catch (error) {
+        reject(toEgressError(error as Error));
+        return;
+      }
+      sockets.push(opened);
+      const failed = (error: Error) => {
+        opened.destroy();
+        reject(toEgressError(error));
+      };
+      opened.once("error", failed);
+      opened.once(tls ? "secureConnect" : "connect", () => {
+        opened.off("error", failed);
+        // The socket must be connected to the address that was validated.
+        const remote = opened.remoteAddress;
+        if (remote && remote !== address) {
+          const same =
+            isIP(remote) === 6 && isIP(address) === 6
+              ? ipv6Bytes(remote)?.join() === ipv6Bytes(address)?.join()
+              : remote.replace(/^::ffff:/, "") ===
+                address.replace(/^::ffff:/, "");
+          if (!same) {
+            opened.destroy();
+            reject(
+              new EgressError(
+                "Connection reached an unexpected address",
+                false,
+              ),
+            );
+            return;
+          }
+        }
+        resolve(opened);
+      });
+    });
+
   const exchange = async () => {
     const destination = await resolveDestination(value, policy);
-    const { url, hostname, port, address } = destination;
+    const { url, hostname, port, addresses } = destination;
     for (const [name, headerValue] of Object.entries(headers)) {
       if (!HEADER_TOKEN.test(name) || /[\r\n\0]/.test(headerValue)) {
         throw new EgressError(`Invalid request header ${name}`, false);
@@ -349,57 +416,42 @@ export async function guardedPost(
       "",
       "",
     ].join("\r\n");
+    const tls = url.protocol === "https:";
+
+    // Only a connection that could not be opened falls through to the next
+    // address; once request bytes are written the outcome is final.
+    let socket: Socket | undefined;
+    let address = addresses[0]!.address;
+    let lastError: EgressError | undefined;
+    for (const candidate of addresses) {
+      try {
+        socket = await open(
+          candidate.address,
+          port,
+          tls,
+          tls ? hostname : undefined,
+        );
+        address = candidate.address;
+        break;
+      } catch (error) {
+        lastError = error as EgressError;
+        if (!lastError.retryable || settled) throw lastError;
+      }
+    }
+    if (!socket) throw lastError!;
+    const connected = socket;
 
     return new Promise<{ status: number; address: string }>(
       (resolve, reject) => {
-        const tls = url.protocol === "https:";
-        const opened = (policy.connect ?? defaultConnector)({
-          address: address.address,
-          port,
-          servername: tls ? hostname : undefined,
-          tls,
-        });
-        socket = opened;
-        const fail = (error: Error) =>
-          reject(
-            error instanceof EgressError
-              ? error
-              : new EgressError(
-                  `Webhook request failed: ${error.message}`,
-                  true,
-                ),
-          );
-        opened.once("error", fail);
-        opened.once(tls ? "secureConnect" : "connect", () => {
-          // The socket must be connected to the address that was validated.
-          const remote = opened.remoteAddress;
-          if (remote && remote !== address.address) {
-            const same =
-              isIP(remote) === 6 && isIP(address.address) === 6
-                ? ipv6Bytes(remote)?.join() ===
-                  ipv6Bytes(address.address)?.join()
-                : remote.replace(/^::ffff:/, "") ===
-                  address.address.replace(/^::ffff:/, "");
-            if (!same) {
-              fail(
-                new EgressError(
-                  "Connection reached an unexpected address",
-                  false,
-                ),
-              );
-              return;
-            }
-          }
-          opened.write(head);
-          opened.write(payload);
-        });
+        const fail = (error: Error) => reject(toEgressError(error));
+        connected.once("error", fail);
         let received = "";
-        opened.on("data", (chunk: Buffer) => {
+        connected.on("data", (chunk: Buffer) => {
           received += chunk.toString("latin1");
           try {
             const status = parseStatus(received);
             if (status !== null) {
-              resolve({ status, address: address.address });
+              resolve({ status, address });
               return;
             }
           } catch (error) {
@@ -415,9 +467,11 @@ export async function guardedPost(
             );
           }
         });
-        opened.once("end", () =>
+        connected.once("end", () =>
           fail(new EgressError("Webhook endpoint closed the connection", true)),
         );
+        connected.write(head);
+        connected.write(payload);
       },
     );
   };
@@ -425,9 +479,10 @@ export async function guardedPost(
   try {
     return await Promise.race([exchange(), deadline]);
   } finally {
+    settled = true;
     clearTimeout(timer);
-    // The response body is never read: the connection is closed as soon as
+    // The response body is never read: every connection is closed as soon as
     // the status is known, on success, failure or timeout alike.
-    socket?.destroy();
+    for (const socket of sockets) socket.destroy();
   }
 }

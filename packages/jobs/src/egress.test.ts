@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { type Server, type Socket, createServer } from "node:net";
+import {
+  type Server,
+  type Socket,
+  createServer,
+  connect as netConnect,
+} from "node:net";
 import {
   type ConnectOptions,
   EgressError,
@@ -218,6 +223,58 @@ describe("DNS resolution", () => {
         tls: true,
       },
     ]);
+  });
+  test("a connection that cannot be opened falls back to the next validated address", async () => {
+    const { port, connections } = await listen((socket) =>
+      socket.end("HTTP/1.1 204 No Content\r\n\r\n"),
+    );
+    const connects: string[] = [];
+    const result = await guardedPost(
+      "https://hooks.example.com/in",
+      "{}",
+      {},
+      {
+        ...production,
+        resolver: resolveTo("2606:2800:220:1::1", "93.184.215.14"),
+        connect: ({ address }) => {
+          connects.push(address);
+          if (address === "93.184.215.14") {
+            return netConnect({ host: "127.0.0.1", port: 1 });
+          }
+          // A loopback socket standing in for a TLS connection to the
+          // pinned IPv6 address.
+          const socket = netConnect({ host: "127.0.0.1", port });
+          Object.defineProperty(socket, "remoteAddress", { value: address });
+          socket.once("connect", () => socket.emit("secureConnect"));
+          return socket;
+        },
+      },
+    );
+    // IPv4 is tried first; it refuses the connection, so the validated IPv6
+    // address is used and the request is sent exactly once.
+    expect(connects).toEqual(["93.184.215.14", "2606:2800:220:1::1"]);
+    expect(result).toEqual({ status: 204, address: "2606:2800:220:1::1" });
+    expect(connections).toHaveLength(1);
+  });
+
+  test("a refused address set is never connected to, even with a fallback", async () => {
+    const connects: string[] = [];
+    const error = await guardedPost(
+      "https://hooks.example.com/in",
+      "{}",
+      {},
+      {
+        ...production,
+        resolver: resolveTo("93.184.215.14", "10.0.0.5"),
+        connect: ({ address }) => {
+          connects.push(address);
+          throw new Error("must not connect");
+        },
+      },
+    ).catch((caught) => caught);
+    expect(error).toBeInstanceOf(EgressError);
+    expect(error.retryable).toBe(false);
+    expect(connects).toEqual([]);
   });
 });
 

@@ -3,7 +3,6 @@ import {
   MAX_WEBHOOK_ENDPOINTS,
   WEBHOOK_SECRET_OVERLAP_MS,
   type WebhookEventName,
-  countActiveWebhookEndpoints,
   createWebhookEndpoint,
   rotateWebhookSecret,
 } from "@invoicewise/db/queries";
@@ -31,23 +30,17 @@ export async function registerWebhookEndpoint(
   if (!destination.ok) {
     return { error: destination.reason, status: 400 } as WebhookServiceError;
   }
-  if (
-    (await countActiveWebhookEndpoints(db, input.teamId)) >=
-    MAX_WEBHOOK_ENDPOINTS
-  ) {
+  const created = await createWebhookEndpoint(db, input);
+  if (created.error) {
     return {
-      error: `A workspace can have at most ${MAX_WEBHOOK_ENDPOINTS} active webhook endpoints`,
+      error:
+        created.error === "limit"
+          ? `A workspace can have at most ${MAX_WEBHOOK_ENDPOINTS} active webhook endpoints`
+          : "An active webhook endpoint already uses this URL",
       status: 409,
     } as WebhookServiceError;
   }
-  const endpoint = await createWebhookEndpoint(db, input);
-  if (!endpoint) {
-    return {
-      error: "An active webhook endpoint already uses this URL",
-      status: 409,
-    } as WebhookServiceError;
-  }
-  return { endpoint };
+  return { endpoint: created.endpoint };
 }
 
 /**

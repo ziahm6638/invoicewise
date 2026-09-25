@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Database } from "@db/client";
 import {
   inbox,
+  teams,
   webhookDeliveries,
   webhookDeliveryAttempts,
   webhookEndpoints,
@@ -88,39 +89,57 @@ export async function createWebhookEndpoint(
   const secret = generateWebhookSecret();
   const secretEncrypted = encrypt(secret);
   // Registering the URL of a disabled endpoint enables it again with a new
-  // secret and the chosen events; an active duplicate returns nothing.
-  const [endpoint] = await db
-    .insert(webhookEndpoints)
-    .values({
-      teamId: input.teamId,
-      createdBy: input.userId,
-      url: input.url,
-      events: input.events,
-      secretEncrypted,
-    })
-    .onConflictDoUpdate({
-      target: [webhookEndpoints.teamId, webhookEndpoints.url],
-      set: {
-        active: true,
+  // secret and the chosen events. An active duplicate, or a workspace already at
+  // `MAX_WEBHOOK_ENDPOINTS` active endpoints, returns an error instead.
+  return db.transaction(async (tx) => {
+    // Serialise registrations for the same workspace on its row, so the
+    // active-endpoint limit holds under concurrent requests.
+    await tx
+      .select({ id: teams.id })
+      .from(teams)
+      .where(eq(teams.id, input.teamId))
+      .for("update");
+    if (
+      (await countActiveWebhookEndpoints(tx, input.teamId)) >=
+      MAX_WEBHOOK_ENDPOINTS
+    ) {
+      return { error: "limit" as const };
+    }
+    const [endpoint] = await tx
+      .insert(webhookEndpoints)
+      .values({
+        teamId: input.teamId,
         createdBy: input.userId,
+        url: input.url,
         events: input.events,
         secretEncrypted,
-        previousSecretEncrypted: null,
-        previousSecretExpiresAt: null,
-        secretRotatedAt: null,
-        updatedAt: sql`now()`,
-      },
-      setWhere: sql`${webhookEndpoints.active} = false`,
-    })
-    .returning({
-      id: webhookEndpoints.id,
-      url: webhookEndpoints.url,
-      events: webhookEndpoints.events,
-      active: webhookEndpoints.active,
-      createdAt: webhookEndpoints.createdAt,
-    });
+      })
+      .onConflictDoUpdate({
+        target: [webhookEndpoints.teamId, webhookEndpoints.url],
+        set: {
+          active: true,
+          createdBy: input.userId,
+          events: input.events,
+          secretEncrypted,
+          previousSecretEncrypted: null,
+          previousSecretExpiresAt: null,
+          secretRotatedAt: null,
+          updatedAt: sql`now()`,
+        },
+        setWhere: sql`${webhookEndpoints.active} = false`,
+      })
+      .returning({
+        id: webhookEndpoints.id,
+        url: webhookEndpoints.url,
+        events: webhookEndpoints.events,
+        active: webhookEndpoints.active,
+        createdAt: webhookEndpoints.createdAt,
+      });
 
-  return endpoint ? { ...endpoint, secret } : undefined;
+    return endpoint
+      ? { endpoint: { ...endpoint, secret } }
+      : { error: "duplicate" as const };
+  });
 }
 
 const endpointColumns = {
@@ -182,10 +201,7 @@ export async function disableWebhookEndpoint(
 /** The endpoints a workspace may have registered at once. */
 export const MAX_WEBHOOK_ENDPOINTS = 20;
 
-export async function countActiveWebhookEndpoints(
-  db: Database,
-  teamId: string,
-) {
+async function countActiveWebhookEndpoints(db: Executor, teamId: string) {
   const [row] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(webhookEndpoints)
