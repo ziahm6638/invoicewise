@@ -200,7 +200,8 @@ A change is refused with a conflict when the decision it was made against
   transactions or the evidence. `GET /bank-payments` (connections, consent and
   last sync) and `GET /bank-payments/transactions?connectionId&status&page`
   need `payments.read` and the owner or admin role. `payments.read` cannot be
-  held by a member's credential.
+  held by a member's credential, and no alias (`apis.all`, `apis.read`)
+  implies it: a key or OAuth application asks for it by name.
 
 ## Provider callbacks
 

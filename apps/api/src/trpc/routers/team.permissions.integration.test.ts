@@ -192,6 +192,14 @@ suite("workspace permissions (integration)", () => {
         "users.read",
         "users.write",
       ]);
+      // Bank data is granted only by name, to owners and admins.
+      expect(queries.clampScopesForRole("admin", ["payments.read"])).toEqual([
+        "payments.read",
+      ]);
+      expect(queries.clampScopesForRole("member", ["payments.read"])).toEqual(
+        [],
+      );
+      expect(queries.scopesWithinRole("member", ["payments.read"])).toBe(false);
     });
 
     test("unknown scopes are dropped for every role", () => {

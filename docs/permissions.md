@@ -109,7 +109,8 @@ The scope vocabulary is authoritative and lives in
 expanded first, then intersected with the role: owners and admins may hold any
 known scope, members keep invoice use (`inbox.read`, `inbox.write`) plus
 `sources.read`, `teams.read` and `users.read` (never `payments.read`, which
-exposes bank transactions), and any unknown scope is dropped
+exposes bank transactions; no alias implies `payments.read`, so owners and
+admins request it by name), and any unknown scope is dropped
 for every role. Keys store their expanded scopes, so a key created before a
 scope existed (for example `sources.read`/`sources.write`) does not gain it;
 edit the key to grant it.

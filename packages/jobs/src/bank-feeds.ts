@@ -1378,7 +1378,12 @@ export async function handleSaltEdgeCallback(
   }
 
   // success / notify
-  if (!row && typeof customFields.connection === "string") {
+  if (row?.status === "disconnected") return { outcome: "ignored" };
+  if (
+    !row &&
+    typeof customFields.connection === "string" &&
+    /^[0-9a-f-]{36}$/i.test(customFields.connection)
+  ) {
     const own = await getBankFeedConnection(db, {
       teamId: team.teamId,
       connectionId: customFields.connection,

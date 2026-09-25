@@ -19,6 +19,13 @@ export const RESOURCE_SCOPES = [
 
 export const SCOPE_ALIASES = ["apis.all", "apis.read"] as const;
 
+/**
+ * Scopes no alias implies: they must be requested by name. `payments.read`
+ * exposes bank transactions, so `apis.all`/`apis.read` (and credentials
+ * granted them before it existed) never include it.
+ */
+export const EXPLICIT_SCOPES: readonly string[] = ["payments.read"];
+
 export const SCOPES = [...RESOURCE_SCOPES, ...SCOPE_ALIASES] as const;
 
 export type ResourceScope = (typeof RESOURCE_SCOPES)[number];
@@ -41,14 +48,14 @@ export const expandScopes = (scopes: readonly string[]): ResourceScope[] => {
   for (const scope of scopes) {
     if (scope === "apis.all") {
       for (const resource of RESOURCE_SCOPES) {
-        expanded.add(resource);
+        if (!EXPLICIT_SCOPES.includes(resource)) expanded.add(resource);
       }
       continue;
     }
 
     if (scope === "apis.read") {
       for (const resource of RESOURCE_SCOPES) {
-        if (resource.endsWith(".read")) {
+        if (resource.endsWith(".read") && !EXPLICIT_SCOPES.includes(resource)) {
           expanded.add(resource);
         }
       }
