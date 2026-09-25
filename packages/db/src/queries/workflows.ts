@@ -422,12 +422,19 @@ export async function restartFailedWorkflowJob(
  */
 export async function requeueFinishedWorkflowJob(
   db: Pick<Database, "update">,
-  params: { name: string; idempotencyKey: string; teamId: string },
+  params: {
+    name: string;
+    idempotencyKey: string;
+    teamId: string;
+    /** Replaces the job's payload for the restarted run. */
+    payload?: Record<string, unknown>;
+  },
 ) {
   const now = new Date().toISOString();
   const [job] = await db
     .update(workflowJobs)
     .set({
+      ...(params.payload ? { payload: params.payload } : {}),
       status: "queued",
       attempts: 0,
       runAt: now,

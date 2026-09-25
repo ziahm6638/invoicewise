@@ -2,10 +2,14 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import {
   BillRejectedError,
   type DraftBill,
+  attachProviderDocument,
+  isRetryable,
   postProviderBill,
+  quickBooksRequestId,
   updateProviderBill,
 } from "./accounting-providers";
 import { NangoRequestError, getNangoConfig } from "./nango";
+import { createQuickBooksFake } from "./quickbooks-fake";
 
 // A stand-in for self-hosted Nango: the connection lookup plus the proxy,
 // answering as Xero and QuickBooks would. It records every proxied call.
@@ -21,10 +25,14 @@ type Call = {
 
 let calls: Call[] = [];
 let connectionConfig: Record<string, unknown> = {};
-let vendors: string[] = [];
 let bills = new Map<string, string>();
-let attachables = new Set<string>();
 let failNextBill = false;
+let quickBooks = createQuickBooksFake("9130", {
+  name: "Synthetic Trading Ltd",
+  country: "GB",
+  homeCurrency: "GBP",
+  multiCurrency: false,
+});
 let uploadStatus = 200;
 
 const stub = Bun.serve({
@@ -100,68 +108,11 @@ const stub = Bun.serve({
     }
 
     // QuickBooks
-    if (path === "/v3/company/9130/query") {
-      const query = url.searchParams.get("query")!;
-      if (query.includes("from Vendor")) {
-        const name = query
-          .match(/DisplayName = '(.*)'$/)?.[1]
-          ?.replace(/\\(.)/g, "$1");
-        const index = vendors.findIndex((vendor) => vendor === name);
-        return Response.json({
-          QueryResponse: index < 0 ? {} : { Vendor: [{ Id: `v${index + 1}` }] },
-        });
-      }
-      if (query.includes("from Account")) {
-        return Response.json({ QueryResponse: { Account: [{ Id: "7" }] } });
-      }
-      if (query.includes("from Attachable")) {
-        const id = query.match(/value = '(.*)'$/)?.[1]!;
-        return Response.json({
-          QueryResponse: attachables.has(id)
-            ? { Attachable: [{ Id: "a1" }] }
-            : {},
-        });
-      }
-    }
-    if (path === "/v3/company/9130/vendor") {
-      vendors.push((call.json as { DisplayName: string }).DisplayName);
-      return Response.json({ Vendor: { Id: `v${vendors.length}` } });
-    }
-    const quickBooksBill = path.match(/^\/v3\/company\/9130\/bill\/(.+)$/);
-    if (quickBooksBill && request.method === "GET") {
-      const id = decodeURIComponent(quickBooksBill[1]!);
-      return [...bills.values()].includes(id)
-        ? Response.json({ Bill: { Id: id, SyncToken: "3" } })
-        : Response.json(
-            { Fault: { Error: [{ Message: "Object Not Found" }] } },
-            { status: 400 },
-          );
-    }
-    if (
-      path === "/v3/company/9130/bill" &&
-      (call.json as { Id?: string }).Id !== undefined
-    ) {
-      const sent = call.json as { Id: string; SyncToken: string };
-      return sent.SyncToken === "3"
-        ? Response.json({ Bill: { Id: sent.Id, SyncToken: "4" } })
-        : Response.json(
-            { Fault: { Error: [{ Message: "Stale Object Error" }] } },
-            { status: 400 },
-          );
-    }
-    if (path === "/v3/company/9130/bill") {
-      const key = url.searchParams.get("requestid")!;
-      const id = bills.get(key) ?? String(100 + bills.size);
-      bills.set(key, id);
-      return Response.json({ Bill: { Id: id } });
-    }
-    if (path === "/v3/company/9130/upload") {
-      const metadata = JSON.parse(
-        await (call.form!.get("file_metadata_01") as File).text(),
-      );
-      attachables.add(metadata.AttachableRef[0].EntityRef.value);
-      return Response.json({ AttachableResponse: [{}] });
-    }
+    const quickBooksAnswer = await quickBooks.handle(request, path, url, {
+      json: call.json as Record<string, unknown> | undefined,
+      form: call.form,
+    });
+    if (quickBooksAnswer) return quickBooksAnswer;
     return Response.json(
       {
         Fault: {
@@ -177,10 +128,14 @@ afterAll(() => stub.stop(true));
 
 beforeEach(() => {
   calls = [];
-  vendors = [];
   bills = new Map();
-  attachables = new Set();
   failNextBill = false;
+  quickBooks = createQuickBooksFake("9130", {
+    name: "Synthetic Trading Ltd",
+    country: "GB",
+    homeCurrency: "GBP",
+    multiCurrency: false,
+  });
   uploadStatus = 200;
 });
 
@@ -193,6 +148,7 @@ const env = {
 
 const bill: DraftBill = {
   idempotencyKey: "invoicewise:3f1c2a4e-0000-4000-8000-000000000001",
+  documentType: "invoice",
   supplierName: "O'Brien Supplies Ltd",
   supplierTaxNumber: "GB123456789",
   invoiceNumber: "INV-42",
@@ -231,8 +187,10 @@ describe("Xero", () => {
     );
     expect(posted).toEqual({
       providerId: "xero-1",
+      entity: "bill",
       attached: true,
       attachmentError: null,
+      attachmentRetryable: false,
     });
 
     const [create, upload] = calls;
@@ -306,8 +264,11 @@ describe("Xero", () => {
     );
     expect(posted).toEqual({
       providerId: "xero-1",
+      entity: "bill",
       attached: false,
       attachmentError: "Attachment too large",
+      // A 413 will not pass on a retry unchanged.
+      attachmentRetryable: false,
     });
   });
 
@@ -356,173 +317,353 @@ describe("Xero", () => {
 
 describe("QuickBooks", () => {
   const config = getNangoConfig("quickbooks", env);
+  const configured = {
+    connectionId: "conn-1",
+    settings: {
+      expenseAccountId: "7" as string | null,
+      taxCodeIds: [] as string[],
+    },
+  };
+  type Sent = {
+    VendorRef: { value: string };
+    DocNumber?: string;
+    DueDate?: string;
+    CurrencyRef?: { value: string };
+    GlobalTaxCalculation?: string;
+    PrivateNote?: string;
+    Line: {
+      DetailType: string;
+      Amount: number;
+      Description: string;
+      AccountBasedExpenseLineDetail: {
+        AccountRef: { value: string };
+        TaxCodeRef?: { value: string };
+      };
+    }[];
+  };
+  const created = (entity: "Bill" | "VendorCredit" = "Bill") =>
+    quickBooks.records(entity) as unknown as (Sent & { Id: string })[];
+  const post = (
+    draft: DraftBill = bill,
+    file: typeof attachment | null = attachment,
+    target: typeof configured = configured,
+  ) => postProviderBill("quickbooks", config, target, draft, file);
 
-  test("finds or creates the vendor, creates an idempotent bill and uploads once", async () => {
+  beforeEach(() => {
     connectionConfig = { realmId: "9130" };
-    const first = await postProviderBill(
-      "quickbooks",
-      config,
-      connection,
-      bill,
-      attachment,
-    );
-    expect(first).toEqual({
+  });
+
+  test("creates an open bill for a new vendor with the matching purchase tax code and attaches once", async () => {
+    const posted = await post();
+    expect(posted).toEqual({
       providerId: "100",
+      entity: "bill",
       attached: true,
       attachmentError: null,
+      attachmentRetryable: false,
     });
-    expect(vendors).toEqual(["O'Brien Supplies Ltd"]);
-
-    const vendorQuery = calls[0]!.search.get("query");
-    expect(vendorQuery).toBe(
-      "select Id from Vendor where DisplayName = 'O\\'Brien Supplies Ltd'",
-    );
-    const create = calls.find((call) => call.path === "/v3/company/9130/bill")!;
-    expect(create.search.get("requestid")).toBe(bill.idempotencyKey);
-    expect(create.search.get("minorversion")).toBe("75");
-    expect(create.json).toEqual({
+    expect(quickBooks.state.vendors).toMatchObject([
+      { Id: "v1", DisplayName: "O'Brien Supplies Ltd" },
+    ]);
+    const [record] = created();
+    expect(record).toMatchObject({
       VendorRef: { value: "v1" },
       DocNumber: "INV-42",
       TxnDate: "2026-09-22",
       DueDate: "2026-10-22",
+      GlobalTaxCalculation: "TaxExcluded",
       PrivateNote: `InvoiceWise ${bill.idempotencyKey}`,
-      Line: [
-        {
-          DetailType: "AccountBasedExpenseLineDetail",
-          Amount: 100,
-          Description: "Materials",
-          AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } },
-        },
-        {
-          DetailType: "AccountBasedExpenseLineDetail",
-          Amount: 50,
-          Description: "Labour",
-          AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } },
-        },
-      ],
     });
-    const upload = calls.find(
-      (call) => call.path === "/v3/company/9130/upload",
-    )!;
-    expect(upload.headers.get("nango-proxy-content-type")).toBe(
-      "multipart/form-data",
-    );
-    const file = upload.form!.get("file_content_01") as File;
-    expect(file.name).toBe("INV 42.pdf");
-    expect(file.size).toBe(attachment.data.byteLength);
-
-    // Replayed: same vendor and bill, and the existing attachment is kept.
-    calls = [];
-    const again = await postProviderBill(
-      "quickbooks",
-      config,
-      connection,
-      bill,
-      attachment,
-    );
-    expect(again.providerId).toBe("100");
-    expect(vendors).toHaveLength(1);
-    expect(bills.size).toBe(1);
-    expect(calls.some((call) => call.path.endsWith("/upload"))).toBe(false);
-  });
-
-  test("posts the net total as one line when no line items were extracted", async () => {
-    connectionConfig = { realmId: "9130" };
-    await postProviderBill(
-      "quickbooks",
-      config,
-      connection,
-      { ...bill, lineItems: [], description: "Monthly service" },
-      null,
-    );
-    const create = calls.find((call) => call.path === "/v3/company/9130/bill")!;
-    expect((create.json as { Line: unknown[] }).Line).toEqual([
+    expect(record!.Line).toEqual([
       {
         DetailType: "AccountBasedExpenseLineDetail",
-        Amount: 150,
-        Description: "Monthly service",
-        AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } },
+        Amount: 100,
+        Description: "Materials",
+        AccountBasedExpenseLineDetail: {
+          AccountRef: { value: "7" },
+          TaxCodeRef: { value: "4" },
+        },
       },
+      {
+        DetailType: "AccountBasedExpenseLineDetail",
+        Amount: 50,
+        Description: "Labour",
+        AccountBasedExpenseLineDetail: {
+          AccountRef: { value: "7" },
+          TaxCodeRef: { value: "4" },
+        },
+      },
+    ]);
+    const create = calls.find((call) => call.path === "/v3/company/9130/bill")!;
+    expect(create.search.get("requestid")).toBe(bill.idempotencyKey);
+    expect(quickBooks.state.attachables.get("Bill:100")).toBe(1);
+  });
+
+  test("a retry after an ambiguous timeout returns the bill QuickBooks already created", async () => {
+    quickBooks.fail({ on: "bill", status: 504, afterApply: true });
+    const error = await post(bill, null).catch((caught) => caught);
+    expect(error).toBeInstanceOf(NangoRequestError);
+    expect(isRetryable(error)).toBe(true);
+    const posted = await post(bill, null);
+    expect(posted.providerId).toBe("100");
+    expect(created()).toHaveLength(1);
+    expect(quickBooks.state.writes.bill).toBe(1);
+  });
+
+  test("finds its bill by reference and vendor after QuickBooks forgot the request ID", async () => {
+    quickBooks.fail({ on: "bill", status: 504, afterApply: true });
+    await post(bill, null).catch(() => undefined);
+    quickBooks.expireRequestIds();
+    const posted = await post(bill, null);
+    expect(posted.providerId).toBe("100");
+    expect(created()).toHaveLength(1);
+  });
+
+  test("refuses a same-numbered bill from the same vendor that InvoiceWise did not create", async () => {
+    await post(bill, null);
+    const error = await post(
+      { ...bill, idempotencyKey: "invoicewise:someone-else" },
+      null,
+    ).catch((caught) => caught);
+    expect(error).toBeInstanceOf(BillRejectedError);
+    expect((error as Error).message).toContain(
+      "QuickBooks already has bill INV-42 from O'Brien Supplies Ltd (ID 100) that InvoiceWise did not create",
+    );
+    expect(created()).toHaveLength(1);
+  });
+
+  test("throttling and a failed token refresh are retryable and create nothing", async () => {
+    quickBooks.fail({ on: "bill", status: 429 });
+    const throttled = await post(bill, null).catch((caught) => caught);
+    expect((throttled as NangoRequestError).status).toBe(429);
+    expect(isRetryable(throttled)).toBe(true);
+    quickBooks.fail({
+      on: "companyinfo",
+      status: 424,
+      body: { error: { message: "The refresh token has expired" } },
+    });
+    const refresh = await post(bill, null).catch((caught) => caught);
+    expect((refresh as NangoRequestError).status).toBe(424);
+    expect(isRetryable(refresh)).toBe(true);
+    expect(created()).toHaveLength(0);
+    // Once QuickBooks answers again, one bill is created.
+    await post(bill, null);
+    expect(created()).toHaveLength(1);
+  });
+
+  test("a failed upload keeps the bill and is retried on its own, attaching exactly once", async () => {
+    quickBooks.fail({ on: "upload", status: 503 });
+    const posted = await post();
+    expect(posted).toMatchObject({
+      providerId: "100",
+      attached: false,
+      attachmentRetryable: true,
+    });
+    // The upload's response is lost, then it is retried twice more.
+    quickBooks.fail({ on: "upload", status: 504, afterApply: true });
+    const lost = await attachProviderDocument(
+      "quickbooks",
+      config,
+      configured,
+      { providerId: "100", entity: "bill" },
+      attachment,
+    ).catch((caught) => caught);
+    expect(isRetryable(lost)).toBe(true);
+    for (let retry = 0; retry < 2; retry++) {
+      await attachProviderDocument(
+        "quickbooks",
+        config,
+        configured,
+        { providerId: "100", entity: "bill" },
+        attachment,
+      );
+    }
+    expect(quickBooks.state.attachables.get("Bill:100")).toBe(1);
+    expect(created()).toHaveLength(1);
+    expect(quickBooks.state.writes.bill).toBe(1);
+  });
+
+  test("a credit note becomes a vendor credit", async () => {
+    const posted = await post({
+      ...bill,
+      documentType: "credit_note",
+      invoiceNumber: "CN-7",
+    });
+    expect(posted).toMatchObject({ entity: "vendor_credit", attached: true });
+    expect(created()).toHaveLength(0);
+    const [credit] = created("VendorCredit");
+    expect(credit).toMatchObject({ DocNumber: "CN-7" });
+    expect(credit).not.toHaveProperty("DueDate");
+    expect(quickBooks.state.attachables.get(`VendorCredit:${credit!.Id}`)).toBe(
+      1,
+    );
+  });
+
+  test("prefers the chosen tax code where several share a rate, and refuses an ambiguous or unmatched rate", async () => {
+    const zeroRated = { ...bill, vatAmount: 0, grossAmount: 150 };
+    const ambiguous = await post(zeroRated, null).catch((caught) => caught);
+    expect(ambiguous).toBeInstanceOf(BillRejectedError);
+    expect((ambiguous as Error).message).toContain(
+      "Several QuickBooks purchase tax codes match the 0% tax on this invoice (0.0% Z, Exempt)",
+    );
+    await post(zeroRated, null, {
+      ...configured,
+      settings: { ...configured.settings, taxCodeIds: ["6"] },
+    });
+    expect(
+      created()[0]!.Line[0]!.AccountBasedExpenseLineDetail.TaxCodeRef,
+    ).toEqual({ value: "6" });
+
+    const unmatched = await post(
+      { ...bill, invoiceNumber: "INV-43", vatAmount: 17, grossAmount: 167 },
+      null,
+    ).catch((caught) => caught);
+    expect((unmatched as Error).message).toContain(
+      "No active QuickBooks purchase tax code matches the 11.33% tax",
+    );
+  });
+
+  test("a US company's bill has no tax code and carries the tax as its own line", async () => {
+    quickBooks.state.company = {
+      name: "Sandbox Company US",
+      country: "US",
+      homeCurrency: "USD",
+      multiCurrency: false,
+    };
+    await post({ ...bill, currency: "USD" }, null);
+    const [record] = created();
+    expect(record).not.toHaveProperty("GlobalTaxCalculation");
+    expect(
+      record!.Line.map((line) => [
+        line.Description,
+        line.Amount,
+        line.AccountBasedExpenseLineDetail.TaxCodeRef,
+      ]),
+    ).toEqual([
+      ["Materials", 100, undefined],
+      ["Labour", 50, undefined],
+      ["Tax on invoice INV-42", 30, undefined],
     ]);
   });
 
-  const netTotalLine = [
-    {
-      DetailType: "AccountBasedExpenseLineDetail",
-      Amount: 150,
-      Description: "Invoice INV-42",
-      AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } },
-    },
-  ];
-
-  test("posts the net total as one line when an extracted line has no amount", async () => {
-    connectionConfig = { realmId: "9130" };
-    await postProviderBill(
-      "quickbooks",
-      config,
-      connection,
-      {
-        ...bill,
-        lineItems: [
-          {
-            description: "Labour",
-            quantity: null,
-            unitPrice: null,
-            total: 100,
-          },
-          {
-            description: "Materials",
-            quantity: null,
-            unitPrice: null,
-            total: null,
-          },
-        ],
-      },
-      null,
+  test("a US company's bill adds the tax to net lines without a net amount, and refuses lines it cannot reconcile", async () => {
+    quickBooks.state.company = {
+      name: "Sandbox Company US",
+      country: "US",
+      homeCurrency: "USD",
+      multiCurrency: false,
+    };
+    await post({ ...bill, currency: "USD", netAmount: null }, null);
+    expect(created()[0]!.Line.reduce((sum, line) => sum + line.Amount, 0)).toBe(
+      180,
     );
-    const create = calls.find((call) => call.path === "/v3/company/9130/bill")!;
-    expect((create.json as { Line: unknown[] }).Line).toEqual(netTotalLine);
-  });
 
-  test("posts the net total as one line when the lines do not add up to it", async () => {
-    connectionConfig = { realmId: "9130" };
-    await postProviderBill(
-      "quickbooks",
-      config,
-      connection,
-      {
-        ...bill,
-        lineItems: [
-          {
-            description: "Labour",
-            quantity: null,
-            unitPrice: null,
-            total: 100,
-          },
-          { description: "Materials", quantity: 1, unitPrice: 20, total: 20 },
-        ],
-      },
-      null,
-    );
-    const create = calls.find((call) => call.path === "/v3/company/9130/bill")!;
-    expect((create.json as { Line: unknown[] }).Line).toEqual(netTotalLine);
-  });
-
-  test("refuses a bill without a supplier or a company", async () => {
-    connectionConfig = { realmId: "9130" };
+    const grossLines = {
+      ...bill,
+      invoiceNumber: "INV-43",
+      idempotencyKey: "invoicewise:gross-lines",
+      currency: "USD",
+      netAmount: null,
+      lineItems: [
+        { description: "Materials", quantity: 1, unitPrice: 120, total: 120 },
+        { description: "Labour", quantity: 1, unitPrice: 60, total: 60 },
+      ],
+    };
+    await post(grossLines, null);
     expect(
-      postProviderBill(
-        "quickbooks",
-        config,
-        connection,
-        { ...bill, supplierName: null },
-        null,
-      ),
-    ).rejects.toBeInstanceOf(BillRejectedError);
+      created()
+        .find((record) => record.DocNumber === "INV-43")!
+        .Line.map((line) => line.Amount),
+    ).toEqual([120, 60]);
+
+    const unreconciled = await post(
+      {
+        ...grossLines,
+        invoiceNumber: "INV-44",
+        idempotencyKey: "invoicewise:unreconciled",
+        grossAmount: null,
+      },
+      null,
+    ).catch((caught) => caught);
+    expect(unreconciled).toBeInstanceOf(BillRejectedError);
+    expect(created().some((record) => record.DocNumber === "INV-44")).toBe(
+      false,
+    );
+  });
+
+  test("refuses a foreign currency without multicurrency and posts it in its own currency with it", async () => {
+    const euro = { ...bill, currency: "EUR" };
+    const refused = await post(euro, null).catch((caught) => caught);
+    expect((refused as Error).message).toBe(
+      "The invoice is in EUR but the QuickBooks company works only in GBP; turn on multicurrency in QuickBooks, or record it by hand",
+    );
+    quickBooks.state.company = {
+      ...quickBooks.state.company,
+      multiCurrency: true,
+    };
+    await post(euro, null);
+    expect(created()[0]!.CurrencyRef).toEqual({ value: "EUR" });
+    expect(quickBooks.state.vendors[0]!.CurrencyRef).toEqual({ value: "EUR" });
+    // The vendor is EUR now; a GBP invoice from it cannot share it.
+    const mismatch = await post(
+      { ...bill, invoiceNumber: "INV-44" },
+      null,
+    ).catch((caught) => caught);
+    expect((mismatch as Error).message).toContain("is set up in EUR");
+  });
+
+  test("names what to fix when setup, the vendor or the company is missing", async () => {
+    const unset = await post(bill, null, {
+      connectionId: "conn-1",
+      settings: { expenseAccountId: null, taxCodeIds: [] },
+    }).catch((caught) => caught);
+    expect((unset as Error).message).toBe(
+      "Choose the QuickBooks expense account for bills in Settings → Accounting",
+    );
+
+    quickBooks.state.reservedNames.add("O'Brien Supplies Ltd");
+    const reserved = await post(bill, null).catch((caught) => caught);
+    expect(reserved).toBeInstanceOf(BillRejectedError);
+    expect((reserved as Error).message).toContain(
+      'already uses the name "O\'Brien Supplies Ltd" for a customer or employee',
+    );
+
+    quickBooks.state.reservedNames.clear();
+    quickBooks.state.vendors.push({
+      Id: "v9",
+      DisplayName: "O'Brien Supplies Ltd",
+      Active: false,
+    });
+    const inactive = await post(bill, null).catch((caught) => caught);
+    expect((inactive as Error).message).toContain("is inactive");
+
+    expect(post({ ...bill, supplierName: null }, null)).rejects.toThrow(
+      "QuickBooks needs the supplier name",
+    );
     connectionConfig = {};
-    expect(
-      postProviderBill("quickbooks", config, connection, bill, null),
-    ).rejects.toBeInstanceOf(BillRejectedError);
+    expect(post(bill, null)).rejects.toThrow("has no company");
+    expect(created()).toHaveLength(0);
+  });
+
+  test("cuts a long reference to QuickBooks' 21 characters and keeps it whole in the note", async () => {
+    const long = { ...bill, invoiceNumber: "SUPPLIER-2026-000000012345" };
+    await post(long, null);
+    const [record] = created();
+    expect(record!.DocNumber).toBe("SUPPLIER-2026-0000000");
+    expect(record!.PrivateNote).toContain(
+      "reference SUPPLIER-2026-000000012345",
+    );
+    // A replay still finds it under the cut reference.
+    quickBooks.expireRequestIds();
+    await post(long, null);
+    expect(created()).toHaveLength(1);
+  });
+
+  test("request IDs fit QuickBooks' 50 characters", () => {
+    const key = "invoicewise-update:3f1c2a4e-0000-4000-8000-00000000c001:12";
+    expect(quickBooksRequestId(key).length).toBeLessThanOrEqual(50);
+    expect(quickBooksRequestId(key)).toBe(quickBooksRequestId(key));
+    expect(quickBooksRequestId(bill.idempotencyKey)).toBe(bill.idempotencyKey);
   });
 });
 
@@ -592,10 +733,14 @@ describe("bill update", () => {
   test("QuickBooks updates the bill with its current SyncToken", async () => {
     connectionConfig = { realmId: "9130" };
     const config = getNangoConfig("quickbooks", env);
+    const target = {
+      connectionId: "conn-1",
+      settings: { expenseAccountId: "7", taxCodeIds: [] },
+    };
     const posted = await postProviderBill(
       "quickbooks",
       config,
-      connection,
+      target,
       bill,
       null,
     );
@@ -603,35 +748,34 @@ describe("bill update", () => {
     const updated = await updateProviderBill(
       "quickbooks",
       config,
-      connection,
+      target,
       posted.providerId,
-      corrected,
+      { ...corrected, vatAmount: 30, grossAmount: 180, dueDate: "2026-11-01" },
     );
     expect(updated).toEqual({ providerId: posted.providerId });
-    const write = calls.find(
-      (call) => call.method === "POST" && call.path.endsWith("/bill"),
-    );
-    expect(write?.search.get("requestid")).toBe(corrected.idempotencyKey);
-    expect(write?.json).toMatchObject({
+    const update = calls.find(
+      (call) => call.method === "POST" && call.path === "/v3/company/9130/bill",
+    )!;
+    expect(update.json).toMatchObject({
       Id: posted.providerId,
-      SyncToken: "3",
+      SyncToken: "0",
       sparse: true,
-      DocNumber: "INV-42",
+      DueDate: "2026-11-01",
     });
-    expect(bills.size).toBe(1);
+    expect(update.search.get("requestid")!.length).toBeLessThanOrEqual(50);
+    expect(quickBooks.records("Bill")).toHaveLength(1);
   });
 
   test("QuickBooks without the bill refuses rather than creating one", async () => {
     connectionConfig = { realmId: "9130" };
-    const config = getNangoConfig("quickbooks", env);
     const failure = await updateProviderBill(
       "quickbooks",
-      config,
-      connection,
+      getNangoConfig("quickbooks", env),
+      { connectionId: "conn-1", settings: { expenseAccountId: "7" } },
       "999",
       corrected,
     ).catch((error) => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect(bills.size).toBe(0);
+    expect(failure).toBeInstanceOf(BillRejectedError);
+    expect(quickBooks.records("Bill")).toHaveLength(0);
   });
 });

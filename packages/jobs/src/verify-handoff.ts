@@ -399,6 +399,10 @@ async function main() {
       provider: "xero",
       integrationId: "xero-invoicewise",
       connectionId: "xero-connection",
+      organisationId: "xero-tenant",
+      organisationName: null,
+      sandbox: false,
+      autoPostOnConnect: true,
     });
 
     const invoiceState = async (invoiceId: string) => {

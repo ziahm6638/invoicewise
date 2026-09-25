@@ -131,6 +131,14 @@ export const AUDIT_ACTIONS = {
     category: "integration",
     label: "Disconnected accounting",
   },
+  "accounting.health_check": {
+    category: "integration",
+    label: "Checked the accounting connection",
+  },
+  "accounting.settings_update": {
+    category: "integration",
+    label: "Changed accounting settings",
+  },
   "mailbox.connect": { category: "integration", label: "Connected a mailbox" },
   "mailbox.disconnect": {
     category: "integration",
@@ -277,6 +285,7 @@ const WORKFLOW_TITLE: Record<string, string> = {
   "rerun-judgments": "Answering questions again",
   "post-accounting-draft": "Posting the draft bill",
   "update-accounting-bill": "Updating the posted bill",
+  "attach-accounting-document": "Attaching the document to the posted bill",
   "match-invoice": "Matching to authorization sources",
 };
 

@@ -1008,7 +1008,7 @@ export function validateInvoice(
     blockers.push({
       code: "credit_note_unsupported",
       message:
-        "This is a credit note. Accounting delivery creates draft bills, so credit notes are not posted; record it in the accounting system by hand.",
+        "This is a credit note. QuickBooks receives it as a vendor credit, but Xero delivery creates draft bills only, so record it in Xero by hand.",
     });
   }
 

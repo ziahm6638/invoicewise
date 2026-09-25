@@ -2447,6 +2447,20 @@ export const inbox = pgTable(
     // The processing revision whose accounting intent is scheduled; the
     // workflow key is derived from it.
     accountingRevision: integer("accounting_revision"),
+    // What the provider record is: a bill, or a QuickBooks vendor credit.
+    accountingProviderEntity: text("accounting_provider_entity", {
+      enum: ["bill", "vendor_credit"],
+    }),
+    // The provider company (Xero organisation, QuickBooks realm) the record
+    // was created in; an update or attachment goes only to that company.
+    accountingOrganisationId: text("accounting_organisation_id"),
+    // The source document on the provider record, retried on its own when
+    // the record was created but the upload failed: attached, queued (a
+    // separate upload is scheduled) or failed (with the reason).
+    accountingAttachmentStatus: text("accounting_attachment_status", {
+      enum: ["attached", "queued", "failed"],
+    }),
+    accountingAttachmentError: text("accounting_attachment_error"),
     // Incremented in the same transaction that persists a processing result
     // and schedules its deliveries, so (id, revision) names one accepted
     // invoice revision across worker retries and replays.
@@ -2625,6 +2639,37 @@ export const accountingConnections = pgTable(
       .array()
       .default(sql`ARRAY['draft_bills']::text[]`)
       .notNull(),
+    // The organisation the connection reaches (Xero tenant, QuickBooks
+    // realm), read through the proxy at connect time, so an admin can check
+    // it is the intended company. A reconnect to another company resets the
+    // settings and the automatic-posting opt-in below.
+    organisationId: text("organisation_id"),
+    organisationName: text("organisation_name"),
+    // Whether the Nango integration reaches the provider's sandbox.
+    sandbox: boolean("sandbox").default(false).notNull(),
+    // Provider-specific posting choices (QuickBooks: expense account, tax
+    // codes); see AccountingSettings in packages/jobs.
+    settings: jsonb("settings")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    // The workspace's opt-in to creating provider records automatically;
+    // null means nothing is posted on processing. Xero drafts are opted in
+    // at connect; QuickBooks bills are open and unpaid, so an admin opts in.
+    autoPostEnabledAt: timestamp("auto_post_enabled_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    autoPostEnabledBy: uuid("auto_post_enabled_by"),
+    // The last live health check through Nango.
+    healthStatus: text("health_status", {
+      enum: ["ok", "reconnect", "unavailable"],
+    }),
+    healthError: text("health_error"),
+    healthCheckedAt: timestamp("health_checked_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     connectedAt: timestamp("connected_at", {
       withTimezone: true,
       mode: "string",
@@ -2656,6 +2701,11 @@ export const accountingConnections = pgTable(
       foreignColumns: [teams.id],
       name: "accounting_connections_team_id_fkey",
     }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.autoPostEnabledBy],
+      foreignColumns: [users.id],
+      name: "accounting_connections_auto_post_enabled_by_fkey",
+    }).onDelete("set null"),
   ],
 );
 

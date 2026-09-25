@@ -66,7 +66,7 @@ describe("invoice validation panel", () => {
       />,
     );
     expect(credit).toContain("Credit note");
-    expect(credit).toContain("credit notes are not posted");
+    expect(credit).toContain("QuickBooks receives it as a vendor credit");
   });
 
   test("an invoice processed before validation existed says so", () => {

@@ -55,6 +55,13 @@ export async function getActiveAccountingConnectionByProvider(
   return connection;
 }
 
+/**
+ * Stores a verified connection. Reconnecting to the same organisation keeps
+ * the workspace's settings and its automatic-posting opt-in; a connection to
+ * another organisation starts over, so nothing posts to a company the admin
+ * has not set up and opted in for. `autoPostOnConnect` opts in at connect
+ * (Xero drafts), otherwise an admin opts in later.
+ */
 export async function upsertAccountingConnection(
   db: Database,
   input: {
@@ -62,23 +69,126 @@ export async function upsertAccountingConnection(
     provider: AccountingProvider;
     integrationId: string;
     connectionId: string;
+    organisationId: string | null;
+    organisationName: string | null;
+    sandbox: boolean;
+    autoPostOnConnect: boolean;
   },
 ) {
   const now = new Date().toISOString();
+  const { autoPostOnConnect, ...values } = input;
+  const capabilities =
+    input.provider === "xero"
+      ? ["draft_bills"]
+      : ["open_bills", "vendor_credits"];
+  const sameOrganisation = sql`${accountingConnections.organisationId} is not distinct from excluded.organisation_id`;
   const [connection] = await db
     .insert(accountingConnections)
-    .values(input)
+    .values({
+      ...values,
+      capabilities,
+      autoPostEnabledAt: autoPostOnConnect ? now : null,
+      healthStatus: "ok",
+      healthCheckedAt: now,
+    })
     .onConflictDoUpdate({
       target: [accountingConnections.teamId, accountingConnections.provider],
       set: {
         integrationId: input.integrationId,
         connectionId: input.connectionId,
-        capabilities: ["draft_bills"],
+        capabilities,
+        organisationId: input.organisationId,
+        organisationName: input.organisationName,
+        sandbox: input.sandbox,
+        settings: sql`case when ${sameOrganisation} then ${accountingConnections.settings} else '{}'::jsonb end`,
+        autoPostEnabledAt: sql`case when ${sameOrganisation} and ${accountingConnections.autoPostEnabledAt} is not null then ${accountingConnections.autoPostEnabledAt} else ${autoPostOnConnect ? now : null}::timestamptz end`,
+        autoPostEnabledBy: sql`case when ${sameOrganisation} then ${accountingConnections.autoPostEnabledBy} else null end`,
+        healthStatus: "ok",
+        healthError: null,
+        healthCheckedAt: now,
         connectedAt: now,
         disconnectedAt: null,
         updatedAt: now,
       },
     })
+    .returning();
+  return connection;
+}
+
+/**
+ * An admin's posting choices for the active connection. `autoPost` records
+ * who opted in to automatic creation (kept while it stays on) or clears it.
+ */
+export async function updateAccountingConnectionSettings(
+  db: Database,
+  input: {
+    teamId: string;
+    provider: AccountingProvider;
+    settings: Record<string, unknown>;
+    autoPost: { enabledBy: string | null } | null;
+  },
+) {
+  const now = new Date().toISOString();
+  const [connection] = await db
+    .update(accountingConnections)
+    .set({
+      settings: input.settings,
+      autoPostEnabledAt: input.autoPost
+        ? sql`coalesce(${accountingConnections.autoPostEnabledAt}, ${now}::timestamptz)`
+        : null,
+      autoPostEnabledBy: input.autoPost
+        ? sql`case when ${accountingConnections.autoPostEnabledAt} is null then ${input.autoPost.enabledBy}::uuid else ${accountingConnections.autoPostEnabledBy} end`
+        : null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(accountingConnections.teamId, input.teamId),
+        eq(accountingConnections.provider, input.provider),
+        isNull(accountingConnections.disconnectedAt),
+      ),
+    )
+    .returning();
+  return connection;
+}
+
+/** The outcome of a live health check of the active connection. */
+export async function recordAccountingConnectionHealth(
+  db: Database,
+  input: {
+    teamId: string;
+    provider: AccountingProvider;
+    status: "ok" | "reconnect" | "unavailable";
+    error: string | null;
+    /** Recorded only on a connection made before companies were recorded. */
+    organisationId?: string | null;
+    organisationName?: string | null;
+  },
+) {
+  const now = new Date().toISOString();
+  const [connection] = await db
+    .update(accountingConnections)
+    .set({
+      healthStatus: input.status,
+      healthError: input.error,
+      healthCheckedAt: now,
+      ...(input.organisationId
+        ? {
+            organisationId: sql`coalesce(${accountingConnections.organisationId}, ${input.organisationId})`,
+          }
+        : {}),
+      ...(input.organisationName
+        ? { organisationName: input.organisationName }
+        : {}),
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(accountingConnections.teamId, input.teamId),
+        eq(accountingConnections.provider, input.provider),
+        isNull(accountingConnections.disconnectedAt),
+      ),
+    )
     .returning();
   return connection;
 }
@@ -123,6 +233,9 @@ export async function getAccountingPostInvoice(
       accountingProviderId: inbox.accountingProviderId,
       accountingIdempotencyKey: inbox.accountingIdempotencyKey,
       accountingPostReleased: inbox.accountingPostReleased,
+      accountingProviderEntity: inbox.accountingProviderEntity,
+      accountingOrganisationId: inbox.accountingOrganisationId,
+      accountingAttachmentStatus: inbox.accountingAttachmentStatus,
     })
     .from(inbox)
     .where(and(eq(inbox.id, input.invoiceId), eq(inbox.teamId, input.teamId)))
@@ -176,8 +289,12 @@ export async function recordAccountingPostSuccess(
     teamId: string;
     provider: AccountingProvider;
     providerId: string;
+    entity: "bill" | "vendor_credit";
+    /** The company the record was created in. */
+    organisationId: string | null;
     idempotencyKey: string;
     duplicate: boolean;
+    attachment: AccountingAttachmentOutcome;
   },
 ) {
   const [invoice] = await db
@@ -186,12 +303,47 @@ export async function recordAccountingPostSuccess(
       accountingProvider: input.provider,
       accountingPostStatus: input.duplicate ? "already_posted" : "posted",
       accountingProviderId: input.providerId,
+      accountingProviderEntity: input.entity,
+      accountingOrganisationId: input.organisationId,
+      accountingAttachmentStatus: input.attachment.status,
+      accountingAttachmentError: input.attachment.error,
       accountingIdempotencyKey: input.idempotencyKey,
       accountingPostError: null,
       accountingPostRetryable: null,
       accountingPostedAt: new Date().toISOString(),
     })
     .where(and(eq(inbox.id, input.invoiceId), eq(inbox.teamId, input.teamId)))
+    .returning({ id: inbox.id });
+  return invoice;
+}
+
+/**
+ * The source document on a posted record: attached, queued for its own
+ * upload retry, failed (with the reason), or null when there is none.
+ */
+export type AccountingAttachmentOutcome = {
+  status: "attached" | "queued" | "failed" | null;
+  error: string | null;
+};
+
+/** Records the outcome of a separately retried attachment upload. */
+export async function recordAccountingAttachment(
+  db: Executor,
+  input: { invoiceId: string; teamId: string } & AccountingAttachmentOutcome,
+) {
+  const [invoice] = await db
+    .update(inbox)
+    .set({
+      accountingAttachmentStatus: input.status,
+      accountingAttachmentError: input.error,
+    })
+    .where(
+      and(
+        eq(inbox.id, input.invoiceId),
+        eq(inbox.teamId, input.teamId),
+        isNotNull(inbox.accountingProviderId),
+      ),
+    )
     .returning({ id: inbox.id });
   return invoice;
 }
@@ -343,17 +495,25 @@ export async function recordAccountingPostQueued(
   return invoice;
 }
 
-/** Settles a queued post whose connection or invoice is gone, without posting. */
+/**
+ * Settles a queued post without posting: its connection or invoice is gone,
+ * or automatic posting was switched off (retryable by a person).
+ */
 export async function recordAccountingPostCancelled(
   db: Database,
-  input: { invoiceId: string; teamId: string; reason: string },
+  input: {
+    invoiceId: string;
+    teamId: string;
+    reason: string;
+    retryable?: boolean;
+  },
 ) {
   const [invoice] = await db
     .update(inbox)
     .set({
       accountingPostStatus: "cancelled",
       accountingPostError: input.reason,
-      accountingPostRetryable: false,
+      accountingPostRetryable: input.retryable ?? false,
     })
     .where(
       and(
@@ -421,6 +581,9 @@ export async function getInvoiceAccountingStatus(
       revision: inbox.accountingRevision,
       postedAt: inbox.accountingPostedAt,
       idempotencyKey: inbox.accountingIdempotencyKey,
+      entity: inbox.accountingProviderEntity,
+      attachmentStatus: inbox.accountingAttachmentStatus,
+      attachmentError: inbox.accountingAttachmentError,
     })
     .from(inbox)
     .where(and(eq(inbox.id, input.invoiceId), eq(inbox.teamId, input.teamId)))

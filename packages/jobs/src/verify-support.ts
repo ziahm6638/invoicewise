@@ -170,3 +170,28 @@ export const startTypeSafeStub = () =>
       });
     },
   });
+
+/**
+ * The Nango and Xero answers a connect-time check reads, for the loopback
+ * Nango stubs: the integration (a production app) and the organisation the
+ * connection reaches. Returns null for any other request.
+ */
+export const xeroConnectStub = (request: Request, url: URL) => {
+  if (request.method === "GET" && url.pathname.startsWith("/integrations/")) {
+    return Response.json({
+      data: {
+        unique_key: decodeURIComponent(url.pathname.split("/")[2]!),
+        provider: "xero",
+      },
+    });
+  }
+  if (
+    request.method === "GET" &&
+    url.pathname === "/proxy/api.xro/2.0/Organisation"
+  ) {
+    return Response.json({
+      Organisations: [{ Name: "Verification Organisation" }],
+    });
+  }
+  return null;
+};
