@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import type { Invoice } from "@api/effect/public-api";
 import { Tool } from "@effect/ai";
 import { Context, Effect, Layer } from "effect";
-import { handleMcpHttp, mcpToolList } from "./http";
 import {
   type ApiFetcher,
   InvoiceMcpClient,
@@ -10,6 +9,7 @@ import {
   InvoiceMcpToolkit,
   makeInvoiceMcpClient,
 } from "./invoice-tools";
+import { connectMcpStdio } from "./stdio-client";
 
 const invoiceId = "4a80fbd7-898f-4896-af62-f4b21621988f";
 
@@ -88,37 +88,12 @@ const runTool = (fetcher: ApiFetcher, name: string, input: unknown) =>
     ),
   );
 
-const rpc = (fetcher: ApiFetcher, body: unknown, method = "POST") =>
-  handleMcpHttp(
-    new Request("http://api.test/v1/mcp", {
-      method,
-      headers: { "content-type": "application/json" },
-      body: method === "POST" ? JSON.stringify(body) : undefined,
-    }),
-    fetcher,
-  );
-
 describe("InvoiceWise MCP tools", () => {
-  test("every tool is read-only and takes no workspace argument", () => {
+  test("every tool is read-only", () => {
     for (const tool of Object.values(InvoiceMcpToolkit.tools)) {
       expect(Context.get(tool.annotations, Tool.Readonly)).toBe(true);
       expect(Context.get(tool.annotations, Tool.Destructive)).toBe(false);
     }
-    for (const tool of mcpToolList()) {
-      const properties = Object.keys(
-        (tool.inputSchema as { properties?: object }).properties ?? {},
-      );
-      expect(properties.some((name) => /team|workspace/i.test(name))).toBe(
-        false,
-      );
-      expect(tool.annotations.readOnlyHint).toBe(true);
-    }
-    expect(mcpToolList().map((tool) => tool.name)).toEqual([
-      "list_invoices",
-      "get_invoice",
-      "get_invoice_judgments",
-      "get_invoice_delivery",
-    ]);
   });
 
   test("lists through the versioned API with the given filters", async () => {
@@ -156,130 +131,108 @@ describe("InvoiceWise MCP tools", () => {
   });
 });
 
-describe("InvoiceWise MCP over HTTP", () => {
-  test("initializes with the requested protocol version and tools capability", async () => {
-    const response = await rpc(fakeApi({}).fetcher, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-03-26",
-        capabilities: {},
-        clientInfo: { name: "test", version: "1" },
+describe("InvoiceWise stdio MCP server", () => {
+  const withServer = async (
+    run: (
+      client: Awaited<ReturnType<typeof connectMcpStdio>>["client"],
+      seen: { path: string; authorization: string | null }[],
+    ) => Promise<void>,
+  ) => {
+    const seen: { path: string; authorization: string | null }[] = [];
+    const api = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (request) => {
+        const url = new URL(request.url);
+        seen.push({
+          path: url.pathname + url.search,
+          authorization: request.headers.get("authorization"),
+        });
+        if (url.pathname === `/v1/invoices/${invoiceId}`) {
+          return Response.json(invoice);
+        }
+        return Response.json(
+          { error: { code: "not_found", message: "Invoice not found" } },
+          { status: 404 },
+        );
       },
     });
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      result: { protocolVersion: string; capabilities: object };
-    };
-    expect(body.result.protocolVersion).toBe("2025-03-26");
-    expect(body.result.capabilities).toEqual({
-      tools: { listChanged: false },
+    const { client } = await connectMcpStdio({
+      apiUrl: `http://127.0.0.1:${api.port}`,
+      apiKey: "mid_test",
     });
-  });
+    try {
+      await run(client, seen);
+    } finally {
+      await client.close();
+      api.stop(true);
+    }
+  };
 
-  test("acknowledges notifications without a body", async () => {
-    const response = await rpc(fakeApi({}).fetcher, {
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-    });
-    expect(response.status).toBe(202);
-    expect(await response.text()).toBe("");
-  });
+  test(
+    "lists read-only tools with schemas that take no workspace",
+    () =>
+      withServer(async (client) => {
+        const response = await client.request("tools/list");
+        const tools = response.result.tools as {
+          name: string;
+          inputSchema: { type: string; properties?: object };
+          annotations: { readOnlyHint: boolean; destructiveHint: boolean };
+        }[];
+        expect(tools.map((tool) => tool.name)).toEqual([
+          "list_invoices",
+          "get_invoice",
+          "get_invoice_judgments",
+          "get_invoice_delivery",
+        ]);
+        for (const tool of tools) {
+          expect(tool.inputSchema.type).toBe("object");
+          expect(tool.annotations.readOnlyHint).toBe(true);
+          expect(tool.annotations.destructiveHint).toBe(false);
+          expect(
+            Object.keys(tool.inputSchema.properties ?? {}).some((name) =>
+              /team|workspace/i.test(name),
+            ),
+          ).toBe(false);
+        }
+      }),
+    30_000,
+  );
 
-  test("lists tools with input and output schemas", async () => {
-    const response = await rpc(fakeApi({}).fetcher, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/list",
-    });
-    const body = (await response.json()) as {
-      result: { tools: { name: string; inputSchema: { type: string } }[] };
-    };
-    expect(body.result.tools).toHaveLength(4);
-    expect(body.result.tools[0]?.inputSchema.type).toBe("object");
-  });
+  test(
+    "reads through /v1 with the configured key and reports refusals",
+    () =>
+      withServer(async (client, seen) => {
+        const found = await client.request("tools/call", {
+          name: "get_invoice",
+          arguments: { id: invoiceId },
+        });
+        expect(found.result.isError).toBe(false);
+        expect(found.result.structuredContent.id).toBe(invoiceId);
+        expect(seen).toEqual([
+          {
+            path: `/v1/invoices/${invoiceId}`,
+            authorization: "Bearer mid_test",
+          },
+        ]);
 
-  test("calls a tool and returns structured content", async () => {
-    const api = fakeApi({ [`/v1/invoices/${invoiceId}`]: [200, invoice] });
-    const response = await rpc(api.fetcher, {
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: { name: "get_invoice", arguments: { id: invoiceId } },
-    });
-    const body = (await response.json()) as {
-      result: { isError: boolean; structuredContent: { id: string } };
-    };
-    expect(body.result.isError).toBe(false);
-    expect(body.result.structuredContent.id).toBe(invoiceId);
-  });
+        const missing = await client.request("tools/call", {
+          name: "get_invoice_delivery",
+          arguments: { id: invoiceId },
+        });
+        expect(missing.result.isError).toBe(true);
+        expect(missing.result.structuredContent).toMatchObject({
+          status: 404,
+          code: "not_found",
+        });
 
-  test("a refused call is a tool error carrying the API's code", async () => {
-    const response = await rpc(fakeApi({}).fetcher, {
-      jsonrpc: "2.0",
-      id: 4,
-      method: "tools/call",
-      params: { name: "get_invoice", arguments: { id: invoiceId } },
-    });
-    const body = (await response.json()) as {
-      result: {
-        isError: boolean;
-        structuredContent: { error: { status: number; code: string } };
-      };
-    };
-    expect(body.result.isError).toBe(true);
-    expect(body.result.structuredContent.error).toMatchObject({
-      status: 404,
-      code: "not_found",
-    });
-  });
-
-  test("invalid arguments are reported without calling the API", async () => {
-    const api = fakeApi({});
-    const response = await rpc(api.fetcher, {
-      jsonrpc: "2.0",
-      id: 5,
-      method: "tools/call",
-      params: { name: "get_invoice", arguments: { id: "not-a-uuid" } },
-    });
-    const body = (await response.json()) as {
-      result: { isError: boolean; structuredContent: { error: object } };
-    };
-    expect(body.result.isError).toBe(true);
-    expect(body.result.structuredContent.error).toMatchObject({
-      code: "invalid_arguments",
-    });
-    expect(api.calls).toEqual([]);
-  });
-
-  test("an unknown tool or method is a JSON-RPC error", async () => {
-    const unknownTool = (await (
-      await rpc(fakeApi({}).fetcher, {
-        jsonrpc: "2.0",
-        id: 6,
-        method: "tools/call",
-        params: { name: "delete_invoice", arguments: {} },
-      })
-    ).json()) as { error: { code: number } };
-    expect(unknownTool.error.code).toBe(-32602);
-    const unknownMethod = (await (
-      await rpc(fakeApi({}).fetcher, {
-        jsonrpc: "2.0",
-        id: 7,
-        method: "resources/list",
-      })
-    ).json()) as { error: { code: number } };
-    expect(unknownMethod.error.code).toBe(-32601);
-  });
-
-  test("refuses a server stream and malformed JSON", async () => {
-    const get = await rpc(fakeApi({}).fetcher, null, "GET");
-    expect(get.status).toBe(405);
-    const malformed = await handleMcpHttp(
-      new Request("http://api.test/v1/mcp", { method: "POST", body: "{" }),
-      fakeApi({}).fetcher,
-    );
-    expect(malformed.status).toBe(400);
-  });
+        const invalid = await client.request("tools/call", {
+          name: "get_invoice",
+          arguments: { id: "not-a-uuid" },
+        });
+        expect(invalid.result.isError).toBe(true);
+        expect(seen).toHaveLength(2);
+      }),
+    30_000,
+  );
 });

@@ -12,7 +12,7 @@ import { Config, Context, Effect, Layer, Redacted, Schema } from "effect";
  * (`/v1`) with the caller's own credential, so authentication, scopes,
  * rate limits and workspace isolation are exactly REST's. No tool takes a
  * workspace argument and none changes anything. Served over stdio
- * (`server.ts`) and over streamable HTTP at `/v1/mcp` (`http.ts`).
+ * (`server.ts`).
  */
 
 export class InvoiceMcpError extends Schema.TaggedError<InvoiceMcpError>()(

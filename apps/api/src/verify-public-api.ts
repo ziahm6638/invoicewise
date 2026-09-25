@@ -22,6 +22,7 @@ import { deleteApiKey, upsertApiKey } from "@invoicewise/db/queries";
 import { teams, users, usersOnTeam } from "@invoicewise/db/schema";
 import { startTypeSafeStub } from "@invoicewise/jobs/verify-support";
 import { inArray } from "drizzle-orm";
+import { connectMcpStdio } from "./mcp/stdio-client";
 
 const check = (condition: unknown, message: string) => {
   if (!condition) throw new Error(`Public API proof failed: ${message}`);
@@ -138,17 +139,22 @@ const minimalPdf = (text: string) => {
   return new TextEncoder().encode(pdf);
 };
 
-const mcpCall = (key: string, id: string) =>
-  call("/v1/mcp", key, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name: "get_invoice", arguments: { id } },
-    }),
-  });
+/** One `get_invoice` call through a fresh stdio MCP server with `key`. */
+const mcpCall = async (key: string, id: string) => {
+  const { client } = await connectMcpStdio({ apiUrl, apiKey: key });
+  try {
+    const response = await client.request("tools/call", {
+      name: "get_invoice",
+      arguments: { id },
+    });
+    return response.result as {
+      isError: boolean;
+      structuredContent: Json;
+    };
+  } finally {
+    await client.close();
+  }
+};
 
 const workspace = async (label: string, role: "owner" | "member") => {
   const [team] = await db
@@ -261,12 +267,11 @@ try {
   check(foreignRetry.status === 404, `foreign retry: ${foreignRetry.status}`);
   const foreignMcp = await mcpCall(keyB.key, invoiceId);
   check(
-    foreignMcp.body.result?.isError === true &&
-      foreignMcp.body.result.structuredContent?.error?.status === 404,
-    `foreign MCP read: ${foreignMcp.text}`,
+    foreignMcp.isError === true && foreignMcp.structuredContent.status === 404,
+    `foreign MCP read: ${JSON.stringify(foreignMcp)}`,
   );
   const ownMcp = await mcpCall(readOnlyA.key, invoiceId);
-  check(ownMcp.body.result?.isError === false, "read-only key reads via MCP");
+  check(ownMcp.isError === false, "read-only key reads via MCP");
 
   // Scopes: a read-only key cannot submit or retry.
   const readOnlySubmit = await submit(readOnlyA.key, "ro.pdf", "read-only");
@@ -310,7 +315,10 @@ try {
   const afterRevoke = await call("/v1/invoices?limit=1", keyA.key);
   check(afterRevoke.status === 401, `revoked key: ${afterRevoke.status}`);
   const revokedMcp = await mcpCall(keyA.key, invoiceId);
-  check(revokedMcp.status === 401, `revoked key MCP: ${revokedMcp.status}`);
+  check(
+    revokedMcp.isError === true && revokedMcp.structuredContent.status === 401,
+    `revoked key MCP: ${JSON.stringify(revokedMcp)}`,
+  );
   const replacement = await call("/v1/invoices?limit=1", rotated.key);
   check(replacement.status === 200, "replacement key works at once");
 
@@ -332,14 +340,14 @@ try {
           foreignRead: foreign.status,
           foreignRetry: foreignRetry.status,
           foreignExportExcludes: true,
-          foreignMcp: foreignMcp.body.result.structuredContent.error.status,
+          foreignMcp: foreignMcp.structuredContent.status,
         },
         scopes: { readOnlySubmit: readOnlySubmit.status, readOnlyMcp: "ok" },
         paging: { pages: seen.length, distinct: new Set(seen).size },
         export: { hostileFileName: "'-2-3.pdf" },
         keys: {
           revokedRest: afterRevoke.status,
-          revokedMcp: revokedMcp.status,
+          revokedMcp: revokedMcp.structuredContent.status,
           replacement: replacement.status,
           loggedAnywhere: false,
         },

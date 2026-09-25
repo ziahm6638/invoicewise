@@ -4,7 +4,7 @@ The versioned API is how a system sends InvoiceWise documents and takes back
 structured results: submit a document, poll until it is read, retrieve the
 invoice, its judgments and delivery, retry deliberately, export CSV, and ask
 an MCP client about it. Everything below runs with nothing but an API key and
-`curl`.
+`curl`, except the MCP server, which runs locally with Bun.
 
 - Base URL: `https://api.invoicewise.uk` (staging:
   `https://iw-staging-api.zzapp.uk`)
@@ -228,10 +228,10 @@ management, signatures, rotation and redelivery are documented in
 
 ## MCP
 
-InvoiceWise is also a remote [Model Context Protocol](https://modelcontextprotocol.io)
-server at `$INVOICEWISE_API_URL/v1/mcp` (streamable HTTP). It authenticates
-with the same bearer key and exposes four **read-only** tools; there are no
-tools that change anything.
+InvoiceWise ships a read-only [Model Context Protocol](https://modelcontextprotocol.io)
+server that your MCP client starts locally over stdio. It authenticates with
+your API key and exposes four **read-only** tools; there are no tools that
+change anything.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
@@ -241,68 +241,63 @@ tools that change anything.
 | `get_invoice_delivery` | `id` | Webhook and accounting delivery |
 
 Every tool call is a `GET` to `/v1` with your key, so it sees exactly what
-REST shows that key: the same workspace, scopes (`inbox.read`), rate limit and
+REST shows that key: the same workspace, scope (`inbox.read`), rate limit and
 `404` for another workspace's invoice. A refused call returns a tool result
-with `isError: true` and `structuredContent.error` holding the API's `status`,
-`code` and `message`; a malformed argument is `invalid_arguments`.
+with `isError: true` whose `structuredContent` holds the API's `status`,
+`code` and `message` (an unreachable API is `503 api_unreachable`); a
+malformed argument is a tool result with `isError: true` describing the
+argument, and no request is sent.
+
+**Install** (needs [Bun](https://bun.sh/) 1.3.13 and git):
+
+```bash
+git clone https://github.com/ziahm6638/invoicewise.git
+cd invoicewise
+bun install --frozen-lockfile
+export INVOICEWISE_MCP_SERVER="$PWD/apps/api/src/mcp/server.ts"
+```
+
+The server reads `INVOICEWISE_API_KEY` and `INVOICEWISE_API_URL` (default
+`https://api.invoicewise.uk`) from its environment; put them in the client's
+configuration, not in a file in the checkout.
 
 **Claude Code:**
 
 ```bash
-claude mcp add --transport http invoicewise "$INVOICEWISE_API_URL/v1/mcp" \
-  --header "Authorization: Bearer $INVOICEWISE_API_KEY"
+claude mcp add invoicewise \
+  --env INVOICEWISE_API_URL="$INVOICEWISE_API_URL" \
+  --env INVOICEWISE_API_KEY="$INVOICEWISE_API_KEY" \
+  -- bun --no-env-file "$INVOICEWISE_MCP_SERVER"
 ```
 
-**Clients configured with JSON** (Cursor, VS Code and others that support
-streamable HTTP servers):
+**Clients configured with JSON** (Claude Desktop, Cursor, VS Code and
+others), with the absolute path of `apps/api/src/mcp/server.ts`:
 
 ```json
 {
   "mcpServers": {
     "invoicewise": {
-      "type": "http",
-      "url": "https://api.invoicewise.uk/v1/mcp",
-      "headers": { "Authorization": "Bearer mid_..." }
+      "command": "bun",
+      "args": ["--no-env-file", "/path/to/invoicewise/apps/api/src/mcp/server.ts"],
+      "env": {
+        "INVOICEWISE_API_URL": "https://api.invoicewise.uk",
+        "INVOICEWISE_API_KEY": "mid_..."
+      }
     }
   }
 }
 ```
 
-**Clients that only start local (stdio) servers**, such as Claude Desktop,
-can bridge with the open-source `mcp-remote` package (Node.js 18+):
-
-```json
-{
-  "mcpServers": {
-    "invoicewise": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "https://api.invoicewise.uk/v1/mcp",
-               "--header", "Authorization:${INVOICEWISE_AUTH}"],
-      "env": { "INVOICEWISE_AUTH": "Bearer mid_..." }
-    }
-  }
-}
-```
-
-**Check it with curl** before configuring a client:
+**Check it from a shell** before configuring a client; the server speaks
+newline-delimited JSON-RPC on stdin and stdout:
 
 ```bash
-mcp() {
-  curl -sS -H "Authorization: Bearer $INVOICEWISE_API_KEY" \
-    -H "Content-Type: application/json" \
-    -H "Accept: application/json, text/event-stream" \
-    -d "$1" "$INVOICEWISE_API_URL/v1/mcp"
-}
-mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
-mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
-mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_invoices","arguments":{"limit":5}}}'
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"shell","version":"1"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_invoices","arguments":{"limit":5}}}' \
+  | (cat; sleep 5) | bun --no-env-file "$INVOICEWISE_MCP_SERVER"
 ```
-
-The server is stateless: it answers each POST with JSON, issues no session
-id and offers no server-initiated stream (`GET` is `405`). Protocol versions
-`2025-06-18`, `2025-03-26` and `2024-11-05` are accepted. A developer
-with the repository can instead run the same tools as a local stdio server
-(`cd apps/api && INVOICEWISE_API_URL=… INVOICEWISE_API_KEY=… bun run mcp`).
 
 ## Errors
 
@@ -330,8 +325,8 @@ be added within a status.
 ## Rate limits
 
 `/v1` allows 300 requests per 10 minutes for one person's credentials in one
-workspace (all of their keys and tokens together; an MCP tool call counts as
-two requests). Every response carries `RateLimit-Policy`, `RateLimit-Limit`,
+workspace (all of their keys and tokens together, MCP tool calls included).
+Every response carries `RateLimit-Policy`, `RateLimit-Limit`,
 `RateLimit-Remaining` and `RateLimit-Reset`; over the limit the answer is
 `429 rate_limited` with `Retry-After` seconds. Separately, submissions are
 refused with `429 queue_full` while the processing backlog is at its bound
@@ -373,15 +368,16 @@ history. The stdio server defaults to the production URL.
 
 ## Smoke check
 
-`apps/api/src/public-api-smoke.ts` is a dependency-free script that follows
-this page with only a URL and a key: it checks the contract and
+`apps/api/src/public-api-smoke.ts` is a script, run from the checkout of the
+[MCP install](#mcp), that follows this page with only a URL and a key: it checks the contract and
 authentication, submits a freshly generated invoice PDF with an
 idempotency key (and replays it, and reuses the key for other bytes), polls
 until it is processed, reads it, its judgments, delivery and document (and
 checks the signed link serves the submitted bytes), pages the list, reads
 both exports, exercises the retry contract and queries the invoice through
-`/v1/mcp`. With `SMOKE_WEBHOOK_URL` set to an HTTPS receiver you control
-(the key then needs an owner or admin), it also registers a webhook, waits
+the stdio MCP server (and checks an unknown key is refused there too). With
+`SMOKE_WEBHOOK_URL` set to an HTTPS receiver you control (the key then needs
+an owner or admin), it also registers a webhook, waits
 for its `invoice.processed` delivery and disables it again.
 
 ```bash

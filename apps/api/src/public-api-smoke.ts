@@ -1,8 +1,8 @@
 /**
  * Clean-room integration smoke check for the public API (docs/api.md).
  *
- * It uses nothing but the documented HTTP API: no repository imports, no
- * database access and no manual edits. Give it an API key of a throwaway
+ * It uses nothing but the documented HTTP API and the stdio MCP server: no
+ * database access, no repository state and no manual edits. Give it an API key of a throwaway
  * workspace (Settings → Developer, scopes `inbox.read` and `inbox.write`):
  *
  *   INVOICEWISE_API_URL=https://iw-staging-api.zzapp.uk \
@@ -12,12 +12,14 @@
  * It submits a freshly generated invoice PDF (with an idempotency key, then
  * replays it), polls until it is processed, reads it, its judgments,
  * delivery and document, pages through the list and both CSV exports,
- * exercises the retry contract and queries it through the remote MCP
- * endpoint. Set SMOKE_WEBHOOK_URL to an HTTPS receiver you control (the key
+ * exercises the retry contract and queries it through the stdio MCP
+ * server (`bun run mcp`). Set SMOKE_WEBHOOK_URL to an HTTPS receiver you control (the key
  * then needs an owner or admin) to also register a webhook and wait for its
  * `invoice.processed` delivery; the endpoint is disabled again at the end.
  * Prints one JSON summary and exits non-zero on the first failed check.
  */
+
+import { connectMcpStdio } from "./mcp/stdio-client";
 
 const apiUrl = (process.env.INVOICEWISE_API_URL ?? "").replace(/\/+$/, "");
 const apiKey = process.env.INVOICEWISE_API_KEY ?? "";
@@ -186,18 +188,6 @@ const parseCsv = (text: string) =>
       cells.push(cell);
       return cells;
     });
-
-const mcp = (message: Json, key: string | null = apiKey) =>
-  call("/v1/mcp", {
-    method: "POST",
-    key,
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "mcp-protocol-version": "2025-06-18",
-    },
-    body: JSON.stringify(message),
-  });
 
 async function main() {
   const summary: Json = { apiUrl };
@@ -370,56 +360,55 @@ async function main() {
       staleRevision: 409,
     };
 
-    // Remote MCP with the same key.
-    const init = await mcp({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-06-18",
-        capabilities: {},
-        clientInfo: { name: "invoicewise-smoke", version: "1" },
-      },
+    // The stdio MCP server, started as an MCP client would, with the same key.
+    const { client, initialized } = await connectMcpStdio({ apiUrl, apiKey });
+    try {
+      const tools = await client.request("tools/list");
+      const toolNames = (tools.result?.tools ?? []).map(
+        (tool: Json) => tool.name,
+      );
+      check(
+        toolNames.includes("get_invoice") &&
+          tools.result.tools.every(
+            (tool: Json) => tool.annotations?.readOnlyHint === true,
+          ),
+        "MCP tools are read-only",
+      );
+      const read = await client.request("tools/call", {
+        name: "get_invoice",
+        arguments: { id },
+      });
+      check(
+        read.result?.isError === false &&
+          read.result.structuredContent?.id === id,
+        `MCP get_invoice: ${JSON.stringify(read).slice(0, 300)}`,
+      );
+      summary.mcp = {
+        protocolVersion: initialized.result?.protocolVersion,
+        tools: toolNames,
+        getInvoice: "ok",
+      };
+    } finally {
+      await client.close();
+    }
+    const unknown = await connectMcpStdio({
+      apiUrl,
+      apiKey: `mid_${"0".repeat(64)}`,
     });
-    expectStatus(init, 200, "MCP initialize");
-    const initialized = await mcp({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-    });
-    expectStatus(initialized, 202, "MCP initialized notification");
-    const tools = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    const toolNames = (tools.body.result?.tools ?? []).map(
-      (tool: Json) => tool.name,
-    );
-    check(
-      toolNames.includes("get_invoice") &&
-        tools.body.result.tools.every(
-          (tool: Json) => tool.annotations?.readOnlyHint === true,
-        ),
-      "MCP tools are read-only",
-    );
-    const read = await mcp({
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: { name: "get_invoice", arguments: { id } },
-    });
-    check(
-      read.body.result?.isError === false &&
-        read.body.result.structuredContent?.id === id,
-      `MCP get_invoice: ${read.text.slice(0, 300)}`,
-    );
-    const mcpAnonymous = await mcp(
-      { jsonrpc: "2.0", id: 4, method: "tools/list" },
-      null,
-    );
-    expectStatus(mcpAnonymous, 401, "MCP without a key");
-    summary.mcp = {
-      protocolVersion: init.body.result?.protocolVersion,
-      tools: toolNames,
-      getInvoice: "ok",
-      anonymous: 401,
-    };
+    try {
+      const refused = await unknown.client.request("tools/call", {
+        name: "get_invoice",
+        arguments: { id },
+      });
+      check(
+        refused.result?.isError === true &&
+          refused.result.structuredContent?.status === 401,
+        `MCP with an unknown key: ${JSON.stringify(refused).slice(0, 300)}`,
+      );
+      summary.mcp.unknownKey = 401;
+    } finally {
+      await unknown.client.close();
+    }
   } finally {
     if (endpoint) {
       await call(`/webhooks/${endpoint.id}`, { method: "DELETE" });

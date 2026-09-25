@@ -3,7 +3,6 @@ import {
   publicApiContract,
   publicApiHttp,
 } from "@api/effect/public-api-http";
-import { handleMcpHttp } from "@api/mcp/http";
 import type { Context } from "@api/rest/types";
 import type { Scope } from "@api/utils/scopes";
 import { Hono } from "hono";
@@ -109,19 +108,6 @@ v1.onError((error) => {
 v1.get("/openapi.json", (c) => c.json(publicApiContract()));
 
 v1.use("*", requireBearer, withAuth, requireWorkspace, limiter);
-
-// Remote MCP: read-only tools that call this API back with the same bearer.
-v1.all("/mcp", requireScope("inbox.read"), (c) => {
-  const origin = new URL(c.req.url).origin;
-  const authorization = c.req.header("authorization") ?? "";
-  return handleMcpHttp(c.req.raw, async (path) =>
-    v1.fetch(
-      new Request(new URL(path, origin).toString(), {
-        headers: { accept: "application/json", authorization },
-      }),
-    ),
-  );
-});
 
 v1.on(["GET", "HEAD"], "*", requireScope("inbox.read"));
 v1.on(["POST", "PUT", "PATCH", "DELETE"], "*", requireScope("inbox.write"));

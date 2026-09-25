@@ -7,8 +7,9 @@ caller.
 
 The customer contract is the versioned API: [InvoiceWise API (v1)](api.md)
 covers programmatic submission with idempotency, polling, retrieval, paged
-formula-safe CSV exports, deliberate retries, the remote MCP endpoint
-(`/v1/mcp`), errors, rate limits and the clean-room smoke check. It is
+formula-safe CSV exports, deliberate retries, the stdio MCP server's
+install and authentication, errors, rate limits and the clean-room smoke
+check. It is
 implemented in `apps/api/src/effect/public-api.ts` (domain, schemas),
 `apps/api/src/effect/public-api-http.ts` (`HttpApi`, published contract) and
 `apps/api/src/rest/v1.ts` (bearer-only authentication, scopes, rate limit).
@@ -69,12 +70,9 @@ delivery rules held.
 The MCP tools are read-only and call `/v1` with the caller's own key:
 `list_invoices`, `get_invoice`, `get_invoice_judgments` and
 `get_invoice_delivery` (`apps/api/src/mcp/invoice-tools.ts`). They are served
-two ways with identical authentication, scopes and workspace isolation to
-REST, and no tool takes a workspace argument:
-
-- remotely at `/v1/mcp` over streamable HTTP, answered statelessly with JSON
-  (`apps/api/src/mcp/http.ts`); client setup is in [API: MCP](api.md#mcp);
-- locally over stdio from a checkout of this repository:
+over stdio (`apps/api/src/mcp/server.ts`) with identical authentication,
+scopes and workspace isolation to REST, and no tool takes a workspace
+argument. Client setup is in [API: MCP](api.md#mcp); from a checkout:
 
 ```bash
 cd apps/api
