@@ -324,7 +324,9 @@ invoice list filters by these states (needs attention, extraction failed,
 invalid, needs review, delivering, delivery failed, delivered, processing,
 corrected), searches supplier names and invoice numbers, pages with the
 filter applied, and acts on a selection (re-extract, rerun questions, retry
-delivery), each invoice reporting its own outcome.
+delivery), each invoice reporting its own outcome; a retry that re-queued
+nothing (nothing failed, already sending, needs an admin, no accounting
+connection) is reported as not started.
 
 Three separate actions, each named with the processing revision the user is
 looking at, so a double click, a second tab or a finishing worker produces one
@@ -344,7 +346,9 @@ worker restart; the runner's reconciler (`reconcileInvoiceOperations` in
 lost rerun, turns a rerun or bill update whose job failed without recording
 an outcome into a visible, retryable failure, and records a document left
 `processing` after its processing job failed as a failed extraction (the
-dashboard already shows it as failed, with Re-extract).
+dashboard already shows it as failed, with Re-extract). That settlement
+re-checks under the invoice row lock that no processing job is queued or
+running, so a concurrent Re-extract wins.
 
 ### Corrections
 

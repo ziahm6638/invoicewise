@@ -484,6 +484,108 @@ suite("workspace permissions (integration)", () => {
       expect(history?.original).toMatchObject({ grossAmount: 150 });
     });
 
+    test("a bulk delivery retry reports an item as started only when work was re-queued", async () => {
+      const insertInvoice = async (
+        name: string,
+        accountingPostStatus: "failed" | null,
+      ) => {
+        const [row] = await primaryDb
+          .insert(schema.inbox)
+          .values({
+            teamId: ids.teamA,
+            displayName: name,
+            fileName: `${name}.pdf`,
+            contentType: "application/pdf",
+            status: "done",
+            processingRevision: 1,
+            accountingProvider: accountingPostStatus ? "xero" : null,
+            accountingPostStatus,
+          })
+          .returning({ id: schema.inbox.id });
+        return row!.id;
+      };
+      const failedA = await insertInvoice("bulk-retry-failed-a", "failed");
+      const failedB = await insertInvoice("bulk-retry-failed-b", "failed");
+      const clean = await insertInvoice("bulk-retry-clean", null);
+      const items = [failedA, failedB, clean].map((id) => ({
+        id,
+        revision: 1,
+      }));
+      const reasons = (response: {
+        results: { id: string; ok: boolean; error: string | null }[];
+      }) =>
+        Object.fromEntries(
+          response.results.map((r) => [r.id, r.ok ? "started" : r.error]),
+        );
+      const queuedPosts = async () => {
+        const [row] = await primaryDb
+          .select({ count: orm.sql<number>`count(*)::int` })
+          .from(schema.workflowJobs)
+          .where(
+            orm.and(
+              orm.eq(schema.workflowJobs.teamId, ids.teamA),
+              orm.eq(schema.workflowJobs.name, "post-accounting-draft"),
+            ),
+          );
+        return row?.count ?? 0;
+      };
+
+      // A member cannot re-send to accounting: nothing is reported as started.
+      const member = caller(ctx(ids.memberA, ids.teamA));
+      expect(
+        reasons(
+          await member.inbox.bulkAction({ action: "retry_delivery", items }),
+        ),
+      ).toEqual({
+        [failedA]: "Re-sending to accounting needs an admin",
+        [failedB]: "Re-sending to accounting needs an admin",
+        [clean]: "Nothing failed to retry",
+      });
+
+      // An admin without an active connection is told to reconnect first.
+      const admin = caller(ctx(ids.adminA, ids.teamA));
+      expect(
+        reasons(
+          await admin.inbox.bulkAction({ action: "retry_delivery", items }),
+        ),
+      ).toEqual({
+        [failedA]: "Reconnect accounting first",
+        [failedB]: "Reconnect accounting first",
+        [clean]: "Nothing failed to retry",
+      });
+      expect(await queuedPosts()).toBe(0);
+
+      // With a connection the failed posts restart, once each.
+      await primaryDb.insert(schema.accountingConnections).values({
+        teamId: ids.teamA,
+        provider: "xero",
+        integrationId: "xero-invoicewise",
+        connectionId: "bulk-retry-connection",
+      });
+      expect(
+        reasons(
+          await admin.inbox.bulkAction({ action: "retry_delivery", items }),
+        ),
+      ).toEqual({
+        [failedA]: "started",
+        [failedB]: "started",
+        [clean]: "Nothing failed to retry",
+      });
+      expect(await queuedPosts()).toBe(2);
+
+      // A second click while they are queued starts nothing new.
+      expect(
+        reasons(
+          await admin.inbox.bulkAction({ action: "retry_delivery", items }),
+        ),
+      ).toEqual({
+        [failedA]: "Already being sent",
+        [failedB]: "Already being sent",
+        [clean]: "Nothing failed to retry",
+      });
+      expect(await queuedPosts()).toBe(2);
+    });
+
     test("an admin manages members but can never grant owner", async () => {
       const admin = caller(ctx(ids.adminA, ids.teamA));
 
