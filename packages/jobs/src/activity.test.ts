@@ -91,6 +91,7 @@ const sources = (): InvoiceActivitySources => ({
       updatedAt: "2026-09-25T10:25:00.000Z",
     },
   ],
+  decisions: [],
   corrections: [],
   answers: [],
   failedRuns: [],
@@ -237,6 +238,88 @@ describe("invoice activity", () => {
       reason: expect.stringContaining("TypeSafe unavailable: 503"),
       refs: { jobId: "job-4", attempts: 3 },
     });
+  });
+
+  test("each delivery-rules decision shows its hold, reasons and resolution", () => {
+    const input = sources();
+    input.invoice.processingRevision = 2;
+    const decision = (
+      id: string,
+      extra: Partial<InvoiceActivitySources["decisions"][number]>,
+    ): InvoiceActivitySources["decisions"][number] => ({
+      id,
+      revision: 1,
+      policyVersion: 3,
+      outcome: "hold",
+      rules: ["bank_details_changed"],
+      accounting: "held",
+      webhooks: "held",
+      resolution: null,
+      resolutionReason: null,
+      resolvedBy: null,
+      resolvedByName: null,
+      resolvedAt: null,
+      createdAt: "2026-09-25T10:21:00.000Z",
+      ...extra,
+    });
+    input.decisions = [
+      decision("decision-2", {
+        revision: 2,
+        createdAt: "2026-09-25T11:00:00.000Z",
+      }),
+      decision("decision-1", {
+        resolution: "released",
+        resolutionReason: "Confirmed by phone",
+        resolvedBy: userId,
+        resolvedByName: "Morgan",
+        resolvedAt: "2026-09-25T10:40:00.000Z",
+      }),
+    ];
+    const activity = buildInvoiceActivity(input, { audience: "customer" });
+    const decisions = activity.entries.filter((entry) =>
+      entry.id.startsWith("decision"),
+    );
+    expect(decisions).toEqual([
+      expect.objectContaining({
+        title: "Held by the delivery rules: Changed bank details",
+        status: "ok",
+        reason: "Accounting: held · Webhooks: held",
+        refs: { decisionId: "decision-1", revision: 1, policyVersion: 3 },
+      }),
+      expect.objectContaining({
+        title: "Held delivery released",
+        status: "ok",
+        reason: "Confirmed by phone",
+        actor: { type: "user", name: "Morgan", id: userId },
+        refs: { decisionId: "decision-1", revision: 1, policyVersion: 3 },
+      }),
+      expect.objectContaining({
+        title: "Held by the delivery rules: Changed bank details",
+        status: "pending",
+        reason: expect.stringContaining("An owner or admin releases"),
+        refs: { decisionId: "decision-2", revision: 2, policyVersion: 3 },
+      }),
+    ]);
+    expect(activity.current.delivery).toBe("held");
+
+    input.decisions = [
+      decision("decision-3", {
+        revision: 2,
+        outcome: "deliver",
+        rules: [],
+        accounting: "not_connected",
+        webhooks: "deliver",
+      }),
+    ];
+    const delivered = buildInvoiceActivity(input, { audience: "operator" });
+    expect(
+      delivered.entries.find((entry) => entry.id === "decision:decision-3"),
+    ).toMatchObject({
+      title: "Passed the delivery rules",
+      status: "ok",
+      reason: "Accounting: not connected · Webhooks: sent",
+    });
+    expect(delivered.current.delivery).toBe("deliver");
   });
 
   test("every action has a category and a label", () => {

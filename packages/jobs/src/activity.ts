@@ -4,6 +4,10 @@ import {
   type InvoiceActivitySources,
 } from "@invoicewise/db/queries";
 import { redactOptionalText } from "@invoicewise/db/utils/redact";
+import {
+  DELIVERY_RULE_DESCRIPTIONS,
+  type DeliveryRuleId,
+} from "@invoicewise/documents/delivery-policy";
 
 /**
  * The audit trail's vocabulary: every recorded action, with its category and
@@ -251,6 +255,8 @@ export type InvoiceActivity = {
     validation: string | null;
     accounting: string | null;
     questionRerun: string | null;
+    /** The current revision's delivery-rules decision: deliver, held, released or dismissed. */
+    delivery: "deliver" | "held" | "released" | "dismissed" | null;
   };
   entries: InvoiceActivityEntry[];
   /** True when a source held more rows than the trace shows. */
@@ -408,6 +414,19 @@ const accountingStatus = (
       : status === "cancelled"
         ? "refused"
         : "pending";
+
+const DECISION_DESTINATION: Record<string, string> = {
+  deliver: "sent",
+  held: "held",
+  off: "off",
+  not_connected: "not connected",
+  not_applicable: "not applicable",
+  already_posted: "already posted",
+  not_scheduled: "not scheduled",
+};
+
+const ruleLabel = (rule: string) =>
+  DELIVERY_RULE_DESCRIPTIONS[rule as DeliveryRuleId]?.label ?? rule;
 
 const OUTCOME_STATUS = {
   started: "pending",
@@ -588,6 +607,52 @@ export function buildInvoiceActivity(
     });
   }
 
+  // Delivery-rule decisions: one per revision, with how a hold was resolved.
+  for (const decision of sources.decisions) {
+    const refs = {
+      decisionId: decision.id,
+      revision: decision.revision,
+      policyVersion: decision.policyVersion,
+    };
+    const destinations = `Accounting: ${DECISION_DESTINATION[decision.accounting] ?? decision.accounting} · Webhooks: ${DECISION_DESTINATION[decision.webhooks] ?? decision.webhooks}`;
+    const held = decision.outcome === "hold";
+    entries.push({
+      id: `decision:${decision.id}`,
+      at: decision.createdAt,
+      stage: "delivery",
+      title: held
+        ? `Held by the delivery rules: ${[...new Set(decision.rules.map(ruleLabel))].join(", ") || "held"}`
+        : "Passed the delivery rules",
+      status: held && !decision.resolution ? "pending" : "ok",
+      reason: held
+        ? `${destinations}${decision.resolution ? "" : " · An owner or admin releases or dismisses it"}`
+        : destinations,
+      actor: null,
+      refs,
+    });
+    if (decision.resolution && decision.resolvedAt) {
+      entries.push({
+        id: `decision-resolution:${decision.id}`,
+        at: decision.resolvedAt,
+        stage: "delivery",
+        title:
+          decision.resolution === "released"
+            ? "Held delivery released"
+            : "Held delivery dismissed: nothing is sent for this revision",
+        status: decision.resolution === "released" ? "ok" : "refused",
+        reason: redactOptionalText(decision.resolutionReason),
+        actor: decision.resolvedBy
+          ? actorFor(audience, {
+              type: "user",
+              userId: decision.resolvedBy,
+              name: decision.resolvedByName,
+            })
+          : null,
+        refs,
+      });
+    }
+  }
+
   // Corrections: field names only; the values stay in the invoice's history.
   for (const correction of sources.corrections) {
     const provider = PROVIDER_NAME[correction.provider ?? ""] ?? "accounting";
@@ -712,6 +777,10 @@ export function buildInvoiceActivity(
           ? "failed"
           : "processed";
 
+  const currentDecision = sources.decisions.find(
+    (decision) => decision.revision === invoice.processingRevision,
+  );
+
   return {
     invoiceId: invoice.id,
     revision: invoice.processingRevision,
@@ -725,6 +794,10 @@ export function buildInvoiceActivity(
           ? (redactOptionalText(invoice.judgmentsRerunError) ??
             "The question rerun failed")
           : invoice.judgmentsRerunStatus,
+      delivery: currentDecision
+        ? (currentDecision.resolution ??
+          (currentDecision.outcome === "hold" ? "held" : "deliver"))
+        : null,
     },
     entries: entries.slice(-ENTRY_LIMIT),
     truncated:
@@ -732,6 +805,7 @@ export function buildInvoiceActivity(
       [
         sources.jobs,
         sources.deliveries,
+        sources.decisions,
         sources.corrections,
         sources.answers,
         sources.audit,

@@ -899,6 +899,119 @@ suite("invoice activity and operator recovery over real HTTP", () => {
     expect(again.status).toBe(409);
   }, 60_000);
 
+  test("an operator accounting retry that re-drives only webhooks reports what it requeued", async () => {
+    provider.down = false;
+    const owner = await createUser("activity-partial");
+    const teamId = owner.teamId;
+    const endpoint = await trpc(
+      owner.cookie,
+      "webhooks.create",
+      {
+        url: `http://127.0.0.1:${receiver.port}/partial`,
+        events: ["invoice.processed"],
+      },
+      "mutation",
+    );
+    expect(endpoint.error).toBeNull();
+    const rules = await trpc(owner.cookie, "deliveryRules.get", null);
+    const policy = rules.data.current.policy as Json;
+    expect(
+      (
+        await trpc(
+          owner.cookie,
+          "deliveryRules.update",
+          {
+            expectedVersion: rules.data.current.version,
+            policy: {
+              ...policy,
+              destinations: { ...policy.destinations, webhooks: "all" },
+            },
+          },
+          "mutation",
+        )
+      ).error,
+    ).toBeNull();
+    const invoiceId = await upload(owner.cookie);
+    const deliveryRow = () =>
+      client.primaryDb
+        .select()
+        .from(schema.webhookDeliveries)
+        .where(orm.eq(schema.webhookDeliveries.invoiceId, invoiceId))
+        .then(([row]) => row);
+    expect(
+      await runWorker(
+        async () => (await deliveryRow())?.status === "succeeded",
+      ),
+    ).toBe(true);
+
+    // The webhook delivery failed, and so did an accounting post the
+    // delivery rules hold for the current revision.
+    const delivered = await deliveryRow();
+    await client.primaryDb
+      .update(schema.webhookDeliveries)
+      .set({ status: "failed", lastError: "HTTP 500" })
+      .where(orm.eq(schema.webhookDeliveries.id, delivered!.id));
+    await client.primaryDb
+      .update(schema.inbox)
+      .set({ accountingPostStatus: "failed" })
+      .where(orm.eq(schema.inbox.id, invoiceId));
+    const [post] = await client.primaryDb
+      .insert(schema.workflowJobs)
+      .values({
+        name: "post-accounting-draft",
+        teamId,
+        payload: { invoiceId, teamId },
+        status: "failed",
+        attempts: 3,
+        lastError: "Xero unavailable",
+        idempotencyKey: `activity-partial-${invoiceId}`,
+        finishedAt: new Date().toISOString(),
+      })
+      .returning();
+
+    const body = { purpose: "incident", reason: "Webhook endpoint recovered" };
+    const retried = await operator(`/ops/jobs/${post!.id}/retry`, {
+      method: "POST",
+      body,
+    });
+    expect(retried.status).toBe(202);
+    const result = (await retried.json()) as Json;
+    expect(result).toMatchObject({
+      status: "requeued",
+      action: "retry_delivery",
+      detail: {
+        accounting: "held",
+        webhooksRequeued: 1,
+        notRequeued:
+          "Held by the delivery rules: an owner or admin releases it",
+      },
+    });
+    expect((await deliveryRow())?.status).toBe("queued");
+
+    const again = await operator(`/ops/jobs/${post!.id}/retry`, {
+      method: "POST",
+      body,
+    });
+    expect(again.status).toBe(409);
+    expect((await again.json()) as Json).toMatchObject({
+      status: "refused",
+      reason: "Held by the delivery rules: an owner or admin releases it",
+    });
+
+    const [settled] = await client.primaryDb
+      .select()
+      .from(schema.auditEvents)
+      .where(orm.eq(schema.auditEvents.id, result.auditEventId))
+      .limit(1);
+    expect(settled).toMatchObject({
+      outcome: "succeeded",
+      detail: expect.objectContaining({
+        webhooksRequeued: 1,
+        accounting: "held",
+      }),
+    });
+  }, 60_000);
+
   test("an operator cancels a queued job and the customer recovers it", async () => {
     const owner = await createUser("activity-cancel");
     const teamId = owner.teamId;

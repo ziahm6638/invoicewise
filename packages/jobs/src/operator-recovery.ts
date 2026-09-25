@@ -61,6 +61,16 @@ export const OPERATOR_RETRY_GUIDANCE: Record<string, string> = {
   "onboard-team": "Onboarding mail is not re-sent by operators.",
 };
 
+/** Why an accounting retry re-drove nothing, and what recovers it. */
+const ACCOUNTING_REFUSAL: Record<string, string> = {
+  no_active_connection: "The workspace has no active accounting connection",
+  in_progress: "Already being sent",
+  already_posted: "The bill is already posted",
+  held: "Held by the delivery rules: an owner or admin releases it",
+  dismissed: "The hold was dismissed: nothing is sent for this revision",
+  admin_required: "An owner or admin retries it",
+};
+
 const text = (value: unknown) => (typeof value === "string" ? value : null);
 
 const refused = (reason: string): OperatorRetryResult => ({
@@ -157,13 +167,13 @@ async function retryFailedJob(
         job.name === "post-accounting-draft"
           ? result.accounting
           : result.billUpdate;
-      if (accounting !== "requeued") {
+      const redriven =
+        result.accounting === "requeued" ||
+        result.billUpdate === "requeued" ||
+        result.webhooks.requeued > 0;
+      if (!redriven) {
         return refused(
-          accounting === "no_active_connection"
-            ? "The workspace has no active accounting connection"
-            : accounting === "in_progress"
-              ? "Already being sent"
-              : "Nothing failed to retry",
+          ACCOUNTING_REFUSAL[accounting] ?? "Nothing failed to retry",
         );
       }
       return {
@@ -175,6 +185,9 @@ async function retryFailedJob(
           accounting: result.accounting,
           billUpdate: result.billUpdate,
           webhooksRequeued: result.webhooks.requeued,
+          ...(accounting !== "requeued" && ACCOUNTING_REFUSAL[accounting]
+            ? { notRequeued: ACCOUNTING_REFUSAL[accounting] }
+            : {}),
         },
       };
     }

@@ -1,5 +1,6 @@
 import type { Database } from "@db/client";
 import {
+  deliveryDecisions,
   inboundEmails,
   inbox,
   inboxRedeliveries,
@@ -79,7 +80,8 @@ export const invoiceJobsQuery = (
  * Everything the invoice activity trace is built from, read for one invoice
  * of one workspace from the existing records: the intake row, the received
  * message, re-deliveries, the queue's jobs for the invoice, webhook
- * deliveries, corrections, question answers and the audit trail. Nothing is
+ * deliveries, delivery-rule decisions, corrections, question answers and the
+ * audit trail. Nothing is
  * copied into a separate log. Extracted values and document text are never
  * selected. Returns null for an invoice outside the workspace.
  */
@@ -145,6 +147,7 @@ export async function getInvoiceActivitySources(
     redeliveries,
     jobs,
     deliveries,
+    decisions,
     corrections,
     answers,
     failedRuns,
@@ -219,6 +222,36 @@ export async function getInvoiceActivitySources(
         ),
       )
       .orderBy(desc(webhookDeliveries.createdAt))
+      .limit(INVOICE_ACTIVITY_SOURCE_LIMIT),
+    db
+      .select({
+        id: deliveryDecisions.id,
+        revision: deliveryDecisions.revision,
+        policyVersion: deliveryDecisions.policyVersion,
+        outcome: deliveryDecisions.outcome,
+        rules: sql<
+          string[]
+        >`coalesce((select array_agg(reason ->> 'rule') from jsonb_array_elements(${deliveryDecisions.reasons}) as reason), '{}')`,
+        accounting: deliveryDecisions.accounting,
+        webhooks: deliveryDecisions.webhooks,
+        resolution: deliveryDecisions.resolution,
+        resolutionReason: deliveryDecisions.resolutionReason,
+        resolvedBy: deliveryDecisions.resolvedBy,
+        resolvedByName: sql<
+          string | null
+        >`coalesce(${users.fullName}, ${users.email})`,
+        resolvedAt: deliveryDecisions.resolvedAt,
+        createdAt: deliveryDecisions.createdAt,
+      })
+      .from(deliveryDecisions)
+      .leftJoin(users, eq(users.id, deliveryDecisions.resolvedBy))
+      .where(
+        and(
+          eq(deliveryDecisions.teamId, params.teamId),
+          eq(deliveryDecisions.invoiceId, invoice.id),
+        ),
+      )
+      .orderBy(desc(deliveryDecisions.revision))
       .limit(INVOICE_ACTIVITY_SOURCE_LIMIT),
     db
       .select({
@@ -305,6 +338,7 @@ export async function getInvoiceActivitySources(
     redeliveries,
     jobs,
     deliveries,
+    decisions,
     corrections,
     answers,
     failedRuns,

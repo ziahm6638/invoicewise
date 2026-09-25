@@ -68,13 +68,18 @@ plain words when it failed or is waiting, who acted, and `refs`: the
 correlation identifiers that tie it to the rest of the system (the received
 message's Message-ID, the queue job and its attempts, the processing
 revision, the webhook delivery, logical event ID and endpoint, the bill's
-provider ID, the correction and question run, the audit event).
+provider ID, the correction and question run, the audit event). Each
+revision's [delivery-rules](#delivery-rules) decision is a `delivery` entry
+naming the rules that held it and what it meant for accounting and webhooks,
+followed by its release or dismissal and who resolved it (refs `decisionId`,
+`revision`, `policyVersion`); `current.delivery` is the current revision's
+`deliver`, `held`, `released` or `dismissed`.
 
 ```json
 {
   "invoiceId": "…",
   "revision": 1,
-  "current": { "extraction": "processed", "extractionError": null, "validation": "valid", "accounting": null, "questionRerun": null },
+  "current": { "extraction": "processed", "extractionError": null, "validation": "valid", "accounting": null, "questionRerun": null, "delivery": "deliver" },
   "entries": [
     { "at": "…", "stage": "receipt", "title": "Received by email from Acme <billing@acme.example>", "status": "ok", "refs": { "inboundEmailId": "…", "messageId": "<…>" } },
     { "at": "…", "stage": "extraction", "title": "Reading the document: failed", "status": "failed", "reason": "TypeSafe unavailable: 503 (after 3 attempts)", "refs": { "jobId": "…", "attempts": 3 } },
