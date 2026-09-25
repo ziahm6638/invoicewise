@@ -8,7 +8,6 @@ import {
   getActiveAccountingConnection,
   getActiveAccountingConnectionByProvider,
   getBillUpdate,
-  getDeliveryDecision,
   isValidDocumentBinding,
   recordAccountingAlreadyPosted,
   recordAccountingPostCancelled,
@@ -604,20 +603,6 @@ export async function retryAccountingPost(
   if (invoice.accountingProviderId) {
     return { status: "already_posted" as const };
   }
-  // A post the delivery rules held is sent by releasing the invoice, which
-  // records who decided and why; this route never bypasses a hold.
-  const decision = await getDeliveryDecision(db, {
-    ...input,
-    revision: invoice.processingRevision,
-  });
-  if (decision?.outcome === "hold" && decision.resolution !== "released") {
-    return {
-      status:
-        decision.resolution === "dismissed"
-          ? ("dismissed" as const)
-          : ("held" as const),
-    };
-  }
   if (!(await getActiveAccountingConnection(db, input.teamId))) {
     throw new Error("No accounting connection is active");
   }
@@ -629,6 +614,7 @@ export async function retryAccountingPost(
       status: invoice.accountingPostStatus ?? "failed",
       providerId: invoice.accountingProviderId,
       revision: invoice.accountingRevision ?? invoice.processingRevision,
+      currentRevision: invoice.processingRevision,
       permitted: true,
     }),
   );

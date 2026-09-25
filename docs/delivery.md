@@ -294,8 +294,10 @@ schedules its deliveries (`decideRevision` in
 with the policy version and settings it was made under, the rules version,
 the outcome, every reason (with whether a release may clear it) and what
 each destination was told: `accounting` is `deliver`, `held`, `off`,
-`not_connected`, `not_applicable` or `already_posted`, `webhooks` is
-`deliver` or `held`. A destination is scheduled only when its decision lets
+`not_connected`, `not_applicable`, `already_posted` or `not_scheduled` (the
+rules would let it through but the revision schedules no post: a question
+rerun of an invoice that was not held, or a correction that posts nothing),
+`webhooks` is `deliver` or `held`. A destination is scheduled only when its decision lets
 it through, so every webhook delivery and bill has the decision it was sent
 under (the delivery's revision, or the invoice's `accounting_revision`), and
 webhook payloads carry it as `data.deliveryDecision`. A held invoice reads as
@@ -318,11 +320,16 @@ and is refused as a conflict when the invoice has changed:
   editing values.
 - **Rerun questions**: the new revision is decided afresh; when the previous
   revision's bill was held and the new answers make it eligible, the bill is
-  posted then (a rerun otherwise never posts).
+  posted then (a rerun otherwise never posts). An unresolved
+  `awaiting_approval` hold is carried to the new revision, so only a release
+  clears it.
 
 *Retry delivery* and `POST /accounting/invoices/:id/retry` never bypass a
-hold (the latter answers `held` or `dismissed`), and a question rerun sends
-no `invoice.judgments.attached` for an invoice whose webhooks are held.
+hold: while the current revision's decision is held and not released, the
+accounting part answers `held` (or `dismissed`) and leaves the post as it is,
+even when an earlier revision's post failed, and the dashboard offers no
+accounting retry. A question rerun sends no `invoice.judgments.attached`
+for an invoice whose webhooks are held.
 
 | Surface | Release / dismiss |
 | --- | --- |

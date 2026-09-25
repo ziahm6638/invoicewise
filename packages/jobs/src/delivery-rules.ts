@@ -163,13 +163,15 @@ export type DecidedInvoice = {
 /**
  * Decides one invoice revision under the workspace's current policy and
  * records it. `approval`, when given, is an extra hold only an admin's
- * release clears (a member corrected an invoice that was held). A revision
+ * release clears (a member corrected an invoice that was held).
+ * `accounting: false` records a post the rules would let through as
+ * `not_scheduled`: the caller schedules none for this revision. A revision
  * is decided once: replaying it returns the decision already recorded.
  */
 export async function decideRevision(
   db: Database,
   invoice: DecidedInvoice & { teamId: string },
-  options: { approval?: string | null } = {},
+  options: { approval?: string | null; accounting?: boolean } = {},
 ) {
   const current = await loadDeliveryPolicy(db, invoice.teamId);
   const supplierChecks = await getInvoiceSupplierChecks(db, {
@@ -211,7 +213,9 @@ export async function decideRevision(
           ? "not_connected"
           : outcome === "hold"
             ? "held"
-            : "deliver";
+            : options.accounting === false
+              ? "not_scheduled"
+              : "deliver";
   const webhooks =
     outcome === "hold" && current.policy.destinations.webhooks === "eligible"
       ? "held"

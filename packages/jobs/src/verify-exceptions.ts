@@ -339,13 +339,19 @@ async function main() {
     });
     // A document read as the processing job would save it: validated, with
     // its deliveries (webhook and accounting post) scheduled in one commit.
-    const processed = async (invoiceNumber: string, grossAmount?: number) => {
+    const processed = async (
+      invoiceNumber: string,
+      grossAmount?: number,
+      file: Uint8Array = Buffer.from(
+        "%PDF-1.4\n% InvoiceWise exceptions proof\n",
+      ),
+    ) => {
       const path = [teamId!, "inbox", `${crypto.randomUUID()}.pdf`];
       paths.push(path);
       await storage.upload({
         bucket: "vault",
         path,
-        file: Buffer.from("%PDF-1.4\n% InvoiceWise exceptions proof\n"),
+        file: Buffer.from(file),
         contentType: "application/pdf",
       });
       const created = await createInbox(db, {
@@ -354,7 +360,7 @@ async function main() {
         filePath: path,
         fileName: `${invoiceNumber}.pdf`,
         contentType: "application/pdf",
-        size: 40,
+        size: file.byteLength,
         status: "processing",
       });
       if (!created) throw new Error("Unable to create verification invoice");
@@ -731,8 +737,9 @@ async function main() {
     );
 
     // A member's correction of a held invoice waits for an admin's release:
-    // neither the correction nor a retry sends it.
-    const memberCase = await processed("EXC-MEMBER", 150);
+    // neither the correction, a retry nor a question rerun sends it.
+    // A readable document, so its questions can be answered again.
+    const memberCase = await processed("EXC-MEMBER", 150, bytes);
     await drain(db, workspace);
     const memberCorrection = await correctInvoice(db, {
       invoiceId: memberCase,
@@ -747,27 +754,34 @@ async function main() {
       teamId,
       teamRole: "member",
     });
-    const release = {
+    await requestQuestionRerun(db, {
       invoiceId: memberCase,
       teamId,
       expectedRevision: memberCorrection.revision,
+    });
+    await drain(db, workspace);
+    const heldAfterCorrection = await read(memberCase);
+    const release = {
+      invoiceId: memberCase,
+      teamId,
+      expectedRevision: heldAfterCorrection.processingRevision,
       reason: "Checked the corrected gross against the PDF",
     };
     const memberRelease = await refusal(
       releaseHeldDelivery(db, { ...release, ...member }),
     );
-    await drain(db, workspace);
-    const heldAfterCorrection = await read(memberCase);
     const adminRelease = await releaseHeldDelivery(db, {
       ...release,
       ...admin,
     });
     await drain(db, workspace);
     check(
-      "a member's correction of a held invoice needs an admin's release, then posts once",
+      "a member's correction of a held invoice needs an admin's release, even after a question rerun, then posts once",
       memberCorrection.accounting === "held" &&
-        memberRetry?.accounting === "not_scheduled" &&
+        memberRetry?.accounting === "held" &&
         memberRelease === "forbidden" &&
+        heldAfterCorrection.processingRevision ===
+          memberCorrection.revision + 1 &&
         heldAfterCorrection.delivery?.state === "held" &&
         (
           heldAfterCorrection.deliveryDecision as {
@@ -779,7 +793,13 @@ async function main() {
         (await accounting(memberCase))?.status === "posted" &&
         providerCalls.filter((call) => call.number === "EXC-MEMBER").length ===
           1,
-      { memberCorrection, memberRetry, memberRelease, adminRelease },
+      {
+        memberCorrection,
+        memberRetry,
+        memberRelease,
+        adminRelease,
+        heldAfterCorrection: heldAfterCorrection.deliveryDecision,
+      },
     );
 
     // A correction is a new revision: it is matched to authorization sources

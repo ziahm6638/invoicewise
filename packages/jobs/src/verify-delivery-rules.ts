@@ -18,7 +18,7 @@ import {
   getInvoiceAccountingStatus,
   listDeliveryDecisions,
 } from "@invoicewise/db/queries";
-import { teams, users, workflowJobs } from "@invoicewise/db/schema";
+import { inbox, teams, users, workflowJobs } from "@invoicewise/db/schema";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
 import {
   DEFAULT_DELIVERY_POLICY,
@@ -402,7 +402,7 @@ async function main() {
     await drain();
     check(
       "neither retry route bypasses a hold",
-      retriedCopy?.accounting === "not_scheduled" &&
+      retriedCopy?.accounting === "held" &&
         retriedCopy.webhooks.requeued === 0 &&
         postedCopy?.status === "held" &&
         billsFor("HP-1001") === 1,
@@ -591,6 +591,33 @@ async function main() {
       codes(uncertainRead.decision).includes("uncertain_reading") &&
         billsFor("HP-1003") === 0,
       uncertainRead.decision,
+    );
+    // An earlier post of the invoice failed; the held revision is still not
+    // re-posted by a retry.
+    await db
+      .update(inbox)
+      .set({
+        accountingPostStatus: "failed",
+        accountingRevision: uncertainRead.processingRevision,
+      })
+      .where(eq(inbox.id, uncertain));
+    const retriedFailed = await retryInvoiceDelivery(db, {
+      invoiceId: uncertain,
+      teamId: workspace,
+      teamRole: "admin",
+    });
+    const postedFailed = await retryAccountingPost(db, {
+      invoiceId: uncertain,
+      teamId: workspace,
+    });
+    await drain();
+    check(
+      "a held invoice whose earlier post failed is not re-posted by a retry",
+      retriedFailed?.accounting === "held" &&
+        postedFailed?.status === "held" &&
+        (await accounting(uncertain))?.status === "failed" &&
+        billsFor("HP-1003") === 0,
+      { retriedFailed, postedFailed },
     );
     await saveDeliveryPolicy(db, {
       teamId: workspace,

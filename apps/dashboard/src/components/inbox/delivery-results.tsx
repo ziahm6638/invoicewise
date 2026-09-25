@@ -128,7 +128,9 @@ function DeliveryDecision({
           ), so it was delivered without a manual step.
           {decision.accounting === "off"
             ? " Posting to accounting is switched off."
-            : ""}
+            : decision.accounting === "not_scheduled"
+              ? " This revision did not post to accounting."
+              : ""}
         </p>
       )}
       {reasons.length > 0 && (
@@ -374,6 +376,10 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
     ? (PROVIDER_NAME[accounting.provider] ?? "Accounting connection")
     : "Accounting connection";
   const hasDestinations = data.webhooks.length > 0 || accounting !== null;
+  const decision = data.decision;
+  // A held post is sent by a release, never by a retry.
+  const accountingHeld =
+    decision?.outcome === "hold" && decision.resolution !== "released";
   const canRetry =
     billUpdate?.status === "failed" ||
     billUpdate?.status === "cancelled" ||
@@ -381,11 +387,11 @@ export function DeliveryResults({ invoiceId }: { invoiceId: string }) {
       (delivery) =>
         delivery.status === "failed" || delivery.status === "cancelled",
     ) ||
-    accounting?.status === "failed" ||
-    accounting?.status === "needs_review" ||
-    accounting?.status === "cancelled";
+    (!accountingHeld &&
+      (accounting?.status === "failed" ||
+        accounting?.status === "needs_review" ||
+        accounting?.status === "cancelled"));
 
-  const decision = data.decision;
   const earlier = data.decisions.filter(
     (item) => item.revision !== data.revision,
   );

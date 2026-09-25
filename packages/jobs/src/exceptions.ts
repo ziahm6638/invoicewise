@@ -36,11 +36,7 @@ import {
 } from "@invoicewise/documents";
 import { InvoiceActionError } from "./action-error";
 import { workflowKey } from "./client";
-import {
-  enqueueBillUpdate,
-  scheduleAccountingPost,
-  scheduleInvoiceDeliveries,
-} from "./delivery";
+import { enqueueBillUpdate, scheduleInvoiceDeliveries } from "./delivery";
 import { decisionHeld } from "./delivery-rules";
 import { resolveWorkerIntakeBinding, verifyStoredIntake } from "./intake";
 import {
@@ -386,8 +382,11 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
       updateStatus: outcome === "update_bill" ? "queued" : null,
     });
 
+    // A failed, cancelled or held post: sending it again is a re-post,
+    // which needs an admin (docs/permissions.md).
+    const repost = invoice.accountingPostStatus !== null && !admin;
     const scheduled = await scheduleInvoiceDeliveries(executor, revised, {
-      accounting: false,
+      accounting: outcome === "not_posted" && !repost,
       data: {
         correction: { version, reason, changes: applied.changes },
       },
@@ -414,21 +413,12 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
       accounting = "bill_kept";
     } else if (allowed === "held") {
       accounting = "held";
-    } else if (allowed !== "deliver") {
-      accounting = "not_scheduled";
-    } else if (invoice.accountingPostStatus !== null && !admin) {
-      // A failed, cancelled or held post: sending it again is a re-post,
-      // which needs an admin (docs/permissions.md).
+    } else if (scheduled.accounting) {
+      accounting = "post_queued";
+    } else if (repost && allowed === "not_scheduled") {
       accounting = "admin_required";
     } else {
-      const job = await scheduleAccountingPost(executor, {
-        invoiceId: invoice.id,
-        teamId: input.teamId,
-        revision: revised.processingRevision,
-        status: invoice.accountingPostStatus,
-        providerId: null,
-      });
-      accounting = job ? "post_queued" : "not_scheduled";
+      accounting = "not_scheduled";
     }
 
     const before = invoice.extraction as Partial<InvoiceExtraction>;
@@ -601,14 +591,21 @@ export async function rerunInvoiceJudgments(
       return superseded(executor);
     }
     // New answers may clear a hold (a required question now answered): the
-    // bill that was held is then posted. Otherwise a rerun never posts.
+    // bill that was held is then posted. Otherwise a rerun never posts. A
+    // hold awaiting an admin's approval is carried over: only a release
+    // clears it.
     const previous = await getDeliveryDecision(executor, {
       invoiceId: input.invoiceId,
       teamId: input.teamId,
       revision: input.revision,
     });
-    const accountingWasHeld =
-      previous?.accounting === "held" && previous.resolution === null;
+    const unresolved = previous?.resolution === null;
+    const accountingWasHeld = unresolved && previous?.accounting === "held";
+    const awaitingApproval = unresolved
+      ? (previous?.reasons as { code?: unknown; message?: unknown }[]).find(
+          (held) => held.code === "awaiting_approval",
+        )
+      : undefined;
     const revised = await reviseInvoice(executor, {
       id: input.invoiceId,
       teamId: input.teamId,
@@ -624,6 +621,7 @@ export async function rerunInvoiceJudgments(
     const scheduled = await scheduleInvoiceDeliveries(executor, revised, {
       accounting: accountingWasHeld,
       data: { judgmentsRerun: true },
+      approval: awaitingApproval ? String(awaitingApproval.message) : null,
     });
     return {
       invoiceId: input.invoiceId,

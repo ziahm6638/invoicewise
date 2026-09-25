@@ -182,7 +182,7 @@ export async function scheduleInvoiceDeliveries(
   const decision = await decideRevision(
     db,
     { ...invoice, teamId },
-    { approval: options.approval },
+    { approval: options.approval, accounting: options.accounting },
   );
   const data = {
     ...eventRecord(invoice),
@@ -195,7 +195,7 @@ export async function scheduleInvoiceDeliveries(
       ? await scheduleRevisionEvents(db, { ...invoice, teamId }, data)
       : 0;
 
-  if (options.accounting === false || decision.accounting !== "deliver") {
+  if (decision.accounting !== "deliver") {
     return { webhooks, accounting: false, decision };
   }
   const accounting = await scheduleAccountingPost(db, {
@@ -435,7 +435,11 @@ export type DeliveryRetryResult = {
     | "in_progress"
     | "no_active_connection"
     | "not_scheduled"
-    | "admin_required";
+    | "admin_required"
+    /** The current revision's delivery decision holds it: release it instead. */
+    | "held"
+    /** The current revision's hold was dismissed: nothing is sent. */
+    | "dismissed";
   /** The in-place update of a posted bill after a correction, if one failed. */
   billUpdate:
     | "requeued"
@@ -452,8 +456,10 @@ export type DeliveryRetryResult = {
  * is skipped, never recreated, and destinations added after the revision
  * completed are not included. Re-posting to the accounting provider keeps the
  * admin role it requires everywhere else: for a lower role the accounting
- * intent is left as it is and reported as `admin_required`. Returns null for
- * an unknown or deleted invoice.
+ * intent is left as it is and reported as `admin_required`. A post the
+ * delivery rules hold for the current revision is never re-driven here: it
+ * is sent by an owner's or admin's release. Returns null for an unknown or
+ * deleted invoice.
  */
 export async function retryInvoiceDelivery(
   db: Database,
@@ -522,6 +528,7 @@ export async function retryInvoiceDelivery(
         status: invoice.accountingPostStatus,
         providerId: invoice.accountingProviderId,
         revision: invoice.accountingRevision ?? revision,
+        currentRevision: revision,
         permitted,
       }),
     };
@@ -670,7 +677,10 @@ async function requeueFailedBillUpdate(
   return "requeued";
 }
 
-/** Re-drives a failed or cancelled accounting intent on the active connection. */
+/**
+ * Re-drives a failed or cancelled accounting intent on the active connection,
+ * unless the delivery rules hold the invoice's current revision.
+ */
 export async function requeueAccountingIntent(
   db: Database,
   input: {
@@ -678,7 +688,10 @@ export async function requeueAccountingIntent(
     teamId: string;
     status: string | null;
     providerId: string | null;
+    /** The revision the intent posts. */
     revision: number;
+    /** The invoice's current revision, whose delivery decision applies. */
+    currentRevision: number;
     /** Whether the caller may re-post to the accounting provider. */
     permitted: boolean;
   },
@@ -691,6 +704,14 @@ export async function requeueAccountingIntent(
     return "already_posted";
   }
   if (input.status === "queued") return "in_progress";
+  const decision = await getDeliveryDecision(db, {
+    invoiceId: input.invoiceId,
+    teamId: input.teamId,
+    revision: input.currentRevision,
+  });
+  if (decision?.outcome === "hold" && decision.resolution !== "released") {
+    return decision.resolution === "dismissed" ? "dismissed" : "held";
+  }
   if (
     input.status !== "failed" &&
     input.status !== "cancelled" &&

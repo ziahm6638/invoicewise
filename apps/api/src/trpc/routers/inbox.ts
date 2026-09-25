@@ -119,6 +119,12 @@ const retryNotStartedReason = (
   ) {
     return "Already being sent";
   }
+  if (result.accounting === "held") {
+    return "Held by the delivery rules; release it instead";
+  }
+  if (result.accounting === "dismissed") {
+    return "Dismissed under the delivery rules";
+  }
   if (
     result.accounting === "admin_required" ||
     result.billUpdate === "admin_required"
