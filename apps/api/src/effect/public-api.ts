@@ -202,7 +202,15 @@ export const Judgment = Schema.Struct({
 export type Judgment = typeof Judgment.Type;
 
 export const DeliverySummary = Schema.Struct({
-  state: Schema.Literal("none", "pending", "delivered", "failed", "cancelled"),
+  state: Schema.Literal(
+    "none",
+    "held",
+    "dismissed",
+    "pending",
+    "delivered",
+    "failed",
+    "cancelled",
+  ),
   total: Schema.Int,
   succeeded: Schema.Int,
   pending: Schema.Int,
@@ -393,6 +401,8 @@ export const DeliveryRetry = Schema.Struct({
     "no_active_connection",
     "not_scheduled",
     "admin_required",
+    "held",
+    "dismissed",
   ),
   billUpdate: Schema.Literal(
     "requeued",
@@ -424,7 +434,7 @@ const listFilterFields = {
   status: Schema.optional(Schema.Literal(...PUBLIC_INVOICE_STATUSES)),
   state: Schema.optional(Schema.Literal(...INVOICE_STATE_FILTERS)).annotations({
     description:
-      "Exception state, as the dashboard shows it (needs_attention, failed, invalid, needs_review, delivering, delivery_failed, delivered, processing, corrected).",
+      "Exception state, as the dashboard shows it (needs_attention, failed, invalid, needs_review, held, delivering, delivery_failed, delivered, processing, corrected).",
   }),
   q: Schema.optional(Schema.String.pipe(Schema.maxLength(200))).annotations({
     description: "Matches supplier name, invoice number and file name.",

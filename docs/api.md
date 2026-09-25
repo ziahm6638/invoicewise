@@ -130,7 +130,7 @@ seconds; most documents finish within a minute. A processed invoice carries:
 | `validation` | Deterministic checks and whether it may be posted to accounting ([validation](document-intake.md#validation)) |
 | `supplierChecks` | Known supplier, duplicate and bank-detail checks ([supplier history](document-intake.md#supplier-identity-and-history)) |
 | `judgments` | Answers to the workspace's questions (below) |
-| `delivery` | The current revision's destinations: `state` (`none`, `pending`, `delivered`, `failed`, `cancelled`) and counts |
+| `delivery` | The current revision's destinations: `state` (`none`, `held`, `dismissed`, `pending`, `delivered`, `failed`, `cancelled`) and counts; `held` means the [delivery rules](delivery.md#delivery-rules) withheld it for an owner or admin |
 | `accounting` | The accounting post (`provider`, `status`, `providerId`) or null |
 | `corrected`, `questionRerun` | Whether someone corrected it; a queued or failed question rerun |
 
@@ -152,7 +152,7 @@ you page never shift or repeat a page. A cursor is opaque and tied to the
 | `limit` | 1–100, default 25 |
 | `order` | `desc` (newest first, default) or `asc` |
 | `status` | `processing`, `processed`, `failed` |
-| `state` | The dashboard's exception states: `needs_attention`, `processing`, `failed`, `invalid`, `needs_review`, `delivering`, `delivery_failed`, `delivered`, `corrected` |
+| `state` | The dashboard's exception states: `needs_attention`, `processing`, `failed`, `invalid`, `needs_review`, `held`, `delivering`, `delivery_failed`, `delivered`, `corrected` |
 | `q` | Supplier name, invoice number or file name contains |
 | `supplierId` | One workspace supplier |
 | `createdFrom`, `createdTo` | `YYYY-MM-DD`, inclusive |
@@ -194,7 +194,9 @@ curl -sS -X POST -H "Authorization: Bearer $INVOICEWISE_API_KEY" \
 The retry response reports what restarted: `started`, `webhooks.requeued`
 and `skipped`, and `accounting`/`billUpdate`. Re-posting to accounting needs
 an owner's or admin's key and is otherwise `admin_required`, as in the
-dashboard ([permissions](permissions.md)). Field corrections stay in the
+dashboard ([permissions](permissions.md)). A post the delivery rules hold is
+never re-driven here and reports `held` (or `dismissed`): an owner or admin
+releases it in the dashboard. Field corrections stay in the
 dashboard. See [corrections, reprocessing and retries](delivery.md#corrections-reprocessing-and-retries).
 
 ## CSV export

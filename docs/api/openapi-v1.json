@@ -211,6 +211,7 @@
                 "failed",
                 "invalid",
                 "needs_review",
+                "held",
                 "delivering",
                 "delivery_failed",
                 "delivered",
@@ -832,6 +833,8 @@
                                 "type": "string",
                                 "enum": [
                                   "none",
+                                  "held",
+                                  "dismissed",
                                   "pending",
                                   "delivered",
                                   "failed",
@@ -1515,6 +1518,8 @@
                           "type": "string",
                           "enum": [
                             "none",
+                            "held",
+                            "dismissed",
                             "pending",
                             "delivered",
                             "failed",
@@ -2504,6 +2509,8 @@
                       "type": "string",
                       "enum": [
                         "none",
+                        "held",
+                        "dismissed",
                         "pending",
                         "delivered",
                         "failed",
@@ -3209,7 +3216,9 @@
                         "in_progress",
                         "no_active_connection",
                         "not_scheduled",
-                        "admin_required"
+                        "admin_required",
+                        "held",
+                        "dismissed"
                       ]
                     },
                     "billUpdate": {
@@ -3348,6 +3357,7 @@
                 "failed",
                 "invalid",
                 "needs_review",
+                "held",
                 "delivering",
                 "delivery_failed",
                 "delivered",
@@ -3525,6 +3535,7 @@
                 "failed",
                 "invalid",
                 "needs_review",
+                "held",
                 "delivering",
                 "delivery_failed",
                 "delivered",
