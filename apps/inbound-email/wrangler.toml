@@ -1,0 +1,17 @@
+# Cloudflare Email Worker for the dedicated receiving addresses.
+# Deploy and routing: docs/inbound-email.md#cloudflare-setup
+name = "invoicewise-inbound-email"
+main = "src/worker.ts"
+compatibility_date = "2026-09-01"
+# Email-only: no public *.workers.dev fetch endpoint.
+workers_dev = false
+
+[vars]
+INBOUND_EMAIL_ENDPOINT = "https://api.invoicewise.uk/inbound/email"
+
+# Secret (never committed): INBOUND_EMAIL_SECRET, the same value as the API's
+# INBOUND_EMAIL_SECRET in Infisical (project invoicewise, env prod):
+#   infisical run --env prod -- sh -c 'printf %s "$INBOUND_EMAIL_SECRET" | bunx wrangler@4 secret put INBOUND_EMAIL_SECRET'
+
+[observability]
+enabled = true

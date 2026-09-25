@@ -83,6 +83,15 @@ const invoice = {
   },
   inboxAccountId: null,
   inboxAccount: null,
+  inboundEmail: {
+    id: "8e5c7a42-0d7f-4b4e-9b0e-2f1c4f7d9a10",
+    messageId: "<inv-2026-0042@supplier.example>",
+    from: "Acme Supplies <billing@supplier.example>",
+    envelopeFrom: "bounces@supplier.example",
+    recipient: "abcdefghjkmnpqrs@in.invoicewise.uk",
+    subject: "Invoice INV-2026-0042",
+    receivedAt: "2026-09-01T09:00:00.000Z",
+  },
   transaction: null,
   suggestion: null,
 };
@@ -201,6 +210,7 @@ describe("Effect invoice read HTTP slice", () => {
           supplierId: invoice.supplierId,
           supplierChecks: invoice.supplierChecks,
           processingError: null,
+          inboundEmail: invoice.inboundEmail,
           transaction: null,
         },
       ],

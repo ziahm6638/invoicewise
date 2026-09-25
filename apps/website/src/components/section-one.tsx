@@ -1,3 +1,5 @@
+import { mailboxLive } from "@/lib/mailbox";
+
 export function SectionOne() {
   return (
     <section className="mt-24 md:mt-[200px] mb-12" id="how-it-works">
@@ -5,10 +7,12 @@ export function SectionOne() {
         Invoices in. Structured data out.
       </h3>
       <p className="mt-4 md:mt-8 text-[#878787] max-w-[720px]">
-        InvoiceWise is middleware: forward invoices to a dedicated mailbox
-        (coming soon) and it extracts the fields with TypeSafe, answers your
-        questions and delivers clean, structured data to the tools you already
-        use.
+        InvoiceWise is middleware: forward invoices to{" "}
+        {mailboxLive()
+          ? "your dedicated mailbox"
+          : "a dedicated mailbox (coming soon)"}{" "}
+        and it extracts the fields with TypeSafe, answers your questions and
+        delivers clean, structured data to the tools you already use.
       </p>
     </section>
   );

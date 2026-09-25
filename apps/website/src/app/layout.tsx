@@ -2,6 +2,7 @@ import { Footer } from "@/components/footer";
 import { FooterCTA } from "@/components/footer-cta";
 import { Header } from "@/components/header";
 import { ThemeProvider } from "@/components/theme-provider";
+import { mailboxLive } from "@/lib/mailbox";
 import "@/styles/globals.css";
 import "@invoicewise/ui/globals.css";
 import { cn } from "@invoicewise/ui/cn";
@@ -12,8 +13,7 @@ import type { ReactNode } from "react";
 import { baseUrl } from "./sitemap";
 
 const title = "InvoiceWise | Invoice middleware";
-const description =
-  "Forward invoices to a dedicated mailbox (coming soon). InvoiceWise extracts the fields with TypeSafe, answers your own questions automatically, and delivers clean data to Xero (coming), QuickBooks (coming), your API, MCP, webhooks or CSV.";
+const description = `Forward invoices to ${mailboxLive() ? "your dedicated mailbox" : "a dedicated mailbox (coming soon)"}. InvoiceWise extracts the fields with TypeSafe, answers your own questions automatically, and delivers clean data to Xero (coming), QuickBooks (coming), your API, MCP, webhooks or CSV.`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(baseUrl),
@@ -83,7 +83,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           <main className="container mx-auto px-4 overflow-hidden md:overflow-visible">
             {children}
           </main>
-          <FooterCTA />
+          <FooterCTA mailboxLive={mailboxLive()} />
           <Footer />
         </ThemeProvider>
       </body>

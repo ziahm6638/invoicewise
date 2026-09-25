@@ -1,20 +1,21 @@
 "use client";
 
 import { ConnectGmail } from "@/components/inbox/connect-gmail";
-import { useTeamQuery } from "@/hooks/use-team";
-import { getInboxEmail } from "@invoicewise/inbox";
+import { useTRPC } from "@/trpc/client";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@invoicewise/ui/accordion";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { CopyInput } from "../copy-input";
 import { UploadZone } from "./inbox-upload-zone";
 
 export function InboxGetStarted() {
-  const { data: team } = useTeamQuery();
+  const trpc = useTRPC();
+  const { data: inboundEmail } = useQuery(trpc.inboundEmail.get.queryOptions());
   const router = useRouter();
 
   const handleUpload = () => {
@@ -40,7 +41,7 @@ export function InboxGetStarted() {
             <div className="pointer-events-auto flex flex-col space-y-4">
               <ConnectGmail />
 
-              {team?.inboxId && (
+              {inboundEmail?.address && (
                 <Accordion
                   type="single"
                   collapsible
@@ -51,8 +52,11 @@ export function InboxGetStarted() {
                       <span>More options</span>
                     </AccordionTrigger>
                     <AccordionContent className="mt-4">
-                      <div className="flex flex-col space-y-4">
-                        <CopyInput value={getInboxEmail(team.inboxId)} />
+                      <div className="flex flex-col space-y-2">
+                        <p className="text-xs text-[#878787]">
+                          Or forward invoices to your workspace address:
+                        </p>
+                        <CopyInput value={inboundEmail.address} />
                       </div>
                     </AccordionContent>
                   </AccordionItem>

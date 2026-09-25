@@ -56,6 +56,9 @@ servers:
         NANGO_PUBLIC_URL: https://nango.invoicewise.uk
         NANGO_XERO_INTEGRATION_ID: xero
         NANGO_QUICKBOOKS_INTEGRATION_ID: quickbooks
+        # Dedicated workspace addresses: <local part>@INBOUND_EMAIL_DOMAIN,
+        # received by the Cloudflare Email Worker (docs/inbound-email.md).
+        INBOUND_EMAIL_DOMAIN: in.invoicewise.uk
       secret:
         # Invoice extraction and judgments run only in the workflow runner.
         - TYPESAFE_API_KEY
@@ -64,6 +67,12 @@ servers:
         - NANGO_SECRET_KEY
         # Bearer token for /ops/metrics, read by ops/monitor.
         - OPS_TOKEN
+        # Shared with the Email Worker (wrangler secret); authenticates every
+        # POST /inbound/email.
+        - INBOUND_EMAIL_SECRET
+        # "true" once the receiving address passed its live proof; until then
+        # no workspace is shown an address (docs/inbound-email.md#going-live).
+        - INBOUND_EMAIL_LIVE
     proxy:
       host: api.invoicewise.uk
       app_port: 3003

@@ -194,10 +194,11 @@ rows per invoice. A document over any bound fails with the reason instead of
 being read in part, so an invoice whose later pages, rows or line items were
 never seen is not saved as complete.
 
-Channels: dashboard upload and the API accept PDF, JPEG and PNG. Forwarded
-mail (the inbox webhook) passes PDF, JPEG and PNG attachments on to intake,
-skipping images under 100 KB (logos, signatures, tracking pixels). Gmail sync
-currently fetches PDF attachments only.
+Channels: dashboard upload and the API accept PDF, JPEG and PNG. Mail to the
+workspace's dedicated address passes PDF, JPEG and PNG attachments on to
+intake, skipping images under 100 KB (logos, signatures, tracking pixels); see
+[Dedicated receiving address](inbound-email.md). Gmail sync currently fetches
+PDF attachments only.
 
 Documents without usable text never produce an empty success: a document with
 no readable text even after OCR, or one in which none of supplier, invoice
@@ -675,8 +676,8 @@ separate host, that origin must be reachable with CORS or the preview should use
   parent's secrets.
 - `packages/inbox/src/generate-id.test.ts` — backward-compatible Gmail
   attachment references for same-named attachments.
-- `apps/dashboard/src/app/api/webhook/inbox/webhook-routes.test.ts` — webhook
-  acknowledgment and sequential attachment intake.
+- `apps/api/src/inbound-email.http.integration.test.ts` — dedicated-address
+  mail through the shared intake (see [inbound email](inbound-email.md#tests)).
 - `packages/db/src/storage.test.ts`, `packages/db/src/storage.s3.test.ts` —
   immutable writes, inbox-bound signatures, expiry cap, S3 conditional write.
 - `packages/db/src/queries/inbox-binding.test.ts` — the shared document-binding

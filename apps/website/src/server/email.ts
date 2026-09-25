@@ -1,4 +1,5 @@
 import "server-only";
+import { mailboxLive } from "@/lib/mailbox";
 import nodemailer from "nodemailer";
 
 const SITE_URL = "https://invoicewise.uk";
@@ -60,10 +61,19 @@ export async function sendConfirmationEmail(lead: {
   const body = [
     "Thanks for joining the InvoiceWise waitlist.",
     "",
-    "InvoiceWise is invoice middleware: upload an invoice and get typed,",
-    "structured data back, with TypeSafe extraction and judgments. A dedicated",
-    "inbound mailbox and delivery to Xero and QuickBooks are coming. We will",
-    "email you when early access opens.",
+    ...(mailboxLive()
+      ? [
+          "InvoiceWise is invoice middleware: upload an invoice or forward it to your",
+          "workspace's own mailbox and get typed, structured data back, with TypeSafe",
+          "extraction and judgments. Delivery to Xero and QuickBooks is coming. We",
+          "will email you when early access opens.",
+        ]
+      : [
+          "InvoiceWise is invoice middleware: upload an invoice and get typed,",
+          "structured data back, with TypeSafe extraction and judgments. A dedicated",
+          "inbound mailbox and delivery to Xero and QuickBooks are coming. We will",
+          "email you when early access opens.",
+        ]),
     "",
     `You can find out more at ${SITE_URL}`,
     "",

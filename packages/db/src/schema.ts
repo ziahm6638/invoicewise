@@ -38,6 +38,13 @@ type NumericConfig = {
   scale?: number;
 };
 
+/** Raw bytes (Postgres `bytea`), read and written as a Buffer. */
+export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
+
 export const numericCasted = customType<{
   data: number;
   driverData: string;
@@ -137,6 +144,13 @@ export const deletionSubjectEnum = pgEnum("deletion_subject", [
 export const deletionStatusEnum = pgEnum("deletion_status", [
   "pending",
   "completed",
+  "failed",
+]);
+// A message received on a workspace's dedicated address: stored with its
+// processing intent, then read into invoices (or recorded as failed).
+export const inboundEmailStatusEnum = pgEnum("inbound_email_status", [
+  "received",
+  "processed",
   "failed",
 ]);
 export const dataExportStatusEnum = pgEnum("data_export_status", [
@@ -2237,6 +2251,123 @@ export const suppliers = pgTable(
   ],
 );
 
+/**
+ * A workspace's dedicated receiving address (`<local_part>@<INBOUND_EMAIL_DOMAIN>`).
+ * The local part is random and never reused, even after it is revoked, so a
+ * rotated address cannot start delivering to another workspace. At most one
+ * address per workspace is active. See docs/inbound-email.md.
+ */
+export const inboundEmailAddresses = pgTable(
+  "inbound_email_addresses",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    localPart: text("local_part").notNull(),
+    createdBy: uuid("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "string" }),
+  },
+  (table) => [
+    unique("inbound_email_addresses_local_part_key").on(table.localPart),
+    uniqueIndex("inbound_email_addresses_active_team_key")
+      .on(table.teamId)
+      .where(sql`${table.revokedAt} is null`),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "inbound_email_addresses_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.createdBy],
+      foreignColumns: [users.id],
+      name: "inbound_email_addresses_created_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+export type InboundEmailAttachmentOutcome = {
+  index: number;
+  fileName: string | null;
+  contentType: string | null;
+  size: number;
+  sha256: string | null;
+  outcome: "accepted" | "duplicate" | "rejected" | "skipped";
+  code?: string;
+  message?: string;
+  inboxId?: string;
+};
+
+/**
+ * One message delivered to a workspace address. `(team_id, message_key)` is
+ * the redelivery identity (a hash of the Message-ID header, else of the raw
+ * bytes). `raw` holds the MIME source only until the message is processed,
+ * or until retention clears it from a failed one; retention also clears the
+ * header fields (docs/data-lifecycle.md).
+ */
+export const inboundEmails = pgTable(
+  "inbound_emails",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    addressId: uuid("address_id"),
+    recipient: text().notNull(),
+    envelopeFrom: text("envelope_from"),
+    messageKey: text("message_key").notNull(),
+    messageId: text("message_id"),
+    headerFrom: text("header_from"),
+    subject: text(),
+    sentAt: text("sent_at"),
+    authenticationResults: text("authentication_results"),
+    size: integer().notNull(),
+    rawSha256: text("raw_sha256").notNull(),
+    raw: bytea(),
+    status: inboundEmailStatusEnum().default("received").notNull(),
+    attachments: jsonb()
+      .$type<InboundEmailAttachmentOutcome[]>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    // Why nothing (or not everything) became an invoice, or why processing
+    // failed; shown beside the message in settings.
+    detail: text(),
+    deliveryCount: integer("delivery_count").default(1).notNull(),
+    lastDeliveredAt: timestamp("last_delivered_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    processedAt: timestamp("processed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("inbound_emails_team_message_key").on(
+      table.teamId,
+      table.messageKey,
+    ),
+    index("inbound_emails_team_created_at_idx").on(
+      table.teamId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "inbound_emails_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.addressId],
+      foreignColumns: [inboundEmailAddresses.id],
+      name: "inbound_emails_address_id_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
 export const inbox = pgTable(
   "inbox",
   {
@@ -2343,6 +2474,9 @@ export const inbox = pgTable(
       withTimezone: true,
       mode: "string",
     }),
+    // The received message this document was an attachment of, when it came
+    // in through the workspace's dedicated address.
+    inboundEmailId: uuid("inbound_email_id"),
   },
   (table) => [
     index("inbox_attachment_id_idx").using(
@@ -2397,6 +2531,12 @@ export const inbox = pgTable(
       foreignColumns: [inboxAccounts.id],
       name: "inbox_inbox_account_id_fkey",
     }).onDelete("set null"),
+    foreignKey({
+      columns: [table.inboundEmailId],
+      foreignColumns: [inboundEmails.id],
+      name: "inbox_inbound_email_id_fkey",
+    }).onDelete("set null"),
+    index("inbox_inbound_email_id_idx").on(table.inboundEmailId),
     // Provider/attachment identity is workspace-scoped: two tenants may both
     // receive the same provider reference without colliding.
     uniqueIndex("inbox_team_reference_id_key")

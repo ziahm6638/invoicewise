@@ -23,6 +23,7 @@ import {
   Schema,
 } from "effect";
 import { reconcileDeliveries } from "./delivery";
+import { reconcileInboundEmails } from "./inbound-email";
 import { observeNangoCalls } from "./nango";
 import { publishDeliveryFailureById } from "./webhooks";
 import {
@@ -199,8 +200,9 @@ export const WorkflowRepositoryLive = Layer.effect(
 /**
  * Periodic safety net for work whose job can end without its handler
  * recording an outcome (for example a lease that expired after the final
- * attempt): it settles delivery intents whose job vanished or failed, and
- * workspace exports left `queued` or `running` with no live build job.
+ * attempt): it settles delivery intents whose job vanished or failed,
+ * inbound messages whose processing job ended the same way, and workspace
+ * exports left `queued` or `running` with no live build job.
  */
 export class DeliveryReconciler extends Context.Tag(
   "invoicewise/DeliveryReconciler",
@@ -230,8 +232,13 @@ export const DeliveryReconcilerLive = Layer.effect(
           {},
           publishDeliveryFailureById,
         );
+        const inbound = await reconcileInboundEmails(db);
         const exports = await failStalledDataExports(db);
-        return { ...deliveries, exportsFailed: exports.length };
+        return {
+          ...deliveries,
+          failed: deliveries.failed + inbound.failed,
+          exportsFailed: exports.length,
+        };
       }, "Unable to reconcile deliveries"),
     };
   }),

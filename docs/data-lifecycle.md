@@ -16,8 +16,8 @@ members see the same schedule under Settings → Data, rendered from
 | Data | Kept | Applied by | Setting |
 | --- | --- | --- | --- |
 | Invoices, original documents, extraction, judgments, suppliers and their correction history, questions, integration settings | while the workspace exists | a member deleting an invoice (file at once, record as below), the owner deleting the workspace ([offboarding](offboarding.md)) | none |
-| Failed uploads and deleted invoices | 30 days after upload | hourly retention job | `RETENTION_FAILED_UPLOAD_DAYS` |
-| Source email reference (on the invoice and on each re-delivery) | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
+| Failed uploads and deleted invoices, and the MIME source of a received message that failed | 30 days after upload or receipt | hourly retention job | `RETENTION_FAILED_UPLOAD_DAYS` |
+| Source email reference (on the invoice and on each re-delivery) and the headers kept for each received message | 90 days after receipt | hourly retention job | `RETENTION_SOURCE_EMAIL_DAYS` |
 | Job and webhook payloads | 30 days after the job or delivery finished | hourly retention job | `RETENTION_JOB_PAYLOAD_DAYS` |
 | Application logs | rotated by size: 5 files of 50 MB per container; time-based 30-day expiry not yet enforced | Docker log rotation on the host | `logging` in `config/deploy.yml` |
 | Database backups | 30 days | `ops/backup` on hp-slice | `INVOICEWISE_BACKUP_RETAIN_DAYS` on the host, `RETENTION_BACKUP_DAYS` in the app |
@@ -43,14 +43,28 @@ What each row means precisely:
   Invoices that were accepted but could not be read (`processing_error`) are
   not failed uploads: they stay in the inbox, where a member can retry or
   delete them.
-- **Source email.** InvoiceWise never stores email bodies or headers. From an
-  email it keeps the invoice attachment (active data) and the provider message
-  reference used to recognise redelivered mail (`inbox.reference_id`, the
-  message id and attachment name), and the same reference for each identical
-  re-delivery of a document (`inbox_redeliveries.reference_id`). The retention
-  job clears both; a re-delivery keeps its time, file name and mailbox as part
-  of the invoice's history, and duplicates are still recognised afterwards by
-  the document's content hash.
+  A message received at the workspace address (`inbound_emails`) keeps its
+  full MIME source (`raw`) only until it settles: a processed message drops
+  it at once, and a failed one keeps it for an operator until the retention
+  job clears it 30 days after receipt.
+- **Source email.** From an email InvoiceWise keeps the invoice attachment
+  (active data) and the provider message reference used to recognise
+  redelivered mail (`inbox.reference_id`, the message id and attachment name),
+  and the same reference for each identical re-delivery of a document
+  (`inbox_redeliveries.reference_id`). For a message received at the workspace
+  address it also keeps, on its `inbound_emails` row, the envelope and header
+  sender, subject, Date header, Message-ID and the receiving hop's
+  Authentication-Results, shown beside the message in Settings → Email. The
+  retention job clears the references and, once a message has settled, those
+  header fields (and any MIME source still held); a message still being
+  processed is left until it settles. A re-delivery keeps its time, file name
+  and mailbox as part of the invoice's history; a received message keeps its
+  recipient address, size, SHA-256 of the raw bytes, the hashed redelivery key
+  (`message_key`: a SHA-256 of the Message-ID, or of the raw bytes), its
+  outcome note (for a Gmail forwarding confirmation, the confirmation text)
+  and its attachment outcomes (file name, type, size, hash and the invoice
+  each became). Redelivered mail is still recognised afterwards by the hashed
+  key and duplicates by the document's content hash.
   An invoice's sender domain (`website`) is overwritten by extraction and is
   invoice data, not email content.
 - **Job and webhook payloads.** Finished workflow jobs keep their name,
@@ -164,6 +178,7 @@ named `invoicewise-export-<date>-<id>.zip`:
 | `suppliers.json` | the workspace's supplier records: name, normalised name, VAT and company number keys, `mergedIntoId` for a merged supplier, times, and the ids of the invoices assigned to it |
 | `supplier-events.json` | every supplier correction (invoice reassigned, suppliers merged, change reverted) with its actor, what it replaced and whether it was reverted |
 | `questions.json` | the workspace's questions, every version |
+| `inbound-emails.json` | every message received at the workspace address: receipt time, recipient address, header and envelope sender and subject (until they expire), outcome and note, delivery count, attachment outcomes and the ids of the invoices it became (`invoiceIds`); never the MIME source |
 | `audit.json` | invoice received and posted to accounting, supplier corrections, webhook deliveries, workflow runs and export requests, in time order |
 | `workspace.json` | the workspace, its members and roles, mailboxes, accounting connections and webhook endpoints |
 
@@ -171,7 +186,8 @@ Stable identifiers: invoices keep their InvoiceWise UUID; a document is
 identified by its invoice id and SHA-256; suppliers and supplier events keep
 their InvoiceWise UUID, so an invoice's `supplierId` names the same supplier
 in every export (follow `mergedIntoId` to the supplier it was merged into); a
-judgment is `<invoice id>:<question id>`; an audit event is
+judgment is `<invoice id>:<question id>`; a received message keeps its
+InvoiceWise UUID; an audit event is
 `<event type>:<source record id>`.
 
 Completeness checks built in: every accepted document is listed in the
@@ -204,7 +220,7 @@ data until it has.
 | Xero / QuickBooks | draft or open bills posted for the workspace's invoices | bills stay in the customer's own ledger; InvoiceWise never deletes them. Deleting the Nango connection stops access; the customer can also disconnect InvoiceWise in the provider's app settings |
 | Google (Gmail) | the OAuth grant used to read the connected mailbox | automatic: the grant is revoked at Google. The mail stays in the customer's mailbox |
 | Microsoft (Outlook) | the OAuth grant used to read the connected mailbox | stored tokens are destroyed (Microsoft has no per-token revocation); the customer removes the app's consent in their Microsoft account if they want the grant gone |
-| Postmark (inbound forwarding address) | forwarded emails and attachments, delivered to InvoiceWise's webhook | nothing is removed automatically; Postmark keeps inbound messages for its own retention period |
+| Cloudflare Email Routing and Email Worker (workspace receiving address on `in.invoicewise.uk`) | each message sent to a workspace address, passed in transit to the signed `POST /inbound/email` endpoint | nothing stored by InvoiceWise to remove; Cloudflare's own logs follow its retention |
 | Purelymail (SMTP) | transactional mail InvoiceWise sends: sign-in, invitations, forwarded Google Workspace verification mail | nothing to remove per workspace; sent mail is not stored by InvoiceWise |
 | Polar (billing) | the paying customer and subscription | not automatic: cancel the subscription before deleting (known limit in [offboarding](offboarding.md)); Polar keeps billing records under its own obligations |
 | Resend (marketing audience, optional) | name and email of a new user, only when `RESEND_API_KEY` and `RESEND_AUDIENCE_ID` are both set | not automatic: remove the contact in Resend. Production does not set these today |
@@ -239,9 +255,11 @@ multi-workspace dataset and checks: owner-only access; an export interrupted
 after its archive was built, then resumed to completion; manifest and
 object completeness byte for byte, with suppliers taken from the
 workspace's supplier records (including an invoice reassigned to another
-supplier) and no data from the neighbouring workspace; link tampering and expiry; a retention sweep interrupted after two
-batches, then resumed, clearing old invoice and re-delivery email references
-with unrelated and recent data untouched and no work
+supplier), received messages without their MIME source, and no data from the
+neighbouring workspace; link tampering and expiry; a retention sweep interrupted after two
+batches, then resumed, clearing old invoice and re-delivery email references,
+failed received messages' MIME source and settled received messages' headers,
+with unrelated, unsettled and recent data untouched and no work
 queued; and a workspace deletion that takes its exports and queued export work
 with it through an interrupted-then-resumed cleanup while the neighbour's
 exports and documents survive. `packages/jobs` `bun run verify` runs an export

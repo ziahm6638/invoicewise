@@ -1,3 +1,4 @@
+import { mailboxLive } from "@/lib/mailbox";
 import {
   Accordion,
   AccordionContent,
@@ -15,6 +16,7 @@ export const metadata: Metadata = {
 };
 
 export default function Page() {
+  const live = mailboxLive();
   return (
     <div className="container">
       <div className="flex items-center flex-col text-center relative">
@@ -52,7 +54,9 @@ export default function Page() {
               </h3>
               <ul className="mt-4 space-y-2">
                 {[
-                  "Dedicated inbound mailbox (coming)",
+                  live
+                    ? "Dedicated inbound mailbox"
+                    : "Dedicated inbound mailbox (coming)",
                   "TypeSafe extraction from PDFs and scans",
                   "Default judgment questions",
                   "Your own questions",
@@ -140,10 +144,13 @@ export default function Page() {
           <AccordionItem value="item-1">
             <AccordionTrigger>What is InvoiceWise?</AccordionTrigger>
             <AccordionContent>
-              Invoice middleware. Forward invoices to a dedicated mailbox
-              (coming soon) and get typed, structured data back, with the
-              answers to your own questions attached. It sits between invoice
-              receipt and the systems that need the data.
+              Invoice middleware. Forward invoices to{" "}
+              {live
+                ? "your dedicated mailbox"
+                : "a dedicated mailbox (coming soon)"}{" "}
+              and get typed, structured data back, with the answers to your own
+              questions attached. It sits between invoice receipt and the
+              systems that need the data.
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="item-2">

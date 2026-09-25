@@ -1,15 +1,3 @@
-export function getInboxIdFromEmail(email: string) {
-  return email.split("@").at(0);
-}
-
-export function getInboxEmail(inboxId: string) {
-  if (process.env.NODE_ENV !== "production") {
-    return `${inboxId}@inbox.staging.midday.ai`;
-  }
-
-  return `${inboxId}@inbox.midday.ai`;
-}
-
 /**
  * Determines if an error message indicates an authentication/authorization issue
  * that requires user intervention (like reconnecting their account) vs temporary

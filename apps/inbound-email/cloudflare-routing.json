@@ -1,0 +1,52 @@
+{
+  "$comment": "Desired Cloudflare Email Routing state for the invoicewise.uk zone. Applied by an operator with Cloudflare access (docs/inbound-email.md#cloudflare-setup); nothing in CI reads it. The apex MX stays with Purelymail.",
+  "zone": "invoicewise.uk",
+  "receivingDomain": "in.invoicewise.uk",
+  "emailRouting": {
+    "subdomains": ["in.invoicewise.uk"],
+    "expectedDnsRecords": [
+      {
+        "type": "MX",
+        "name": "in.invoicewise.uk",
+        "content": "route1.mx.cloudflare.net",
+        "priority": "as assigned by Cloudflare"
+      },
+      {
+        "type": "MX",
+        "name": "in.invoicewise.uk",
+        "content": "route2.mx.cloudflare.net",
+        "priority": "as assigned by Cloudflare"
+      },
+      {
+        "type": "MX",
+        "name": "in.invoicewise.uk",
+        "content": "route3.mx.cloudflare.net",
+        "priority": "as assigned by Cloudflare"
+      },
+      {
+        "type": "TXT",
+        "name": "in.invoicewise.uk",
+        "content": "v=spf1 include:_spf.mx.cloudflare.net ~all"
+      }
+    ],
+    "unchangedRecords": [
+      {
+        "type": "MX",
+        "name": "invoicewise.uk",
+        "content": "mailserver.purelymail.com",
+        "priority": 10
+      }
+    ],
+    "rule": {
+      "$comment": "Every address on the receiving subdomain goes to the Worker; the API decides which addresses exist.",
+      "matchers": [{ "type": "all" }],
+      "actions": [{ "type": "worker", "value": ["invoicewise-inbound-email"] }],
+      "enabled": true
+    }
+  },
+  "worker": {
+    "name": "invoicewise-inbound-email",
+    "config": "apps/inbound-email/wrangler.toml",
+    "secrets": ["INBOUND_EMAIL_SECRET"]
+  }
+}

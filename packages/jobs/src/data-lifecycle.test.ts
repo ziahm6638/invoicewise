@@ -256,9 +256,57 @@ describe("export records", () => {
         deliveries: [],
         jobs: [],
         exports: [],
+        inboundEmails: [
+          {
+            id: "77777777-7777-4777-8777-777777777777",
+            createdAt: "2026-09-01T09:59:00.000Z",
+            recipient: "abc@in.invoicewise.uk",
+            envelopeFrom: "bounce@acme.example",
+            headerFrom: "Acme Ltd <billing@acme.example>",
+            subject: "Invoice 42",
+            status: "processed" as const,
+            detail: null,
+            deliveryCount: 2,
+            processedAt: "2026-09-01T10:00:00.000Z",
+            attachments: [
+              {
+                index: 0,
+                fileName: "invoice.pdf",
+                contentType: "application/pdf",
+                size: 10,
+                sha256: "hash",
+                outcome: "accepted" as const,
+                inboxId: firstId,
+              },
+              {
+                index: 1,
+                fileName: "logo.png",
+                contentType: "image/png",
+                size: 5,
+                sha256: null,
+                outcome: "skipped" as const,
+                code: "small_image",
+              },
+            ],
+          },
+        ],
       },
       new Map(),
     );
+
+    expect(records.inboundEmails).toEqual([
+      expect.objectContaining({
+        id: "77777777-7777-4777-8777-777777777777",
+        receivedAt: "2026-09-01T09:59:00.000Z",
+        recipient: "abc@in.invoicewise.uk",
+        sender: "Acme Ltd <billing@acme.example>",
+        envelopeSender: "bounce@acme.example",
+        subject: "Invoice 42",
+        status: "processed",
+        invoiceIds: [firstId],
+      }),
+    ]);
+    expect(records.inboundEmails[0]).not.toHaveProperty("raw");
 
     // Suppliers are the workspace's own records, grouped by assignment, not
     // by what the extraction says.

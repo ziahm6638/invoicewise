@@ -204,6 +204,52 @@ suite("data lifecycle (integration)", () => {
     return { id, bytes, filePath };
   };
 
+  /** A message received at the workspace address, settled as given. */
+  const seedInboundEmail = async (
+    teamId: string,
+    options: {
+      status: "received" | "processed" | "failed";
+      createdAt?: Date;
+      subject?: string;
+      invoiceId?: string;
+    },
+  ) => {
+    const id = crypto.randomUUID();
+    const messageId = `<${id}@sender.example>`;
+    const raw = Buffer.from(`Message-ID: ${messageId}\r\n\r\nbody ${id}`);
+    await primaryDb.insert(schema.inboundEmails).values({
+      id,
+      teamId,
+      recipient: `${id.slice(0, 16)}@in.invoicewise.uk`,
+      envelopeFrom: "bounce@sender.example",
+      messageKey: `mid:${sha256(messageId)}`,
+      messageId,
+      headerFrom: "Sender <billing@sender.example>",
+      subject: options.subject ?? `Invoice ${id}`,
+      sentAt: "Tue, 01 Sep 2026 10:00:00 +0000",
+      authenticationResults: "mx.cloudflare.net; dkim=pass",
+      size: raw.byteLength,
+      rawSha256: sha256(raw),
+      raw: options.status === "processed" ? null : raw,
+      status: options.status,
+      attachments: options.invoiceId
+        ? [
+            {
+              index: 0,
+              fileName: "invoice.pdf",
+              contentType: "application/pdf",
+              size: 10,
+              sha256: null,
+              outcome: "accepted" as const,
+              inboxId: options.invoiceId,
+            },
+          ]
+        : [],
+      createdAt: (options.createdAt ?? new Date()).toISOString(),
+    });
+    return { id, messageId, raw };
+  };
+
   const ctx = (user: { id: string; email: string }, teamId: string | null) => ({
     session: {
       user: { id: user.id, email: user.email, full_name: "Test User" },
@@ -354,6 +400,17 @@ suite("data lifecycle (integration)", () => {
       inboxId: invoices[0]!.id,
       referenceId: "msg-redelivered_0_invoice.pdf",
       fileName: "again.pdf",
+    });
+
+    const received = await seedInboundEmail(teamId, {
+      status: "processed",
+      subject: "Invoice from Acme",
+      invoiceId: invoices[0]!.id,
+    });
+    const failedEmail = await seedInboundEmail(teamId, { status: "failed" });
+    const neighbourEmail = await seedInboundEmail(neighbourTeam, {
+      status: "processed",
+      subject: "Neighbour Secret Subject",
     });
 
     const request = await caller(ctx(owner, teamId)).data.requestExport();
@@ -510,6 +567,28 @@ suite("data lifecycle (integration)", () => {
         messageReference: "msg-redelivered_0_invoice.pdf",
       },
     ]);
+    // Received messages are listed with their outcome and invoices, never
+    // their MIME source.
+    const inboundEmails = JSON.parse(
+      entries.get("inbound-emails.json")!.toString(),
+    );
+    expect(inboundEmails.map((email: { id: string }) => email.id)).toEqual([
+      received.id,
+      failedEmail.id,
+    ]);
+    expect(inboundEmails[0]).toMatchObject({
+      recipient: `${received.id.slice(0, 16)}@in.invoicewise.uk`,
+      sender: "Sender <billing@sender.example>",
+      subject: "Invoice from Acme",
+      status: "processed",
+      invoiceIds: [invoices[0]!.id],
+    });
+    expect(inboundEmails[1]).toMatchObject({ status: "failed" });
+    expect(
+      manifest.files.find(
+        (file: { path: string }) => file.path === "inbound-emails.json",
+      ),
+    ).toMatchObject({ records: 2 });
     const judgments = JSON.parse(entries.get("judgments.json")!.toString());
     expect(judgments.map((judgment: { id: string }) => judgment.id)).toContain(
       `${invoices[0]!.id}:known_supplier`,
@@ -528,6 +607,10 @@ suite("data lifecycle (integration)", () => {
     expect(everything).not.toContain(neighbour.id);
     expect(everything).not.toContain(neighbour.bytes.toString());
     expect(everything).not.toContain("Neighbour Secret Supplier");
+    expect(everything).not.toContain(neighbourEmail.id);
+    expect(everything).not.toContain("Neighbour Secret Subject");
+    expect(everything).not.toContain(failedEmail.raw.toString());
+    expect(everything).not.toContain(failedEmail.messageId);
     for (const invoice of excluded) {
       expect(everything).not.toContain(invoice.id);
     }
@@ -724,6 +807,26 @@ suite("data lifecycle (integration)", () => {
         },
       ])
       .returning();
+    // Received messages: a failed one's MIME source goes after the
+    // failed-upload period and every settled message's headers after the
+    // source email period; unsettled and recent messages are untouched.
+    const failedEmailOld = await seedInboundEmail(teamId, {
+      status: "failed",
+      createdAt: ago(31),
+    });
+    const failedEmailRecent = await seedInboundEmail(teamId, {
+      status: "failed",
+      createdAt: ago(2),
+    });
+    const processedEmailOld = await seedInboundEmail(teamId, {
+      status: "processed",
+      createdAt: ago(91),
+      invoiceId: oldActive.id,
+    });
+    const receivedEmailOld = await seedInboundEmail(neighbourTeam, {
+      status: "received",
+      createdAt: ago(91),
+    });
     // Job payloads: finished and old are emptied; live work is never touched.
     const oldJob = crypto.randomUUID();
     const liveJob = crypto.randomUUID();
@@ -869,6 +972,39 @@ suite("data lifecycle (integration)", () => {
     expect((await redelivery(recentRedelivery!.id))?.referenceId).toBe(
       "msg-new-again_0_invoice.pdf",
     );
+    const inboundEmail = (id: string) =>
+      primaryDb.query.inboundEmails.findFirst({
+        where: orm.eq(schema.inboundEmails.id, id),
+      });
+    expect(await inboundEmail(failedEmailOld.id)).toMatchObject({
+      raw: null,
+      status: "failed",
+      headerFrom: "Sender <billing@sender.example>",
+      messageId: failedEmailOld.messageId,
+    });
+    expect(
+      (await inboundEmail(failedEmailRecent.id))?.raw?.equals(
+        failedEmailRecent.raw,
+      ),
+    ).toBe(true);
+    const clearedEmail = await inboundEmail(processedEmailOld.id);
+    expect(clearedEmail).toMatchObject({
+      envelopeFrom: null,
+      messageId: null,
+      headerFrom: null,
+      subject: null,
+      sentAt: null,
+      authenticationResults: null,
+      raw: null,
+      status: "processed",
+      recipient: `${processedEmailOld.id.slice(0, 16)}@in.invoicewise.uk`,
+      messageKey: `mid:${sha256(processedEmailOld.messageId)}`,
+    });
+    expect(clearedEmail?.attachments[0]?.inboxId).toBe(oldActive.id);
+    expect(await inboundEmail(receivedEmailOld.id)).toMatchObject({
+      messageId: receivedEmailOld.messageId,
+      headerFrom: "Sender <billing@sender.example>",
+    });
     const job = (id: string) =>
       primaryDb.query.workflowJobs.findFirst({
         where: orm.eq(schema.workflowJobs.id, id),

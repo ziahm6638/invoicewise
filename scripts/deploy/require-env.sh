@@ -22,7 +22,7 @@ case "$role" in
   web) required="$common NEXT_PUBLIC_URL NEXT_PUBLIC_API_URL" ;;
   api) required="$common ALLOWED_API_ORIGINS TYPESAFE_API_KEY
 TYPESAFE_DAILY_CALL_LIMIT WORKFLOW_CONCURRENCY NANGO_BASE_URL NANGO_SECRET_KEY
-OPS_TOKEN" ;;
+OPS_TOKEN INBOUND_EMAIL_SECRET INBOUND_EMAIL_DOMAIN" ;;
   *)
     echo "usage: require-env.sh web|api" >&2
     exit 2

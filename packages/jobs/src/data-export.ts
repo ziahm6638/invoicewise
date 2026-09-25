@@ -338,6 +338,23 @@ export function buildExportRecords(
       detail: { requestedBy: request.requestedBy, status: request.status },
     });
   }
+  const inboundEmails = data.inboundEmails.map((email) => ({
+    id: email.id,
+    receivedAt: email.createdAt,
+    recipient: email.recipient,
+    sender: email.headerFrom,
+    envelopeSender: email.envelopeFrom,
+    subject: email.subject,
+    status: email.status,
+    detail: email.detail,
+    deliveryCount: email.deliveryCount,
+    processedAt: email.processedAt,
+    attachments: email.attachments,
+    invoiceIds: email.attachments.flatMap((attachment) =>
+      attachment.inboxId ? [attachment.inboxId] : [],
+    ),
+  }));
+
   audit.sort(
     (a, b) =>
       String(a.at).localeCompare(String(b.at)) ||
@@ -362,6 +379,7 @@ export function buildExportRecords(
     suppliers: supplierRecords,
     supplierEvents: data.supplierEvents,
     questions: data.questions,
+    inboundEmails,
     audit,
   };
 }
@@ -569,6 +587,11 @@ export async function buildDataExport(
         content: json(records.questions),
       },
       {
+        path: "inbound-emails.json",
+        records: records.inboundEmails.length,
+        content: json(records.inboundEmails),
+      },
+      {
         path: "audit.json",
         records: records.audit.length,
         content: json(records.audit),
@@ -615,6 +638,8 @@ export async function buildDataExport(
           "InvoiceWise supplier id (UUID) from the workspace's supplier records, stable across exports; a merged supplier names the one it was merged into in mergedIntoId",
         supplierEvent: "InvoiceWise supplier event id (UUID)",
         judgment: "<invoice id>:<question id>",
+        inboundEmail:
+          "InvoiceWise received-message id (UUID); invoiceIds name the invoices its attachments became",
         auditEvent: "<event type>:<source record id>",
       },
       retentionPolicy: {

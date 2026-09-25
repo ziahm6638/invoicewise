@@ -59,6 +59,11 @@ import {
 } from "./deletion";
 import { reconcileDeliveries } from "./delivery";
 import {
+  InboundEmailProcessingError,
+  failInboundEmail,
+  processInboundEmail,
+} from "./inbound-email";
+import {
   acceptIntakeUpload,
   resolveWorkerIntakeBinding,
   verifyStoredIntake,
@@ -83,6 +88,7 @@ import {
   type OnboardTeamPayload,
   type PostAccountingDraftPayload,
   type ProcessAttachmentPayload,
+  type ProcessInboundEmailPayload,
   type PurgeDeletedDataPayload,
   type SyncInboxAccountPayload,
   WorkflowRequest,
@@ -526,6 +532,54 @@ const makeProcessAttachment = (
                       error: error.userMessage ?? TEMPORARY_PROCESSING_FAILURE,
                     }).then(() => undefined),
                   "Unable to update failed invoice",
+                ),
+              ),
+              Effect.ignore,
+            )
+          : Effect.void,
+      ),
+    );
+  });
+
+const makeProcessInboundEmail = (
+  db: Database,
+  storage: ReturnType<typeof createStorageClient>,
+) =>
+  Effect.fn("processInboundEmailWorkflow")(function* (
+    job: WorkflowJob,
+    payload: ProcessInboundEmailPayload,
+  ) {
+    yield* ensureTeam(job, payload.teamId);
+    const finalAttempt = job.attempts >= job.maxAttempts;
+    return yield* Effect.tryPromise({
+      try: () =>
+        processInboundEmail(db, storage, {
+          teamId: payload.teamId,
+          inboundEmailId: payload.inboundEmailId,
+          finalAttempt,
+        }),
+      catch: (error) =>
+        new WorkflowExecutionError({
+          reason: messageFor(error, "Unable to process inbound message"),
+          retryable: !(
+            error instanceof InboundEmailProcessingError && !error.retryable
+          ),
+        }),
+    }).pipe(
+      // A message never stays "received" once its job has given up: the
+      // workspace sees it failed, and the provider was already answered, so
+      // nothing retries it again.
+      Effect.tapError((error) =>
+        !error.retryable || finalAttempt
+          ? Effect.logWarning("inbound_email_processing_failed").pipe(
+              Effect.annotateLogs({
+                inboundEmailId: payload.inboundEmailId,
+                reason: error.reason,
+              }),
+              Effect.zipRight(
+                attempt(
+                  () => failInboundEmail(db, payload),
+                  "Unable to record the failed inbound message",
                 ),
               ),
               Effect.ignore,
@@ -1076,6 +1130,7 @@ export const WorkflowHandlerLive = Layer.effect(
     const { client: storage } = yield* WorkflowStorage;
     const mailer = yield* WorkflowMailer;
     const processAttachment = makeProcessAttachment(db, storage);
+    const processInboundEmailJob = makeProcessInboundEmail(db, storage);
     const syncInboxAccount = makeSyncInboxAccount(db, storage);
     const initialInboxSetup = makeInitialInboxSetup(db);
     const inviteTeamMembers = makeInviteTeamMembers(mailer);
@@ -1143,6 +1198,8 @@ export const WorkflowHandlerLive = Layer.effect(
           switch (request.name) {
             case "process-attachment":
               return yield* processAttachment(job, request.payload);
+            case "process-inbound-email":
+              return yield* processInboundEmailJob(job, request.payload);
             case "sync-inbox-account":
               return yield* syncInboxAccount(job, request.payload);
             case "initial-inbox-setup":

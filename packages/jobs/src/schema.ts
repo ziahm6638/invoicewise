@@ -21,6 +21,13 @@ export const ProcessAttachmentPayload = Schema.Struct({
 });
 export type ProcessAttachmentPayload = typeof ProcessAttachmentPayload.Type;
 
+export const ProcessInboundEmailPayload = Schema.Struct({
+  teamId: Schema.String,
+  /** Workspace-owned received message; read back scoped to `teamId`. */
+  inboundEmailId: Schema.String,
+});
+export type ProcessInboundEmailPayload = typeof ProcessInboundEmailPayload.Type;
+
 export const SyncInboxAccountPayload = Schema.Struct({
   id: Schema.String,
   manualSync: Schema.optional(Schema.Boolean),
@@ -86,6 +93,10 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("process-attachment"),
     payload: ProcessAttachmentPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("process-inbound-email"),
+    payload: ProcessInboundEmailPayload,
   }),
   Schema.Struct({
     name: Schema.Literal("sync-inbox-account"),

@@ -1,3 +1,4 @@
+import { mailboxLive } from "@/lib/mailbox";
 import { Button } from "@invoicewise/ui/button";
 import Link from "next/link";
 import { HeroImage } from "./hero-image";
@@ -28,8 +29,10 @@ export function Hero() {
         </Link>
 
         <h2 className="mt-6 md:mt-10 max-w-[640px] text-[#878787] leading-tight text-[24px] md:text-[36px] font-medium">
-          Forward invoices to a dedicated mailbox (coming soon) and get typed,
-          structured data back for <WordAnimation />
+          {mailboxLive()
+            ? "Forward invoices to your dedicated mailbox"
+            : "Forward invoices to a dedicated mailbox (coming soon)"}{" "}
+          and get typed, structured data back for <WordAnimation />
         </h2>
 
         <div className="mt-8 md:mt-10">

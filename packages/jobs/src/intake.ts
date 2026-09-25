@@ -112,6 +112,8 @@ export type IntakeUploadInput = {
   referenceId?: string;
   website?: string;
   inboxAccountId?: string;
+  /** The received message this attachment came from (dedicated address). */
+  inboundEmailId?: string;
 };
 
 export type IntakeUploadResult =
@@ -371,6 +373,7 @@ const acceptIntake = async (
       referenceId: input.referenceId,
       website: input.website,
       inboxAccountId: input.inboxAccountId,
+      inboundEmailId: input.inboundEmailId,
     });
 
     reservation =

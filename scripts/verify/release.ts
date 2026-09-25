@@ -571,6 +571,11 @@ const UNIT_SUITES: { name: string; dir: string; args: string[] }[] = [
   { name: "jobs", dir: JOBS_DIR, args: ["test", "src"] },
   { name: "encryption", dir: "packages/encryption", args: ["test", "src"] },
   { name: "inbox", dir: "packages/inbox", args: ["test", "src"] },
+  {
+    name: "inbound-email-worker",
+    dir: "apps/inbound-email",
+    args: ["test", "src"],
+  },
   { name: "api", dir: API_DIR, args: ["test"] },
   { name: "dashboard", dir: DASHBOARD_DIR, args: ["test"] },
 ];
@@ -935,6 +940,23 @@ async function securityRegressionSuites() {
     env: env({
       INTAKE_TEST_DATABASE_URL: databaseUrl(INTAKE_DATABASE),
       INTAKE_TEST_PORT: String(await freePort()),
+    }),
+    timeoutMs: 20 * 60 * 1000,
+  });
+
+  // Shares the intake database: the suite creates and removes its own
+  // workspaces and runs after the intake suite, never alongside it.
+  await v.runStep("verify:inbound-email-http-regressions", {
+    command: "bun",
+    args: [
+      "--no-env-file",
+      "test",
+      "src/inbound-email.http.integration.test.ts",
+    ],
+    cwd: ws(API_DIR),
+    env: env({
+      INBOUND_EMAIL_TEST_DATABASE_URL: databaseUrl(INTAKE_DATABASE),
+      INBOUND_EMAIL_TEST_PORT: String(await freePort()),
     }),
     timeoutMs: 20 * 60 * 1000,
   });

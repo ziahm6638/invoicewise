@@ -1,6 +1,8 @@
 import type { Database } from "@invoicewise/db/client";
 import {
   clearExpiredEmailReferences,
+  clearExpiredInboundEmailHeaders,
+  clearExpiredInboundEmailSources,
   clearExpiredRedeliveryReferences,
   deleteExpiredCancelledIntake,
   listExpiredDataExports,
@@ -24,6 +26,7 @@ export type RetentionStep =
   | "export-temp-files"
   | "failed-uploads"
   | "failed-upload-records"
+  | "failed-inbound-email"
   | "source-email"
   | "job-payloads"
   | "webhook-payloads";
@@ -82,6 +85,7 @@ export async function runRetentionSweep(
       "export-temp-files": 0,
       "failed-uploads": 0,
       "failed-upload-records": 0,
+      "failed-inbound-email": 0,
       "source-email": 0,
       "job-payloads": 0,
       "webhook-payloads": 0,
@@ -187,7 +191,15 @@ export async function runRetentionSweep(
     }),
   );
 
-  // 3. Source email references, on invoices and on their re-deliveries.
+  await drain("failed-inbound-email", () =>
+    clearExpiredInboundEmailSources(deps.db, {
+      before: before(deps.policy.failedUploadDays),
+      limit: batchSize,
+    }),
+  );
+
+  // 3. Source email: references on invoices and their re-deliveries, and the
+  //    headers kept on received messages.
   await drain("source-email", () =>
     clearExpiredEmailReferences(deps.db, {
       before: before(deps.policy.sourceEmailDays),
@@ -196,6 +208,12 @@ export async function runRetentionSweep(
   );
   await drain("source-email", () =>
     clearExpiredRedeliveryReferences(deps.db, {
+      before: before(deps.policy.sourceEmailDays),
+      limit: batchSize,
+    }),
+  );
+  await drain("source-email", () =>
+    clearExpiredInboundEmailHeaders(deps.db, {
       before: before(deps.policy.sourceEmailDays),
       limit: batchSize,
     }),

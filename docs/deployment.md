@@ -23,6 +23,9 @@ kamal-proxy (shared, 127.0.0.1:3010, TLS terminates at Cloudflare)
   │                             data in /mnt/ssd/invoicewise/postgres
   └─ invoicewise-redis          redis:7.4-alpine, data in /mnt/ssd/invoicewise/redis
 
+<local>@in.invoicewise.uk ─MX─▶ Cloudflare Email Routing ─▶ Email Worker invoicewise-inbound-email
+                               └─▶ POST https://api.invoicewise.uk/inbound/email (signed; see docs/inbound-email.md)
+
 nango.invoicewise.uk ─────┐   (same tunnel; see "Nango")
 nango-connect.invoicewise.uk ┴─▶ invoicewise-nango    nangohq/nango-server, 127.0.0.1:3020 (API)
                                                       and 127.0.0.1:3021 (Connect UI)
@@ -88,6 +91,8 @@ line is `NAME=$NAME` from the environment `infisical run` injects.
 | `TYPESAFE_API_KEY` | api | invoice extraction and judgments (workflow runner) |
 | `OPS_TOKEN` | api | bearer token for `/ops/metrics`, read by `ops/monitor` |
 | `OPS_ALERT_TO` | monitor only | operator address for alerts; written to the monitor host by `ops/monitor/install.sh`, not deployed |
+| `INBOUND_EMAIL_SECRET` | api, Email Worker (Wrangler secret) | signs every Worker → API delivery for the dedicated addresses ([inbound email](inbound-email.md#cloudflare-setup)) |
+| `INBOUND_EMAIL_LIVE` | api (optional) | `true` shows workspaces their receiving address; set only after the live proof ([going live](inbound-email.md#going-live)) |
 | `NANGO_SECRET_KEY` | api, nango accessory | the Nango `prod` environment secret key (`NANGO_SECRET_KEY_PROD` in Nango) |
 | `NANGO_ENCRYPTION_KEY` | nango accessory | encrypts provider tokens in the Nango database; never change it |
 | `NANGO_DB_PASSWORD` | nango, nango-db accessories | the Nango database password |
@@ -112,6 +117,11 @@ add any that must never be empty to `scripts/deploy/require-env.sh`.
 Transactional mail goes through Purelymail SMTP (`smtp.purelymail.com:465`) as
 `auth@invoicewise.uk`, sender `InvoiceWise <auth@invoicewise.uk>`. The
 `invoicewise.uk` domain's MX, SPF, DKIM and DMARC records point at Purelymail.
+
+Receiving for the workspaces' dedicated addresses is separate: only the
+`in.invoicewise.uk` subdomain's MX points at Cloudflare Email Routing, whose
+Email Worker (`apps/inbound-email`) is deployed with Wrangler, not Kamal. See
+[Dedicated receiving address](inbound-email.md#cloudflare-setup).
 
 ## Deploying
 
@@ -302,7 +312,10 @@ its own data: `config/deploy.staging.yml` is merged over `config/deploy.yml`
   signing, encryption, ops token, Nango) except the Purelymail sender password
   and the TypeSafe key, which are the same accounts as production. Staging's
   TypeSafe ceiling is 300 calls a day. Staging Nango is internal only:
-  accounting connections are not exercised on staging.
+  accounting connections are not exercised on staging. Staging has its own
+  `INBOUND_EMAIL_SECRET` and the unrouted receiving domain
+  `iw-staging-in.zzapp.uk`: no Email Worker points at it, so staging never
+  receives real mail ([inbound email](inbound-email.md)).
 - Data: synthetic only. The load-test account is a staging-only user; no
   production dump is ever restored here.
 
