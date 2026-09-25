@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { HttpApiSchema } from "@effect/platform";
 import type { Database } from "@invoicewise/db/client";
 import { primaryDb } from "@invoicewise/db/client";
@@ -620,7 +621,7 @@ export const makePublicApiStore = (
       fileName: input.fileName,
       referenceId: input.idempotencyKey
         ? idempotencyReference(input.idempotencyKey)
-        : undefined,
+        : apiSubmissionReference(),
     }),
   reextract: (teamId, id, revision) =>
     retryIntakeProcessing(db, {
@@ -650,6 +651,12 @@ export const PublicApiStoreLive = Layer.sync(PublicApiStore, () =>
 
 /** Idempotency keys share the workspace's provider-reference namespace. */
 export const idempotencyReference = (key: string) => `api:${key}`;
+
+/**
+ * A keyless submission still records its API origin, under a unique reference
+ * outside the `api:` key namespace, so it is never reported as a key.
+ */
+export const apiSubmissionReference = () => `api-submission:${randomUUID()}`;
 
 // ---------------------------------------------------------------------------
 // Mapping
@@ -681,7 +688,12 @@ export const statusOf = (row: {
 };
 
 const sourceOf = (row: PublicInvoiceRow): Invoice["document"]["source"] => {
-  if (row.referenceId?.startsWith("api:")) return "api";
+  if (
+    row.referenceId?.startsWith("api:") ||
+    row.referenceId?.startsWith("api-submission:")
+  ) {
+    return "api";
+  }
   if (row.inboundEmailId) return "email";
   if (row.inboxAccountId) return "mailbox";
   return "upload";
@@ -758,7 +770,7 @@ export const toInvoice = (row: PublicInvoiceRow): Invoice => {
       sha256: row.contentHash,
       source,
       idempotencyKey:
-        source === "api" && row.referenceId ? row.referenceId.slice(4) : null,
+        row.referenceId?.startsWith("api:") ? row.referenceId.slice(4) : null,
     },
     supplierId: row.supplierId,
     supplierName: text(extraction?.supplierName),

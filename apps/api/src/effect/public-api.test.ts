@@ -9,6 +9,7 @@ import { csvCell } from "./csv";
 import {
   PublicApiStore,
   PublicInvoicesLayer,
+  apiSubmissionReference,
   decodeCursor,
   encodeCursor,
   idempotencyReference,
@@ -255,6 +256,40 @@ describe("public API v1", () => {
     ).json()) as { data: { id: string }[]; hasMore: boolean };
     expect(second.data.map((item) => item.id)).toEqual([ID_2]);
     expect(second.hasMore).toBe(false);
+  });
+
+  test("reports a keyless API submission as api and an upload as upload", async () => {
+    const provenance = handlerFor(
+      baseStore([
+        row({ referenceId: apiSubmissionReference() }),
+        row({ id: ID_2, referenceId: null }),
+      ]),
+    );
+    const read = async (id: string) =>
+      (
+        (await (
+          await provenance.handler(
+            new Request(`http://api.test/v1/invoices/${id}`, {
+              headers: {
+                [TRUSTED_CALLER_HEADERS.teamId]: TEAM,
+                [TRUSTED_CALLER_HEADERS.userId]: USER,
+                [TRUSTED_CALLER_HEADERS.role]: "admin",
+              },
+            }),
+          )
+        ).json()) as {
+          document: { source: string; idempotencyKey: string | null };
+        }
+      ).document;
+    expect(await read(ID_1)).toMatchObject({
+      source: "api",
+      idempotencyKey: null,
+    });
+    expect(await read(ID_2)).toMatchObject({
+      source: "upload",
+      idempotencyKey: null,
+    });
+    await provenance.dispose();
   });
 
   test("a cursor is only valid for the order it was issued for", async () => {

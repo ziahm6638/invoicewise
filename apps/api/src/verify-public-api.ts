@@ -284,6 +284,13 @@ try {
   // Paging never repeats, and a hostile file name exports as text.
   const hostile = await submit(keyA.key, "-2-3.pdf", `hostile ${Date.now()}`);
   check(hostile.status === 202, `hostile submission: ${hostile.status}`);
+  // A submission without an Idempotency-Key is still reported as API intake.
+  const keyless = await call(`/v1/invoices/${hostile.body.id}`, keyA.key);
+  check(
+    keyless.body.document?.source === "api" &&
+      keyless.body.document?.idempotencyKey === null,
+    `keyless submission document: ${JSON.stringify(keyless.body.document)}`,
+  );
   await submit(keyA.key, "third.pdf", `third ${Date.now()}`);
   const seen: string[] = [];
   let cursor: string | null = null;
