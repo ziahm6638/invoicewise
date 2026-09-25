@@ -138,7 +138,8 @@ can revoke any of them (`team.deleteInvite`).
 **Account deletion.** `deleteUser` takes the same team-row locks as every other
 membership mutation. A user who is the sole owner of any workspace cannot
 delete their account until ownership is transferred or the workspace is deleted
-deliberately, and deleting an account never deletes a shared workspace.
+deliberately (a workspace only they belong to can be named back and deleted in
+the same request), and deleting an account never deletes a shared workspace.
 Workspace deletion is owner-only and requires the workspace name typed back;
 both deletions queue a resumable cleanup of stored files and provider
 connections. See [offboarding](offboarding.md).

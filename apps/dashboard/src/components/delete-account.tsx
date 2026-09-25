@@ -24,15 +24,36 @@ import {
 import { Input } from "@invoicewise/ui/input";
 import { Label } from "@invoicewise/ui/label";
 import { useToast } from "@invoicewise/ui/use-toast";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
-export function DeleteAccount() {
+/**
+ * The confirmed account-deletion dialog, opened by `children`.
+ *
+ * A workspace the user solely owns blocks deletion. One nobody else belongs to
+ * is deleted in the same step once its name is typed back, as for workspace
+ * deletion; a shared one must have its ownership transferred first. The server
+ * re-checks all of this.
+ */
+export function DeleteAccountDialog({ children }: { children: ReactNode }) {
   const trpc = useTRPC();
   const router = useRouter();
   const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const [workspaceNames, setWorkspaceNames] = useState<Record<string, string>>(
+    {},
+  );
+
+  const { data: soleOwned, isLoading } = useQuery({
+    ...trpc.user.soleOwnedWorkspaces.queryOptions(),
+    enabled: open,
+  });
+
+  const shared = soleOwned?.filter((workspace) => workspace.shared) ?? [];
+  const unshared = soleOwned?.filter((workspace) => !workspace.shared) ?? [];
 
   const deleteUserMutation = useMutation(
     trpc.user.delete.mutationOptions({
@@ -40,8 +61,6 @@ export function DeleteAccount() {
         await authClient.signOut();
         router.push("/");
       },
-      // A sole owner is refused until they transfer ownership or delete the
-      // workspace; say so rather than failing silently.
       onError: (error) => {
         toast({
           title: "Account was not deleted",
@@ -52,68 +71,144 @@ export function DeleteAccount() {
     }),
   );
 
-  const [value, setValue] = useState("");
+  const confirmed =
+    value === "DELETE" &&
+    unshared.every(
+      (workspace) =>
+        workspaceNames[workspace.id]?.trim() === workspace.confirmation,
+    );
 
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) {
+          setValue("");
+          setWorkspaceNames({});
+        }
+      }}
+    >
+      <AlertDialogTrigger asChild>{children}</AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This cannot be undone. You are signed out everywhere and your
+            account, API keys and memberships are removed from InvoiceWise
+            immediately. Backups taken before now keep a copy until they expire,
+            about two weeks later.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        {isLoading ? (
+          <div className="flex justify-center py-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+          </div>
+        ) : shared.length > 0 ? (
+          <p className="text-sm text-muted-foreground">
+            You are the only owner of a workspace other members still use:{" "}
+            <span className="font-medium text-foreground">
+              {shared.map((workspace) => workspace.confirmation).join(", ")}
+            </span>
+            . Make another member an owner, or delete the workspace, before
+            deleting your account.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-4 mt-2">
+            {unshared.map((workspace) => (
+              <div key={workspace.id} className="flex flex-col gap-2">
+                <Label htmlFor={`confirm-workspace-${workspace.id}`}>
+                  Your workspace{" "}
+                  <span className="font-medium">{workspace.confirmation}</span>{" "}
+                  is deleted too: its invoices, documents, questions, mailbox
+                  and accounting connections, API keys and settings. Type{" "}
+                  <span className="font-medium">{workspace.confirmation}</span>{" "}
+                  to confirm.
+                </Label>
+                <Input
+                  id={`confirm-workspace-${workspace.id}`}
+                  autoComplete="off"
+                  value={workspaceNames[workspace.id] ?? ""}
+                  onChange={(e) =>
+                    setWorkspaceNames((names) => ({
+                      ...names,
+                      [workspace.id]: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+            ))}
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="confirm-delete">
+                Type <span className="font-medium">DELETE</span> to confirm.
+              </Label>
+              <Input
+                id="confirm-delete"
+                autoComplete="off"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(event) => {
+              // Stay open while the request runs so an error is visible here.
+              event.preventDefault();
+              deleteUserMutation.mutate({
+                deleteWorkspaces: unshared.map((workspace) => ({
+                  teamId: workspace.id,
+                  confirmName: workspaceNames[workspace.id] ?? "",
+                })),
+              });
+            }}
+            disabled={
+              isLoading ||
+              shared.length > 0 ||
+              !confirmed ||
+              deleteUserMutation.isPending
+            }
+          >
+            {deleteUserMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              "Continue"
+            )}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+export function DeleteAccount() {
   return (
     <Card className="border-destructive">
       <CardHeader>
         <CardTitle>Delete account</CardTitle>
         <CardDescription>
           Delete your sign-in, profile and memberships. Workspaces you share
-          with others, and their invoices, stay with the remaining members. If
-          you are the only owner of a workspace, transfer ownership or delete
-          that workspace first.
+          with others, and their invoices, stay with the remaining members; if
+          you are the only owner of one, transfer ownership first. A workspace
+          only you belong to is deleted with your account.
         </CardDescription>
       </CardHeader>
       <CardFooter className="flex justify-between">
         <div />
 
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button
-              variant="destructive"
-              className="hover:bg-destructive text-muted"
-            >
-              Delete
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This cannot be undone. You are signed out everywhere and your
-                account, API keys and memberships are removed from InvoiceWise
-                immediately. Backups taken before now keep a copy until they
-                expire, about two weeks later.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-
-            <div className="flex flex-col gap-2 mt-2">
-              <Label htmlFor="confirm-delete">
-                Type <span className="font-medium">DELETE</span> to confirm.
-              </Label>
-              <Input
-                id="confirm-delete"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-              />
-            </div>
-
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => deleteUserMutation.mutate()}
-                disabled={value !== "DELETE" || deleteUserMutation.isPending}
-              >
-                {deleteUserMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  "Continue"
-                )}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <DeleteAccountDialog>
+          <Button
+            variant="destructive"
+            className="hover:bg-destructive text-muted"
+          >
+            Delete
+          </Button>
+        </DeleteAccountDialog>
       </CardFooter>
     </Card>
   );

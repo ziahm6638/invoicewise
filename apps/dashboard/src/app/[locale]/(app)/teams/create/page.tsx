@@ -1,3 +1,4 @@
+import { DeleteAccountDialog } from "@/components/delete-account";
 import { CreateTeamForm } from "@/components/forms/create-team-form";
 import { getCountryCode, getCurrency } from "@invoicewise/location";
 import { Icons } from "@invoicewise/ui/icons";
@@ -36,6 +37,17 @@ export default function CreateTeam() {
             defaultCurrencyPromise={currency}
             defaultCountryCodePromise={countryCode}
           />
+
+          {/* Account settings need a workspace, so someone with none can
+              still delete their account from here. */}
+          <p className="text-center text-sm text-[#878787] mt-8">
+            Not staying?{" "}
+            <DeleteAccountDialog>
+              <button type="button" className="underline underline-offset-4">
+                Delete your account
+              </button>
+            </DeleteAccountDialog>
+          </p>
         </div>
       </div>
     </>
