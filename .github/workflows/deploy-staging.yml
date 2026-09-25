@@ -1,6 +1,6 @@
 name: Deploy staging
 
-# Every push to main deploys staging.invoicewise.uk (hostinger) with Kamal,
+# Every push to main deploys app.iw-staging.zzapp.uk (hostinger) with Kamal,
 # then smoke-checks it. Production is deployed separately by the operator
 # (docs/deployment.md). The `staging` environment only admits main, and the
 # Infisical identity this job signs in as (GitHub OIDC, subject
@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: staging
-      url: https://staging.invoicewise.uk
+      url: https://app.iw-staging.zzapp.uk
     timeout-minutes: 45
     env:
       STAGING_HOST: 31.97.116.107
@@ -68,11 +68,11 @@ jobs:
       - name: Smoke check
         run: |
           set -euo pipefail
-          test "$(curl -fsS --max-time 20 https://api-staging.invoicewise.uk/health/ready)" = '{"status":"ok"}'
-          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://staging.invoicewise.uk/login)" = 200
+          test "$(curl -fsS --max-time 20 https://api.iw-staging.zzapp.uk/health/ready)" = '{"status":"ok"}'
+          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://app.iw-staging.zzapp.uk/login)" = 200
           printf 'header = "Authorization: Bearer %s"\n' "$OPS_TOKEN" > "$RUNNER_TEMP/ops-auth"
           curl -fsS --max-time 30 --config "$RUNNER_TEMP/ops-auth" \
-            https://api-staging.invoicewise.uk/ops/metrics > "$RUNNER_TEMP/metrics.json"
+            https://api.iw-staging.zzapp.uk/ops/metrics > "$RUNNER_TEMP/metrics.json"
           rm -f "$RUNNER_TEMP/ops-auth"
           jq -e --arg sha "$GITHUB_SHA" '.version == $sha and .database.ok' "$RUNNER_TEMP/metrics.json" >/dev/null
           jq -c '{version, environment, alerts: [.alerts[].key]}' "$RUNNER_TEMP/metrics.json"

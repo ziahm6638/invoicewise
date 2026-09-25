@@ -43,10 +43,6 @@ const baseURL =
 const isProduction = process.env.NODE_ENV === "production";
 const authSecret = resolveAuthSecret();
 const cookieDomain = process.env.BETTER_AUTH_COOKIE_DOMAIN;
-// Staging shares the parent cookie domain with production, so it names its
-// cookies differently: neither environment can read or overwrite the other's
-// session (docs/deployment.md#staging).
-const cookiePrefix = process.env.BETTER_AUTH_COOKIE_PREFIX || undefined;
 
 // Verification, invitation and reset links carry bearer tokens, and the secret
 // signs every session, so a production process refuses to start on a missing
@@ -699,7 +695,6 @@ export const auth = betterAuth({
     crossSubDomainCookies: cookieDomain
       ? { enabled: true, domain: cookieDomain }
       : undefined,
-    cookiePrefix,
   },
   user: {
     fields: {

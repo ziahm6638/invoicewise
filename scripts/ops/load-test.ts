@@ -4,8 +4,8 @@
  *
  *   LOAD_EMAIL=... LOAD_PASSWORD=... OPS_TOKEN=... \
  *     bun --no-env-file scripts/ops/load-test.ts \
- *       --app https://staging.invoicewise.uk \
- *       --api https://api-staging.invoicewise.uk \
+ *       --app https://app.iw-staging.zzapp.uk \
+ *       --api https://api.iw-staging.zzapp.uk \
  *       --documents 30 --concurrency 10
  *
  * 1. Sends hostile and oversized inputs through the real upload route and

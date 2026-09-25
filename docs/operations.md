@@ -17,8 +17,8 @@ deploys automatically from `main`.
 
 | | Production | Staging |
 | --- | --- | --- |
-| Dashboard | `app.invoicewise.uk` | `staging.invoicewise.uk` |
-| API and workflow runner | `api.invoicewise.uk` | `api-staging.invoicewise.uk` |
+| Dashboard | `app.invoicewise.uk` | `app.iw-staging.zzapp.uk` |
+| API and workflow runner | `api.invoicewise.uk` | `api.iw-staging.zzapp.uk` |
 | Host | hp-slice (UK, 4 cores, 15 GiB) | hostinger (EU VPS, 8 cores, 31 GiB) |
 | Edge and TLS | Cloudflare Tunnel (locally managed) on hp-slice | Cloudflare Tunnel `invoicewise-staging` (remotely managed), connector as a Kamal accessory |
 | Postgres 17, Redis 7, Nango | Kamal accessories on hp-slice | Kamal accessories on hostinger, own data under `/srv/invoicewise-staging` |

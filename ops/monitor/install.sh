@@ -24,8 +24,8 @@ case "$env_name" in
     ;;
   staging)
     infisical_env=staging
-    api_url=https://api-staging.invoicewise.uk
-    app_url=https://staging.invoicewise.uk
+    api_url=https://api.iw-staging.zzapp.uk
+    app_url=https://app.iw-staging.zzapp.uk
     ;;
   *)
     echo "environment must be production or staging" >&2

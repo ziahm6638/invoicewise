@@ -6,7 +6,7 @@
 # in the container's /tmp), so a release could pass its health check while
 # broken. It also refuses malformed bounds (pools, concurrency, queue and spend
 # ceilings), non-https public URLs, a short operator token and a staging
-# environment that would share production's cookie names. Only variable names
+# cookie domain that would reach production hosts. Only variable names
 # are ever printed, never values.
 #
 # Usage: require-env.sh web|api
@@ -63,13 +63,22 @@ fi
 case "${INVOICEWISE_ENVIRONMENT:-}" in
   "" | production) ;;
   staging)
-    # Staging shares the .invoicewise.uk cookie domain with production, so it
-    # must name its session cookies differently.
-    case "${BETTER_AUTH_COOKIE_PREFIX:-}" in
-      "" | better-auth)
-        problems="$problems${problems:+; }staging needs its own BETTER_AUTH_COOKIE_PREFIX"
-        ;;
-    esac
+    # Browsers send a cookie to every host under its domain, so staging's
+    # cookie domain must not cover a production host.
+    cookie_domain=$(printf '%s' "${BETTER_AUTH_COOKIE_DOMAIN:-}" | tr 'A-Z' 'a-z')
+    cookie_domain=${cookie_domain#.}
+    if [ -z "$cookie_domain" ]; then
+      problems="$problems${problems:+; }staging needs its own BETTER_AUTH_COOKIE_DOMAIN"
+    else
+      for production_host in app.invoicewise.uk api.invoicewise.uk; do
+        case "$production_host" in
+          "$cookie_domain" | *".$cookie_domain")
+            problems="$problems${problems:+; }staging BETTER_AUTH_COOKIE_DOMAIN must not cover production hosts"
+            break
+            ;;
+        esac
+      done
+    fi
     ;;
   *) problems="$problems${problems:+; }INVOICEWISE_ENVIRONMENT must be production or staging" ;;
 esac

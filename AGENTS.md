@@ -115,7 +115,7 @@ Behind the proxy a dashboard request's own origin is the internal `https://local
 absolute dashboard URLs (redirects, provider return URLs) come from `getPublicUrl`
 (`apps/dashboard/src/utils/environment.ts`), never `request.url`.
 Transactional mail is Purelymail SMTP as `auth@invoicewise.uk`, never Resend.
-Staging (`staging.invoicewise.uk`, `api-staging.invoicewise.uk`) is the Kamal `staging` destination
+Staging (`app.iw-staging.zzapp.uk`, `api.iw-staging.zzapp.uk`, own cookie domain) is the Kamal `staging` destination
 on hostinger (`config/deploy.staging.yml`, Infisical `staging`), deployed by CI from `main`; drills
 (rollback, worker kill, load) run there, never on production. Service targets, capacity/spend
 ceilings, `/ops/metrics` (behind `OPS_TOKEN`) and the alert runbook are in `docs/operations.md`;

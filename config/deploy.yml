@@ -1,5 +1,5 @@
 # Kamal deployment for app.invoicewise.uk and api.invoicewise.uk on hp-slice.
-# Staging (staging.invoicewise.uk, hostinger) is the `staging` destination:
+# Staging (app.iw-staging.zzapp.uk, hostinger) is the `staging` destination:
 # config/deploy.staging.yml is merged over this file by `kamal ... -d staging`.
 # Read docs/deployment.md before changing anything here.
 service: invoicewise

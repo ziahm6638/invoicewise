@@ -185,15 +185,23 @@ describe("staging destination", () => {
     expect(staging.builder.remote).not.toBe(config.builder.remote);
   });
 
-  test("serves only staging origins and names its cookies apart", () => {
+  test("serves only staging origins on a cookie domain production does not share", () => {
+    const productionProxyHosts = Object.values(config.servers).map(
+      (server) => server.proxy.host,
+    );
     for (const role of ["web", "api"]) {
       const env = roleEnv(role, staging);
       expect(env.INVOICEWISE_ENVIRONMENT).toBe("staging");
-      expect(env.BETTER_AUTH_COOKIE_PREFIX).toBeTruthy();
-      for (const [key, value] of Object.entries(env)) {
-        // Every InvoiceWise origin is a staging one (providers stay as-is).
-        if (!/^https:\/\/[^/]*invoicewise\.uk/.test(value)) continue;
-        expect(`${key}=${value}`).toContain("staging");
+      const cookieDomain = env.BETTER_AUTH_COOKIE_DOMAIN!.replace(/^\./, "");
+      expect(cookieDomain).toBe("iw-staging.zzapp.uk");
+      for (const host of productionProxyHosts) {
+        expect(host === cookieDomain || host.endsWith(`.${cookieDomain}`)).toBe(
+          false,
+        );
+      }
+      for (const value of Object.values(env)) {
+        if (!value.startsWith("https://")) continue;
+        expect(new URL(value).hostname).not.toEndWith("invoicewise.uk");
       }
       expect(env.REDIS_URL).toContain("invoicewise-staging-redis");
     }
@@ -201,10 +209,10 @@ describe("staging destination", () => {
       "http://invoicewise-staging-nango:3003",
     );
     expect(Object.values(staging.builder.args ?? {}).join(" ")).not.toContain(
-      "//app.invoicewise.uk",
+      "invoicewise.uk",
     );
-    expect(staging.servers.web?.proxy.host).toBe("staging.invoicewise.uk");
-    expect(staging.servers.api?.proxy.host).toBe("api-staging.invoicewise.uk");
+    expect(staging.servers.web?.proxy.host).toBe("app.iw-staging.zzapp.uk");
+    expect(staging.servers.api?.proxy.host).toBe("api.iw-staging.zzapp.uk");
   });
 
   for (const role of ["web", "api"]) {
@@ -215,14 +223,21 @@ describe("staging destination", () => {
     });
   }
 
-  test("refuses staging with production's cookie names", () => {
-    for (const prefix of ["", "better-auth"]) {
+  test("refuses a staging cookie domain that reaches production hosts", () => {
+    for (const domain of [
+      "",
+      ".invoicewise.uk",
+      "invoicewise.uk",
+      ".INVOICEWISE.UK",
+      ".uk",
+      "app.invoicewise.uk",
+    ]) {
       const result = preflight("web", {
         ...roleEnv("web", staging),
-        BETTER_AUTH_COOKIE_PREFIX: prefix,
+        BETTER_AUTH_COOKIE_DOMAIN: domain,
       });
       expect(result.exitCode).toBe(1);
-      expect(result.output).toContain("BETTER_AUTH_COOKIE_PREFIX");
+      expect(result.output).toContain("BETTER_AUTH_COOKIE_DOMAIN");
     }
   });
 });
