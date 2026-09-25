@@ -6,6 +6,18 @@ export const inboxFilterParamsSchema = {
   dateFrom: parseAsString,
   dateTo: parseAsString,
   status: parseAsStringLiteral(["done", "pending"]),
+  /** Exception state (see `invoiceStateFilters`). */
+  state: parseAsStringLiteral([
+    "needs_attention",
+    "processing",
+    "failed",
+    "invalid",
+    "needs_review",
+    "delivering",
+    "delivery_failed",
+    "delivered",
+    "corrected",
+  ]),
 };
 
 export function useInboxFilterParams() {

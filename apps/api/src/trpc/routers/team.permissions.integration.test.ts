@@ -541,6 +541,197 @@ suite("workspace permissions (integration)", () => {
       ).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
+    test("invoice corrections follow the workspace and the accounting role", async () => {
+      const extraction = {
+        documentType: "invoice",
+        supplierName: "Harbour Lane Plumbing Ltd",
+        supplierVatNumber: null,
+        invoiceNumber: "HLP-EXC-1",
+        invoiceDate: "2026-09-01",
+        currency: "GBP",
+        netAmount: 100,
+        vatAmount: 20,
+        grossAmount: 150,
+        lineItems: [],
+        bankDetails: {},
+        evidence: { fields: {}, lineItems: [] },
+      };
+      const [invoice] = await primaryDb
+        .insert(schema.inbox)
+        .values({
+          teamId: ids.teamA,
+          displayName: "Exception check",
+          fileName: "exception-check.pdf",
+          contentType: "application/pdf",
+          status: "pending",
+          extraction,
+          processingRevision: 1,
+          // Already a bill in Xero.
+          accountingProvider: "xero",
+          accountingPostStatus: "posted",
+          accountingProviderId: "xero-bill-perm",
+        })
+        .returning({ id: schema.inbox.id });
+      const id = invoice!.id;
+      const correction = {
+        id,
+        revision: 1,
+        reason: "Gross read from the wrong line",
+        changes: { grossAmount: 120 },
+      };
+
+      // Another workspace can neither see nor act on the invoice.
+      const otherOwner = caller(ctx(ids.ownerB, ids.teamB));
+      expect(await otherOwner.inbox.history({ id })).toBeNull();
+      await expect(
+        otherOwner.inbox.correct({
+          ...correction,
+          accountingOutcome: "keep_bill",
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        otherOwner.inbox.rerunQuestions({ id, revision: 1 }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      // A member corrects, but may not change the bill in the provider.
+      const member = caller(ctx(ids.memberA, ids.teamA));
+      await expect(member.inbox.correct(correction)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
+      await expect(
+        member.inbox.correct({
+          ...correction,
+          accountingOutcome: "update_bill",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      const kept = await member.inbox.correct({
+        ...correction,
+        accountingOutcome: "keep_bill",
+      });
+      expect(kept).toMatchObject({ version: 1, accounting: "bill_kept" });
+
+      // The same revision cannot be corrected twice.
+      await expect(
+        member.inbox.correct({ ...correction, accountingOutcome: "keep_bill" }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+
+      const history = await member.inbox.history({ id });
+      expect(history?.bill).toMatchObject({
+        provider: "xero",
+        providerId: "xero-bill-perm",
+      });
+      expect(history?.corrections[0]).toMatchObject({
+        version: 1,
+        accountingOutcome: "keep_bill",
+        providerId: "xero-bill-perm",
+        actor: { id: ids.memberA },
+        changes: [{ field: "grossAmount", from: 150, to: 120 }],
+      });
+      expect(history?.original).toMatchObject({ grossAmount: 150 });
+    });
+
+    test("a bulk delivery retry reports an item as started only when work was re-queued", async () => {
+      const insertInvoice = async (
+        name: string,
+        accountingPostStatus: "failed" | null,
+      ) => {
+        const [row] = await primaryDb
+          .insert(schema.inbox)
+          .values({
+            teamId: ids.teamA,
+            displayName: name,
+            fileName: `${name}.pdf`,
+            contentType: "application/pdf",
+            status: "done",
+            processingRevision: 1,
+            accountingProvider: accountingPostStatus ? "xero" : null,
+            accountingPostStatus,
+          })
+          .returning({ id: schema.inbox.id });
+        return row!.id;
+      };
+      const failedA = await insertInvoice("bulk-retry-failed-a", "failed");
+      const failedB = await insertInvoice("bulk-retry-failed-b", "failed");
+      const clean = await insertInvoice("bulk-retry-clean", null);
+      const items = [failedA, failedB, clean].map((id) => ({
+        id,
+        revision: 1,
+      }));
+      const reasons = (response: {
+        results: { id: string; ok: boolean; error: string | null }[];
+      }) =>
+        Object.fromEntries(
+          response.results.map((r) => [r.id, r.ok ? "started" : r.error]),
+        );
+      const queuedPosts = async () => {
+        const [row] = await primaryDb
+          .select({ count: orm.sql<number>`count(*)::int` })
+          .from(schema.workflowJobs)
+          .where(
+            orm.and(
+              orm.eq(schema.workflowJobs.teamId, ids.teamA),
+              orm.eq(schema.workflowJobs.name, "post-accounting-draft"),
+            ),
+          );
+        return row?.count ?? 0;
+      };
+
+      // A member cannot re-send to accounting: nothing is reported as started.
+      const member = caller(ctx(ids.memberA, ids.teamA));
+      expect(
+        reasons(
+          await member.inbox.bulkAction({ action: "retry_delivery", items }),
+        ),
+      ).toEqual({
+        [failedA]: "Re-sending to accounting needs an admin",
+        [failedB]: "Re-sending to accounting needs an admin",
+        [clean]: "Nothing failed to retry",
+      });
+
+      // An admin without an active connection is told to reconnect first.
+      const admin = caller(ctx(ids.adminA, ids.teamA));
+      expect(
+        reasons(
+          await admin.inbox.bulkAction({ action: "retry_delivery", items }),
+        ),
+      ).toEqual({
+        [failedA]: "Reconnect accounting first",
+        [failedB]: "Reconnect accounting first",
+        [clean]: "Nothing failed to retry",
+      });
+      expect(await queuedPosts()).toBe(0);
+
+      // With a connection the failed posts restart, once each.
+      await primaryDb.insert(schema.accountingConnections).values({
+        teamId: ids.teamA,
+        provider: "xero",
+        integrationId: "xero-invoicewise",
+        connectionId: "bulk-retry-connection",
+      });
+      expect(
+        reasons(
+          await admin.inbox.bulkAction({ action: "retry_delivery", items }),
+        ),
+      ).toEqual({
+        [failedA]: "started",
+        [failedB]: "started",
+        [clean]: "Nothing failed to retry",
+      });
+      expect(await queuedPosts()).toBe(2);
+
+      // A second click while they are queued starts nothing new.
+      expect(
+        reasons(
+          await admin.inbox.bulkAction({ action: "retry_delivery", items }),
+        ),
+      ).toEqual({
+        [failedA]: "Already being sent",
+        [failedB]: "Already being sent",
+        [clean]: "Nothing failed to retry",
+      });
+      expect(await queuedPosts()).toBe(2);
+    });
+
     test("an admin manages members but can never grant owner", async () => {
       const admin = caller(ctx(ids.adminA, ids.teamA));
 

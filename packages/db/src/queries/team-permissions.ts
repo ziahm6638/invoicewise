@@ -54,6 +54,13 @@ export const canManageIntegrations = (role: TeamRole | null | undefined) =>
 export const canManageWorkspaceSettings = (role: TeamRole | null | undefined) =>
   roleAtLeast(role, "admin");
 
+/**
+ * Sending an invoice to the accounting provider again, or changing a bill
+ * already there, is an admin decision; the first automatic post is not.
+ */
+export const canPostToAccounting = (role: TeamRole | null | undefined) =>
+  roleAtLeast(role, "admin");
+
 /** Ownership transfer, workspace deletion and billing stay with the owner. */
 export const canManageBilling = (role: TeamRole | null | undefined) =>
   roleAtLeast(role, "owner");
@@ -86,6 +93,7 @@ export const getTeamCapabilities = (role: TeamRole | null | undefined) => ({
   manageQuestions: canManageQuestions(role),
   manageIntegrations: canManageIntegrations(role),
   manageWorkspaceSettings: canManageWorkspaceSettings(role),
+  postToAccounting: canPostToAccounting(role),
   manageBilling: canManageBilling(role),
   deleteWorkspace: canDeleteWorkspace(role),
   transferOwnership: canTransferOwnership(role),

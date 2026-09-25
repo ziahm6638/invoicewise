@@ -99,16 +99,7 @@ const billLines = (bill: DraftBill) => {
 const attachmentFailure = (error: unknown) =>
   error instanceof Error ? error.message : "Attachment upload failed";
 
-// Xero: an ACCPAY invoice in DRAFT is a bill awaiting review; it is neither
-// approved nor paid. Xero replays the original response for a repeated
-// Idempotency-Key, so an ambiguous timeout retried with the same key returns
-// the bill it already created.
-async function postXeroBill(
-  config: NangoConfig,
-  connection: Connection,
-  bill: DraftBill,
-  attachment: BillAttachment | null,
-): Promise<PostedBill> {
+const xeroTenant = async (config: NangoConfig, connection: Connection) => {
   const { connectionConfig } = await getNangoConnection(
     config,
     connection.connectionId,
@@ -119,7 +110,35 @@ async function postXeroBill(
       "The Xero connection has no organisation; reconnect Xero",
     );
   }
-  const tenant = { "Xero-Tenant-Id": tenantId };
+  return { "Xero-Tenant-Id": tenantId };
+};
+
+/** The bill's content as Xero reads it, for a create and an update alike. */
+const xeroBillFields = (bill: DraftBill) => ({
+  Contact: { Name: bill.supplierName ?? "Unknown supplier" },
+  InvoiceNumber: bill.invoiceNumber ?? undefined,
+  Date: bill.invoiceDate ?? undefined,
+  DueDate: bill.dueDate ?? undefined,
+  CurrencyCode: bill.currency ?? undefined,
+  LineAmountTypes: "Exclusive",
+  LineItems: billLines(bill).map((line) => ({
+    Description: line.description,
+    Quantity: line.quantity,
+    UnitAmount: line.unitPrice,
+  })),
+});
+
+// Xero: an ACCPAY invoice in DRAFT is a bill awaiting review; it is neither
+// approved nor paid. Xero replays the original response for a repeated
+// Idempotency-Key, so an ambiguous timeout retried with the same key returns
+// the bill it already created.
+async function postXeroBill(
+  config: NangoConfig,
+  connection: Connection,
+  bill: DraftBill,
+  attachment: BillAttachment | null,
+): Promise<PostedBill> {
+  const tenant = await xeroTenant(config, connection);
   const body = asRecord(
     await nangoProxy(config, connection.connectionId, {
       method: "POST",
@@ -127,21 +146,7 @@ async function postXeroBill(
       headers: { ...tenant, "Idempotency-Key": bill.idempotencyKey },
       json: {
         Invoices: [
-          {
-            Type: "ACCPAY",
-            Status: "DRAFT",
-            Contact: { Name: bill.supplierName ?? "Unknown supplier" },
-            InvoiceNumber: bill.invoiceNumber ?? undefined,
-            Date: bill.invoiceDate ?? undefined,
-            DueDate: bill.dueDate ?? undefined,
-            CurrencyCode: bill.currency ?? undefined,
-            LineAmountTypes: "Exclusive",
-            LineItems: billLines(bill).map((line) => ({
-              Description: line.description,
-              Quantity: line.quantity,
-              UnitAmount: line.unitPrice,
-            })),
-          },
+          { Type: "ACCPAY", Status: "DRAFT", ...xeroBillFields(bill) },
         ],
       },
     }),
@@ -182,12 +187,15 @@ const QUICKBOOKS_MINOR_VERSION = "75";
 const quote = (value: string) =>
   `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 
-async function postQuickBooksBill(
+/**
+ * The company, supplier and expense account a QuickBooks bill is written
+ * against, found (or, for the supplier, created) through the proxy.
+ */
+async function quickBooksContext(
   config: NangoConfig,
   connection: Connection,
   bill: DraftBill,
-  attachment: BillAttachment | null,
-): Promise<PostedBill> {
+) {
   const { connectionConfig } = await getNangoConnection(
     config,
     connection.connectionId,
@@ -246,6 +254,36 @@ async function postQuickBooksBill(
       "QuickBooks has no supplier record or expense account to post against",
     );
   }
+  return { call, query, vendorId, accountId: account.Id };
+}
+
+/** The bill's content as QuickBooks reads it, for a create and an update alike. */
+const quickBooksBillFields = (
+  bill: DraftBill,
+  context: { vendorId: string; accountId: string },
+) => ({
+  VendorRef: { value: context.vendorId },
+  DocNumber: bill.invoiceNumber ?? undefined,
+  TxnDate: bill.invoiceDate ?? undefined,
+  DueDate: bill.dueDate ?? undefined,
+  Line: billLines(bill).map((line) => ({
+    DetailType: "AccountBasedExpenseLineDetail",
+    Amount: line.total,
+    Description: line.description,
+    AccountBasedExpenseLineDetail: {
+      AccountRef: { value: context.accountId },
+    },
+  })),
+});
+
+async function postQuickBooksBill(
+  config: NangoConfig,
+  connection: Connection,
+  bill: DraftBill,
+  attachment: BillAttachment | null,
+): Promise<PostedBill> {
+  const context = await quickBooksContext(config, connection, bill);
+  const { call, query } = context;
 
   const created = asRecord(
     (
@@ -255,19 +293,8 @@ async function postQuickBooksBill(
         { requestid: bill.idempotencyKey },
         {
           json: {
-            VendorRef: { value: vendorId },
-            DocNumber: bill.invoiceNumber ?? undefined,
-            TxnDate: bill.invoiceDate ?? undefined,
-            DueDate: bill.dueDate ?? undefined,
+            ...quickBooksBillFields(bill, context),
             PrivateNote: `InvoiceWise ${bill.idempotencyKey}`,
-            Line: billLines(bill).map((line) => ({
-              DetailType: "AccountBasedExpenseLineDetail",
-              Amount: line.total,
-              Description: line.description,
-              AccountBasedExpenseLineDetail: {
-                AccountRef: { value: account.Id },
-              },
-            })),
           },
         },
       )
@@ -328,3 +355,71 @@ export const postProviderBill = (
   provider === "xero"
     ? postXeroBill(config, connection, bill, attachment)
     : postQuickBooksBill(config, connection, bill, attachment);
+
+/**
+ * Updates a bill InvoiceWise already created, in place: the same provider ID,
+ * never a second bill. `bill.idempotencyKey` is per correction, so a retry
+ * after an ambiguous timeout replays the same update.
+ */
+export async function updateProviderBill(
+  provider: AccountingProvider,
+  config: NangoConfig,
+  connection: Connection,
+  providerId: string,
+  bill: DraftBill,
+): Promise<{ providerId: string }> {
+  if (provider === "xero") {
+    const tenant = await xeroTenant(config, connection);
+    // The bill's status is left as it is: an approved bill stays approved,
+    // and one Xero no longer lets anyone edit (paid, voided) is refused.
+    const body = asRecord(
+      await nangoProxy(config, connection.connectionId, {
+        method: "POST",
+        path: `/api.xro/2.0/Invoices/${encodeURIComponent(providerId)}`,
+        headers: { ...tenant, "Idempotency-Key": bill.idempotencyKey },
+        json: {
+          Invoices: [{ InvoiceID: providerId, ...xeroBillFields(bill) }],
+        },
+      }),
+    );
+    const invoice = asRecord(
+      Array.isArray(body.Invoices) ? body.Invoices[0] : undefined,
+    );
+    if (invoice.InvoiceID !== providerId) {
+      throw new Error("Xero did not confirm the bill update");
+    }
+    return { providerId };
+  }
+
+  const context = await quickBooksContext(config, connection, bill);
+  // QuickBooks updates need the bill's current SyncToken; a bill someone
+  // changed in QuickBooks meanwhile is read again on the next attempt.
+  const current = asRecord(
+    (await context.call("GET", `/bill/${encodeURIComponent(providerId)}`, {}))
+      .Bill,
+  );
+  if (typeof current.SyncToken !== "string") {
+    throw new BillRejectedError("QuickBooks no longer has this bill");
+  }
+  const updated = asRecord(
+    (
+      await context.call(
+        "POST",
+        "/bill",
+        { requestid: bill.idempotencyKey },
+        {
+          json: {
+            Id: providerId,
+            SyncToken: current.SyncToken,
+            sparse: true,
+            ...quickBooksBillFields(bill, context),
+          },
+        },
+      )
+    ).Bill,
+  );
+  if (updated.Id !== providerId) {
+    throw new Error("QuickBooks did not confirm the bill update");
+  }
+  return { providerId };
+}

@@ -190,6 +190,7 @@ describe("export records", () => {
       supplierId: acme,
       supplierResolution: { status: "resolved", method: "name" },
       supplierChecks: { version: 1 },
+      extractionOriginal: null,
       ...extra,
     });
 
@@ -212,6 +213,8 @@ describe("export records", () => {
             accountingProvider: "xero",
             accountingPostStatus: "posted",
             accountingPostedAt: "2026-09-02T10:00:00.000Z",
+            // Corrected after it was posted; the reading is kept.
+            extractionOriginal: { grossAmount: 150 },
           }),
         ],
         suppliers: [acme, bolt].map((id, index) => ({
@@ -236,6 +239,25 @@ describe("export records", () => {
             revertsEventId: null,
             revertedAt: null,
             createdAt: "2026-09-03T10:00:00.000Z",
+          },
+        ],
+        corrections: [
+          {
+            id: "77777777-7777-4777-8777-777777777777",
+            invoiceId: secondId,
+            version: 1,
+            baseRevision: 1,
+            revision: 2,
+            actorId: null,
+            reason: "Gross read from the balance-due line",
+            changes: [{ field: "grossAmount", from: 150, to: 120 }],
+            accountingOutcome: "keep_bill",
+            provider: "xero",
+            providerId: "xero-bill-1",
+            updateStatus: null,
+            updateError: null,
+            updatedAt: null,
+            createdAt: "2026-09-05T10:00:00.000Z",
           },
         ],
         redeliveries: [
@@ -325,6 +347,21 @@ describe("export records", () => {
     ]);
     expect(records.invoices[1]?.source.redeliveries).toEqual([]);
     expect(records.supplierEvents).toHaveLength(1);
+    // Corrections keep who changed what and why, and the reading they
+    // replaced stays on the invoice.
+    expect(records.corrections).toMatchObject([
+      {
+        invoiceId: secondId,
+        version: 1,
+        reason: "Gross read from the balance-due line",
+        changes: [{ field: "grossAmount", from: 150, to: 120 }],
+        providerId: "xero-bill-1",
+      },
+    ]);
+    expect(records.invoices[1]?.extractionOriginal).toEqual({
+      grossAmount: 150,
+    });
+    expect(records.invoices[0]?.extractionOriginal).toBeNull();
     expect(records.judgments.map((row) => row.id)).toEqual([
       `${firstId}:duplicate`,
       `${firstId}:known_supplier`,
@@ -340,10 +377,16 @@ describe("export records", () => {
       "invoice.received",
       "invoice.accounting_posted",
       "supplier.assign_invoice",
+      "invoice.corrected",
     ]);
-    expect(records.audit.at(-1)).toMatchObject({
+    expect(records.audit.at(-2)).toMatchObject({
       subject: { kind: "invoice", id: secondId },
       detail: { supplierId: acme, targetSupplierId: bolt },
+    });
+    expect(records.audit.at(-1)).toMatchObject({
+      id: "invoice.corrected:77777777-7777-4777-8777-777777777777",
+      subject: { kind: "invoice", id: secondId },
+      detail: { version: 1, accountingOutcome: "keep_bill" },
     });
   });
 });

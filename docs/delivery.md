@@ -313,6 +313,126 @@ removed destinations:     disabled endpoint/disconnected accounting/deleted invo
 reconciliation:           9 accepted revisions, 18 distinct logical events, 1 deduplicable redelivery, 6 bills, 0 silent losses
 ```
 
+## Corrections, reprocessing and retries
+
+The invoice detail page shows where an invoice stands in each stage
+(extraction, validation, questions, delivery), the reason for any failure and
+the next permitted action (`describeInvoiceWorkflow` in
+`apps/dashboard/src/components/inbox/invoice-state.ts`). Queued work always
+reads as in progress: an invoice is *Delivered* only when its destinations
+have reported success, and a pending bill update keeps it *Delivering*. The
+invoice list filters by these states (needs attention, extraction failed,
+invalid, needs review, delivering, delivery failed, delivered, processing,
+corrected), searches supplier names and invoice numbers, pages with the
+filter applied, and acts on a selection (re-extract, rerun questions, retry
+delivery), each invoice reporting its own outcome; a retry that re-queued
+nothing (nothing failed, already sending, needs an admin, no accounting
+connection) is reported as not started.
+
+Three separate actions, each named with the processing revision the user is
+looking at, so a double click, a second tab or a finishing worker produces one
+transition and the other is refused as a conflict (tRPC `CONFLICT`):
+
+| Action | tRPC | What it does | Downstream |
+| --- | --- | --- | --- |
+| Re-extract | `inbox.retry` (`id`, `revision`) | Reads the stored document again; concurrent clicks share one processing job | New revision; webhooks for the current endpoints; accounting as after any processing (a posted bill is never posted again or changed). Replaces corrections; the history keeps them, and a failed or cancelled bill update they asked for is recorded as superseded once the new reading is saved, and is never sent or retried. Retry delivery leaves bill updates alone while the document is read; a re-read that fails replaces nothing, so the correction and its update stay retryable. Refused while a bill update is being sent |
+| Rerun questions | `inbox.rerunQuestions` | Answers the workspace's questions again for the stored (possibly corrected) extraction, with the supplier-scoped history; one `rerun-judgments` job per revision | New revision with the new answers; `invoice.processed` and `invoice.judgments.attached` for the current endpoints; no accounting |
+| Retry delivery | `inbox.retryDelivery` | Re-drives failed or cancelled destinations of the current revision, including a failed bill update | Same delivery rows and event IDs; accounting needs an admin |
+
+A rerun that fails (TypeSafe down, an exhausted job) is recorded on the
+invoice (`judgments_rerun_status`) and can be requested again. Every
+operation lives in the Postgres queue, so it survives a page refresh and a
+worker restart; the runner's reconciler (`reconcileInvoiceOperations` in
+`packages/jobs/src/exceptions.ts`, beside `reconcileDeliveries`) re-queues a
+lost rerun, turns a rerun or bill update whose job failed without recording
+an outcome into a visible, retryable failure, and records a document left
+`processing` after its processing job failed as a failed extraction (the
+dashboard already shows it as failed, with Re-extract). That settlement
+re-checks under the invoice row lock that no processing job is queued or
+running, so a concurrent Re-extract wins.
+
+### Corrections
+
+`inbox.correct` (`correctInvoice`) changes extracted fields of one revision.
+Members and admins may correct (see [permissions](permissions.md)). In one
+transaction, under the invoice row lock and the workspace's identity lock:
+
+- values are checked against the canonical record
+  (`applyInvoiceCorrection` in `packages/documents/src/correction.ts`, which
+  the dashboard runs too): ISO dates that exist, three-letter currency codes,
+  amounts with at most two decimals, a known document type, sort code, IBAN
+  and BIC shapes; a submission that changes nothing is refused, and line
+  items are not correctable;
+- the reading is kept: `inbox.extraction_original` holds the extraction as
+  read (until a re-extraction replaces it), and each `invoice_corrections` row
+  records the actor, time, reason, version, the revision it corrected and
+  created, and every field's value before and after. A corrected value's
+  evidence says it came from a user, so the low-confidence warning of the
+  reading no longer applies;
+- the supplier is resolved again (a manual assignment is kept), validation
+  and supplier checks run again, and later copies whose duplicate identity
+  depended on the old or new number are checked again;
+- the corrected record becomes the next revision; webhook endpoints receive
+  `invoice.processed` for it with `data.correction` (version, reason,
+  changes).
+
+What happens to the bill:
+
+- **Not posted yet.** The post is scheduled again from the corrected values
+  (validation still gates it). Re-posting after a failed, cancelled or held
+  post needs an admin, as a retry does; a member's correction reports
+  `admin_required`. A correction is refused while a post is running, and
+  while an earlier post may already have created the bill (a retryable
+  failure or a cancelled post with a stored idempotency key): retry delivery
+  first, so the provider's key either creates the bill or replays the
+  existing one, then correct the posted invoice and keep or update its bill.
+  A post that never reached the provider (blocked by validation, held for
+  review) takes its key from the corrected number.
+- **Already posted.** The provider ID is kept and the caller must choose:
+  `keep_bill` (only InvoiceWise's record changes; the history says the bill
+  was kept) or `update_bill` (admin only): the same bill is updated in place
+  by the `update-accounting-bill` job with the extraction as approved, under a
+  per-correction key, never created again. It is refused when the corrected
+  invoice could not be posted (validation blockers), when the bill's provider
+  is not connected, or would move the bill to a number another document's
+  bill holds. An update cancelled because the connection went away reads as
+  a failed delivery until it is retried; a changed number also claims the
+  new number, keeping the old claim, so neither can become a second bill. A
+  new correction waits until a queued update settles, and the newest
+  correction decides the bill: a later correction supersedes an earlier
+  update that failed, which then no longer reads as a failed delivery or is
+  retried. A correction also supersedes a question rerun queued for the
+  previous revision. See
+  [Accounting integrations](accounting-integrations.md#updating-a-bill-after-a-correction).
+
+The detail page's **History** lists the corrections newest first and links
+the bill in Xero or QuickBooks.
+
+### Upload status
+
+Each uploaded file has its own status in the dashboard's upload panel:
+*Received* only after the server answered 200 (stored, record accepted,
+processing queued), otherwise the server's reason. A capacity, storage or
+connection failure (or a two-minute timeout) offers Retry, which sends the
+same bytes and resumes the same reservation; a rejected document does not.
+Uploads interrupted by closing the page are listed as interrupted when the
+page comes back, never as still uploading; uploading the file again resumes
+or deduplicates it (see [intake recovery](document-intake.md#lifecycle)).
+
+### Exception workflow proof
+
+`bun run verify:exceptions` in `packages/jobs` (part of `bun run verify`)
+drives the real queue, worker batches and Postgres against loopback
+Nango/Xero, TypeSafe and webhook stubs: a failed extraction re-extracted by
+three concurrent clicks through one job, a stalled processing job made
+retryable, question reruns (concurrent, failed, a worker dying on the last
+attempt, retried), invalid totals blocked then corrected by one of two
+concurrent corrections and posted once, a member's correction waiting for an
+admin retry, a post that timed out after the provider created the bill
+retried to the same single bill, and a delivered invoice kept, then updated
+in place through a timed-out and retried update with the provider ID and
+bill count unchanged.
+
 ## Question reruns
 
 When new result events are emitted, and when they are not:

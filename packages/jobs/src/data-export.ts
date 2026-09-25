@@ -240,6 +240,9 @@ export function buildExportRecords(
       website: invoice.website,
       processingError: invoice.processingError,
       extraction,
+      // The reading a user corrected, when the extraction holds corrections;
+      // `invoice-corrections.json` has each change.
+      extractionOriginal: invoice.extractionOriginal ?? null,
       judgmentIds,
       source: {
         mailboxId: invoice.inboxAccountId,
@@ -331,6 +334,21 @@ export function buildExportRecords(
       },
     });
   }
+  for (const correction of data.corrections) {
+    audit.push({
+      id: `invoice.corrected:${correction.id}`,
+      at: correction.createdAt,
+      type: "invoice.corrected",
+      subject: { kind: "invoice", id: correction.invoiceId },
+      detail: {
+        correctionId: correction.id,
+        version: correction.version,
+        actorId: correction.actorId,
+        accountingOutcome: correction.accountingOutcome,
+        billUpdate: correction.updateStatus,
+      },
+    });
+  }
   for (const request of data.exports) {
     audit.push({
       id: `export.requested:${request.id}`,
@@ -380,6 +398,7 @@ export function buildExportRecords(
     judgments,
     suppliers: supplierRecords,
     supplierEvents: data.supplierEvents,
+    corrections: data.corrections,
     questions: data.questions,
     questionRuns: data.questionRuns,
     questionAnswers: data.questionAnswers,
@@ -685,6 +704,11 @@ export async function buildDataExport(
         path: "supplier-events.json",
         records: records.supplierEvents.length,
         content: json(records.supplierEvents),
+      },
+      {
+        path: "invoice-corrections.json",
+        records: records.corrections.length,
+        content: json(records.corrections),
       },
       {
         path: "authorization-sources.json",

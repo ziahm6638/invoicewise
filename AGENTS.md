@@ -62,6 +62,7 @@ the release gate pins its three known failures as a recorded baseline (see `docs
 - **Questions:** workspace questions (boolean, choice, score, number) are immutable `user_questions` revisions; every stored answer carries its revision and TypeSafe evaluator, `unknown`/low-confidence/incomplete-input are never No or 0, and previews/reruns read the retained `document_texts`. A rerun changes only judgments (kept in `question_answers`) and never bumps `processing_revision`, so it can't post to accounting; see `docs/document-intake.md#questions` and `docs/delivery.md#question-reruns`
 - **Authorization sources (Layer 2 foundation):** jobs, purchase orders and contracts keyed by workspace type + reference, with immutable `authorization_source_versions` (a DB trigger refuses edits; amendments, status changes and supplier links are new versions) and an effective-date lookup; CSV/REST batches are all-or-nothing. Rules, CSV format and API are in `docs/authorization-sources.md`; writes are admin-only and use the `sources.read`/`sources.write` scopes
 - **Validation:** plain-code checks of every extraction (arithmetic with explicit tolerances, currency pairs, credit notes, duplicate identity) persist in `inbox.validation` and gate accounting delivery; rules and the reviewed fixture corpus (`packages/documents/src/test/corpus`, gated by `thresholds.json`) are in `docs/document-intake.md#validation`
+- **Exception workflow:** re-extract, rerun questions, retry delivery and field corrections each carry the processing revision the user saw (one transition per revision); corrections keep the reading (`inbox.extraction_original`, audited `invoice_corrections`), re-run validation, and a posted bill is kept or updated in place, never posted twice. See `docs/delivery.md#corrections-reprocessing-and-retries` (`packages/jobs/src/exceptions.ts`)
 - **Integrations:** self-hosted Nango on hp-slice for Xero/QuickBooks (auth + proxy only, so bill adapters live in `packages/jobs`; see `docs/accounting-integrations.md`), Polar (billing), API/MCP/webhooks
 - **Outbound to customer URLs:** webhooks send only through the egress guard `packages/jobs/src/egress.ts` (resolve, refuse private/metadata addresses, connect to the pinned address, bounded); never `fetch` a customer-supplied URL. Management and semantics: `docs/delivery.md#webhooks`
 
@@ -101,7 +102,7 @@ TypeSafe, Nango and Polar values are documented in `docs/development.md`. Real
 `migrations/`. Applied state is recorded in `drizzle.__drizzle_migrations`. Member tables include
 `users`, `teams`, `users_on_team`, `user_questions`, `inbox` (with extraction, judgments, intake
 lifecycle, supplier and accounting-delivery columns), `suppliers`, `supplier_events`,
-`inbox_redeliveries`, `authorization_sources` (+ `_versions`, `_documents`, `_imports`) and `workflow_jobs`. Bank and transaction tables are
+`inbox_redeliveries`, `invoice_corrections`, `authorization_sources` (+ `_versions`, `_documents`, `_imports`) and `workflow_jobs`. Bank and transaction tables are
 unused but still defined in the schema; `inbox` keeps the accepted document, its source reference and financial fields.
 
 After `drizzle-kit generate`, set the new `_journal.json` entry's `when` above the previous

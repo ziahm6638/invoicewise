@@ -81,6 +81,13 @@ const invoice = {
     failed: 0,
     cancelled: 0,
   },
+  processingStalled: false,
+  judgmentsRerunStatus: null,
+  judgmentsRerunError: null,
+  correctionCount: 0,
+  accountingProvider: null,
+  accountingPostStatus: null,
+  accountingProviderId: null,
   inboxAccountId: null,
   inboxAccount: null,
   inboundEmail: {

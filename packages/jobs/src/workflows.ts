@@ -12,6 +12,7 @@ import {
   recordDataExportFailure,
   recordDeletionFailure,
   recordInboxProcessingFailure,
+  recordJudgmentsRerunFailure,
   updateInboxAccount,
 } from "@invoicewise/db/queries";
 import { createStorageClient } from "@invoicewise/db/storage";
@@ -46,7 +47,7 @@ import {
 } from "effect";
 import { nanoid } from "nanoid";
 import { type CreateContactOptions, Resend } from "resend";
-import { postAccountingDraft } from "./accounting";
+import { postAccountingDraft, updateAccountingBill } from "./accounting";
 import { workflowKey } from "./client";
 import {
   DataExportError,
@@ -59,6 +60,11 @@ import {
   runDeletionCleanup,
 } from "./deletion";
 import { reconcileDeliveries } from "./delivery";
+import {
+  TEMPORARY_PROCESSING_FAILURE,
+  TEMPORARY_RERUN_FAILURE,
+  rerunInvoiceJudgments,
+} from "./exceptions";
 import {
   InboundEmailProcessingError,
   failInboundEmail,
@@ -92,8 +98,10 @@ import {
   type ProcessAttachmentPayload,
   type ProcessInboundEmailPayload,
   type PurgeDeletedDataPayload,
+  type RerunJudgmentsPayload,
   type RerunQuestionPayload,
   type SyncInboxAccountPayload,
+  type UpdateAccountingBillPayload,
   WorkflowRequest,
 } from "./schema";
 import {
@@ -117,9 +125,7 @@ export class WorkflowExecutionError extends Schema.TaggedError<WorkflowExecution
   },
 ) {}
 
-/** Recorded on an invoice whose failure is not the document's fault. */
-export const TEMPORARY_PROCESSING_FAILURE =
-  "A temporary processing problem stopped this invoice from being read. Retry it shortly.";
+export { TEMPORARY_PROCESSING_FAILURE } from "./exceptions";
 
 export class WorkflowDatabase extends Context.Tag(
   "invoicewise/WorkflowDatabase",
@@ -583,6 +589,50 @@ const makeProcessInboundEmail = (
                 attempt(
                   () => failInboundEmail(db, payload),
                   "Unable to record the failed inbound message",
+                ),
+              ),
+              Effect.ignore,
+            )
+          : Effect.void,
+      ),
+    );
+  });
+
+/**
+ * An explicit question rerun. A failure the next attempt may fix is retried;
+ * the final one is recorded on the invoice so the rerun can be requested
+ * again, with only a customer-safe reason shown.
+ */
+const makeRerunJudgments = (
+  db: Database,
+  storage: ReturnType<typeof createStorageClient>,
+) =>
+  Effect.fn("rerunJudgmentsWorkflow")(function* (
+    job: WorkflowJob,
+    payload: RerunJudgmentsPayload,
+  ) {
+    yield* ensureTeam(job, payload.teamId);
+    return yield* attempt(
+      () => rerunInvoiceJudgments(db, storage, payload),
+      "Unable to answer the invoice questions again",
+    ).pipe(
+      Effect.tapError((error) =>
+        !error.retryable || job.attempts >= job.maxAttempts
+          ? Effect.logWarning("invoice_judgments_rerun_failed").pipe(
+              Effect.annotateLogs({
+                inboxId: payload.invoiceId,
+                reason: error.reason,
+              }),
+              Effect.zipRight(
+                attempt(
+                  () =>
+                    recordJudgmentsRerunFailure(db, {
+                      id: payload.invoiceId,
+                      teamId: payload.teamId,
+                      revision: payload.revision,
+                      error: error.userMessage ?? TEMPORARY_RERUN_FAILURE,
+                    }).then(() => undefined),
+                  "Unable to record the failed question rerun",
                 ),
               ),
               Effect.ignore,
@@ -1152,6 +1202,7 @@ export const WorkflowHandlerLive = Layer.effect(
       retentionPolicy,
     );
     const applyRetention = makeApplyRetention(db, storage, retentionPolicy);
+    const rerunJudgments = makeRerunJudgments(db, storage);
     const webhookRepository = makeWebhookDeliveryRepository(db);
     const postAccountingDraftJob = (
       job: WorkflowJob,
@@ -1168,6 +1219,28 @@ export const WorkflowHandlerLive = Layer.effect(
               reason: error.reason,
               retryable: error.retryable,
             }),
+        ),
+      );
+    const updateAccountingBillJob = (
+      job: WorkflowJob,
+      payload: UpdateAccountingBillPayload,
+    ) =>
+      ensureTeam(job, payload.teamId).pipe(
+        Effect.zipRight(
+          updateAccountingBill(db, {
+            correctionId: payload.correctionId,
+            teamId: payload.teamId,
+            attempt: job.attempts,
+            maxAttempts: job.maxAttempts,
+          }).pipe(
+            Effect.mapError(
+              (error) =>
+                new WorkflowExecutionError({
+                  reason: error.reason,
+                  retryable: error.retryable,
+                }),
+            ),
+          ),
         ),
       );
     const rerunQuestionJob = (
@@ -1236,6 +1309,10 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* deliverWebhookJob(job, request.payload);
             case "post-accounting-draft":
               return yield* postAccountingDraftJob(job, request.payload);
+            case "rerun-judgments":
+              return yield* rerunJudgments(job, request.payload);
+            case "update-accounting-bill":
+              return yield* updateAccountingBillJob(job, request.payload);
             case "rerun-question":
               return yield* rerunQuestionJob(job, request.payload);
             case "purge-deleted-data":

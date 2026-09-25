@@ -3,6 +3,7 @@ import {
   BillRejectedError,
   type DraftBill,
   postProviderBill,
+  updateProviderBill,
 } from "./accounting-providers";
 import { NangoRequestError, getNangoConfig } from "./nango";
 
@@ -75,6 +76,20 @@ const stub = Bun.serve({
       }
       return Response.json({ Invoices: [{ InvoiceID: id }] });
     }
+    // An update names the bill in the path and the body; it never creates.
+    const xeroUpdate = path.match(/^\/api\.xro\/2\.0\/Invoices\/([^/]+)$/);
+    if (xeroUpdate) {
+      const id = decodeURIComponent(xeroUpdate[1]!);
+      const [sent] = (call.json as { Invoices: { InvoiceID: string }[] })
+        .Invoices;
+      if (![...bills.values()].includes(id) || sent?.InvoiceID !== id) {
+        return Response.json(
+          { Message: "A validation exception occurred" },
+          { status: 400 },
+        );
+      }
+      return Response.json({ Invoices: [{ InvoiceID: id }] });
+    }
     if (path.startsWith("/api.xro/2.0/Invoices/")) {
       return uploadStatus === 200
         ? Response.json({ Attachments: [{}] })
@@ -111,6 +126,28 @@ const stub = Bun.serve({
     if (path === "/v3/company/9130/vendor") {
       vendors.push((call.json as { DisplayName: string }).DisplayName);
       return Response.json({ Vendor: { Id: `v${vendors.length}` } });
+    }
+    const quickBooksBill = path.match(/^\/v3\/company\/9130\/bill\/(.+)$/);
+    if (quickBooksBill && request.method === "GET") {
+      const id = decodeURIComponent(quickBooksBill[1]!);
+      return [...bills.values()].includes(id)
+        ? Response.json({ Bill: { Id: id, SyncToken: "3" } })
+        : Response.json(
+            { Fault: { Error: [{ Message: "Object Not Found" }] } },
+            { status: 400 },
+          );
+    }
+    if (
+      path === "/v3/company/9130/bill" &&
+      (call.json as { Id?: string }).Id !== undefined
+    ) {
+      const sent = call.json as { Id: string; SyncToken: string };
+      return sent.SyncToken === "3"
+        ? Response.json({ Bill: { Id: sent.Id, SyncToken: "4" } })
+        : Response.json(
+            { Fault: { Error: [{ Message: "Stale Object Error" }] } },
+            { status: 400 },
+          );
     }
     if (path === "/v3/company/9130/bill") {
       const key = url.searchParams.get("requestid")!;
@@ -494,4 +531,107 @@ test("the Nango base URL must be configured explicitly", () => {
   expect(() => getNangoConfig("xero", rest)).toThrow(
     "NANGO_BASE_URL must be configured",
   );
+});
+
+describe("bill update", () => {
+  const corrected: DraftBill = {
+    ...bill,
+    idempotencyKey: "invoicewise-update:3f1c2a4e-0000-4000-8000-00000000c001",
+    grossAmount: 170,
+    vatAmount: 20,
+  };
+
+  test("Xero updates the same bill in place, leaving its status alone", async () => {
+    connectionConfig = { tenant_id: "tenant-1" };
+    const config = getNangoConfig("xero", env);
+    const posted = await postProviderBill(
+      "xero",
+      config,
+      connection,
+      bill,
+      null,
+    );
+    calls = [];
+    const updated = await updateProviderBill(
+      "xero",
+      config,
+      connection,
+      posted.providerId,
+      corrected,
+    );
+    expect(updated).toEqual({ providerId: posted.providerId });
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call?.path).toBe(`/api.xro/2.0/Invoices/${posted.providerId}`);
+    expect(call?.headers.get("nango-proxy-idempotency-key")).toBe(
+      corrected.idempotencyKey,
+    );
+    const [sent] = (call?.json as { Invoices: Record<string, unknown>[] })
+      .Invoices;
+    expect(sent?.InvoiceID).toBe(posted.providerId);
+    expect(sent).not.toHaveProperty("Status");
+    expect(sent).not.toHaveProperty("Type");
+    // No second bill exists.
+    expect(bills.size).toBe(1);
+  });
+
+  test("Xero refusing the update is a permanent failure", async () => {
+    connectionConfig = { tenant_id: "tenant-1" };
+    const config = getNangoConfig("xero", env);
+    const failure = await updateProviderBill(
+      "xero",
+      config,
+      connection,
+      "unknown-bill",
+      corrected,
+    ).catch((error) => error);
+    expect(failure).toBeInstanceOf(NangoRequestError);
+    expect((failure as NangoRequestError).retryable).toBe(false);
+  });
+
+  test("QuickBooks updates the bill with its current SyncToken", async () => {
+    connectionConfig = { realmId: "9130" };
+    const config = getNangoConfig("quickbooks", env);
+    const posted = await postProviderBill(
+      "quickbooks",
+      config,
+      connection,
+      bill,
+      null,
+    );
+    calls = [];
+    const updated = await updateProviderBill(
+      "quickbooks",
+      config,
+      connection,
+      posted.providerId,
+      corrected,
+    );
+    expect(updated).toEqual({ providerId: posted.providerId });
+    const write = calls.find(
+      (call) => call.method === "POST" && call.path.endsWith("/bill"),
+    );
+    expect(write?.search.get("requestid")).toBe(corrected.idempotencyKey);
+    expect(write?.json).toMatchObject({
+      Id: posted.providerId,
+      SyncToken: "3",
+      sparse: true,
+      DocNumber: "INV-42",
+    });
+    expect(bills.size).toBe(1);
+  });
+
+  test("QuickBooks without the bill refuses rather than creating one", async () => {
+    connectionConfig = { realmId: "9130" };
+    const config = getNangoConfig("quickbooks", env);
+    const failure = await updateProviderBill(
+      "quickbooks",
+      config,
+      connection,
+      "999",
+      corrected,
+    ).catch((error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(bills.size).toBe(0);
+  });
 });

@@ -63,8 +63,8 @@ export function toJudgmentQuestion(
 }
 
 /**
- * The workspace's enabled questions, as a processing run asks them: its
- * default checks and its own custom questions.
+ * The workspace's enabled questions, as a processing run and a question
+ * rerun both ask them: its default checks and its own custom questions.
  */
 export async function loadJudgmentQuestions(db: Database, teamId: string) {
   const enabled = (await getUserQuestions(db, teamId)).filter(
@@ -197,18 +197,37 @@ export async function saveProcessedDocument(
         })
       : null;
     if (completion && input.extraction.invoiceNumber) {
-      const later = await getLaterDocumentsByNumber(executor, {
-        teamId: input.teamId,
-        documentId: input.id,
-        number: input.extraction.invoiceNumber,
-      });
-      for (const document of later) {
-        await reevaluateDocument(executor, {
-          teamId: input.teamId,
-          documentId: document.id,
-        });
-      }
+      await reevaluateLaterDocuments(executor, input.teamId, input.id, [
+        input.extraction.invoiceNumber,
+      ]);
     }
     return { completion, validation, supplierChecks };
   });
+}
+
+/**
+ * Checks again the later documents, not yet sent to accounting, whose
+ * duplicate identity or credit link depends on this document carrying (or
+ * no longer carrying) one of `numbers`. Runs in the caller's transaction,
+ * under `lockDocumentIdentities`.
+ */
+export async function reevaluateLaterDocuments(
+  executor: Database,
+  teamId: string,
+  documentId: string,
+  numbers: readonly string[],
+) {
+  const seen = new Set<string>();
+  for (const number of numbers) {
+    const later = await getLaterDocumentsByNumber(executor, {
+      teamId,
+      documentId,
+      number,
+    });
+    for (const document of later) {
+      if (seen.has(document.id)) continue;
+      seen.add(document.id);
+      await reevaluateDocument(executor, { teamId, documentId: document.id });
+    }
+  }
 }
