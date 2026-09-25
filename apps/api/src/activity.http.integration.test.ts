@@ -430,6 +430,24 @@ suite("invoice activity and operator recovery over real HTTP", () => {
       "mutation",
     );
     expect(endpoint.error).toBeNull();
+    // Delivery rules are a workspace policy: sending every processed invoice
+    // to webhooks (each carrying its decision) is an audited change.
+    const rules = await trpc(owner.cookie, "deliveryRules.get", null);
+    expect(rules.error).toBeNull();
+    const policy = rules.data.current.policy as Json;
+    const saved = await trpc(
+      owner.cookie,
+      "deliveryRules.update",
+      {
+        expectedVersion: rules.data.current.version,
+        policy: {
+          ...policy,
+          destinations: { ...policy.destinations, webhooks: "all" },
+        },
+      },
+      "mutation",
+    );
+    expect(saved.error).toBeNull();
     const readOnly = await trpc(
       owner.cookie,
       "apiKeys.upsert",
@@ -723,6 +741,10 @@ suite("invoice activity and operator recovery over real HTTP", () => {
     });
     expect(find("webhook.create", "denied", "user")).toMatchObject({
       actor: { id: member.userId },
+    });
+    expect(find("delivery_rules.update", "succeeded", "user")).toMatchObject({
+      actor: { id: owner.userId },
+      detail: { expectedVersion: rules.data.current.version },
     });
     expect(find("api_key.save", "succeeded")).toMatchObject({
       detail: { scopes: ["inbox.read"] },
