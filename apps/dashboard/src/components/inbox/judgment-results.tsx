@@ -1,29 +1,19 @@
 import type { InvoiceJudgment } from "@invoicewise/documents";
 import { Badge } from "@invoicewise/ui/badge";
-import { AlertTriangle, CheckCircle2, MinusCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  CircleHelp,
+  MinusCircle,
+} from "lucide-react";
 import { checkDescription } from "../built-in-checks";
-
-const percent = (value: number) => `${Math.round(value * 100)}%`;
-
-function answerFor(judgment: InvoiceJudgment) {
-  if (judgment.status === "failed") return "Could not answer";
-  if (judgment.status === "not_applicable") return "Not applicable";
-  if (judgment.type === "boolean") return judgment.answer ? "Yes" : "No";
-  if (judgment.type === "score") {
-    return judgment.levels[String(judgment.answer)] ?? String(judgment.answer);
-  }
-  return judgment.answer;
-}
-
-function confidenceFor(judgment: InvoiceJudgment) {
-  if (judgment.status === "failed" || judgment.status === "not_applicable") {
-    return null;
-  }
-  if (judgment.type === "boolean") {
-    return judgment.answer ? judgment.probability : 1 - judgment.probability;
-  }
-  return judgment.confidence;
-}
+import {
+  answerFor,
+  cautionFor,
+  confidenceFor,
+  percent,
+  provenanceFor,
+} from "./answer-format";
 
 export function JudgmentResults({
   judgments,
@@ -67,6 +57,11 @@ export function JudgmentResults({
                       aria-hidden
                       className="size-4 text-muted-foreground"
                     />
+                  ) : judgment.status === "unknown" || cautionFor(judgment) ? (
+                    <CircleHelp
+                      aria-hidden
+                      className="size-4 text-amber-600 dark:text-amber-400"
+                    />
                   ) : (
                     <CheckCircle2
                       aria-hidden
@@ -89,7 +84,8 @@ export function JudgmentResults({
                   className={
                     judgment.status === "failed"
                       ? "text-sm font-medium text-destructive"
-                      : judgment.status === "not_applicable"
+                      : judgment.status === "not_applicable" ||
+                          judgment.status === "unknown"
                         ? "text-sm font-medium text-muted-foreground"
                         : "text-sm font-semibold"
                   }
@@ -101,9 +97,20 @@ export function JudgmentResults({
                     {percent(confidence)} confidence
                   </p>
                 )}
+                {cautionFor(judgment) && (
+                  <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                    {cautionFor(judgment)}
+                  </p>
+                )}
               </div>
             </div>
-            {judgment.status === "not_applicable" && (
+            {judgment.status === "answered" && judgment.type === "number" && (
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                Read from: “{judgment.evidence.text}”
+              </p>
+            )}
+            {(judgment.status === "not_applicable" ||
+              judgment.status === "unknown") && (
               <p className="mt-2 text-xs leading-5 text-muted-foreground">
                 {judgment.reason}
               </p>
@@ -112,6 +119,19 @@ export function JudgmentResults({
               <p className="mt-2 text-xs leading-5 text-destructive">
                 {judgment.error ||
                   "InvoiceWise could not produce a reliable answer."}
+              </p>
+            )}
+            {judgment.limits?.map((limit) => (
+              <p
+                key={limit}
+                className="mt-1 text-xs leading-5 text-amber-700 dark:text-amber-400"
+              >
+                {limit}
+              </p>
+            ))}
+            {provenanceFor(judgment) && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {provenanceFor(judgment)}
               </p>
             )}
           </div>

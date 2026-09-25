@@ -2,6 +2,7 @@ export * from "./client";
 export * from "./types";
 export * from "./typesafe/client";
 export * from "./typesafe/invoice";
+export * from "./typesafe/questions";
 export * from "./intake";
 export * from "./isolated";
 export * from "./utils";

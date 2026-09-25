@@ -4,6 +4,32 @@ import { checkDescription } from "./built-in-checks";
 
 type Question = RouterOutputs["questions"]["list"][number];
 
+const UNIT_NAMES = {
+  currency: "an amount of money",
+  percent: "a percentage",
+  days: "a number of days",
+  count: "a count",
+} as const;
+
+function numberSummary(format: Question["numberFormat"]) {
+  if (!format) return "Number";
+  const unit =
+    format.unit === "other"
+      ? `a number in ${format.unitLabel ?? "units"}`
+      : UNIT_NAMES[format.unit];
+  const hasMin = format.min !== null && format.min !== undefined;
+  const hasMax = format.max !== null && format.max !== undefined;
+  const range =
+    hasMin && hasMax
+      ? ` from ${format.min} to ${format.max}`
+      : hasMin
+        ? ` of at least ${format.min}`
+        : hasMax
+          ? ` of at most ${format.max}`
+          : "";
+  return `Number: ${unit}${range}`;
+}
+
 export function QuestionSummary({ question }: { question: Question }) {
   const description = checkDescription({
     isBuiltIn: question.isDefault,
@@ -29,7 +55,9 @@ export function QuestionSummary({ question }: { question: Question }) {
           ? "Yes or no"
           : question.type === "choice"
             ? `Choose: ${question.options?.join(", ")}`
-            : `Score: ${question.options?.join(" → ")}`}
+            : question.type === "number"
+              ? numberSummary(question.numberFormat)
+              : `Score: ${question.options?.join(" → ")}`}
       </p>
       {question.context && (
         <p className="mt-2 text-xs text-muted-foreground">

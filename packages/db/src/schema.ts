@@ -119,6 +119,7 @@ export const invoiceQuestionTypeEnum = pgEnum("invoice_question_type", [
   "boolean",
   "choice",
   "score",
+  "number",
 ]);
 export const workflowStatusEnum = pgEnum("workflow_status", [
   "queued",
@@ -1451,6 +1452,13 @@ export const userQuestions = pgTable(
     question: text().notNull(),
     type: invoiceQuestionTypeEnum().notNull(),
     options: jsonb().$type<string[]>(),
+    // A number question's unit and range: { unit, unitLabel, min, max }.
+    numberFormat: jsonb("number_format").$type<{
+      unit: "currency" | "percent" | "days" | "count" | "other";
+      unitLabel?: string | null;
+      min?: number | null;
+      max?: number | null;
+    }>(),
     context: text(),
     enabled: boolean().default(true).notNull(),
     isDefault: boolean("is_default").default(false).notNull(),
@@ -2656,6 +2664,139 @@ export const supplierEvents = pgTable(
       foreignColumns: [users.id],
       name: "supplier_events_actor_id_fkey",
     }).onDelete("set null"),
+  ],
+);
+
+// The document's laid-out text as read by the processing run that produced
+// the invoice's current revision. Questions previewed or rerun later read it
+// as the invoice's source evidence; it goes with the document (deleting the
+// invoice removes it at once). See docs/document-intake.md#questions.
+export const documentTexts = pgTable(
+  "document_texts",
+  {
+    inboxId: uuid("inbox_id").primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    // The processing revision whose run read this text.
+    revision: integer("revision").notNull(),
+    text: text("text").notNull(),
+    // Characters the document had before the retention cap.
+    chars: integer("chars").notNull(),
+    truncated: boolean("truncated").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("document_texts_team_id_idx").on(table.teamId),
+    foreignKey({
+      columns: [table.inboxId],
+      foreignColumns: [inbox.id],
+      name: "document_texts_inbox_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "document_texts_team_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// A deliberate rerun of one question revision over a bounded selection of
+// invoices, requested by a workspace admin. Its answers replace the
+// question's current answer on each invoice; what they replaced is kept in
+// question_answers.
+export const questionRuns = pgTable(
+  "question_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    questionKey: text("question_key").notNull(),
+    questionVersionId: uuid("question_version_id").notNull(),
+    questionVersion: integer("question_version").notNull(),
+    invoiceIds: uuid("invoice_ids").array().notNull(),
+    // queued | running | completed | failed | cancelled
+    status: text("status").notNull(),
+    answered: integer("answered").default(0).notNull(),
+    unknown: integer("unknown").default(0).notNull(),
+    failed: integer("failed").default(0).notNull(),
+    // Invoices left unchanged: deleted, not processed, or reprocessed since.
+    skipped: integer("skipped").default(0).notNull(),
+    error: text("error"),
+    requestedBy: uuid("requested_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+  },
+  (table) => [
+    index("question_runs_team_question_idx").on(
+      table.teamId,
+      table.questionKey,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "question_runs_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.questionVersionId],
+      foreignColumns: [userQuestions.id],
+      name: "question_runs_question_version_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.requestedBy],
+      foreignColumns: [users.id],
+      name: "question_runs_requested_by_fkey",
+    }).onDelete("set null"),
+  ],
+);
+
+// One answer a rerun recorded on one invoice, with the answer it replaced
+// (null when the invoice had none for that question). Append-only: earlier
+// answers stay readable, labelled with the question revision and evaluator
+// that produced them.
+export const questionAnswers = pgTable(
+  "question_answers",
+  {
+    id: uuid("id").defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    invoiceId: uuid("invoice_id").notNull(),
+    runId: uuid("run_id").notNull(),
+    questionKey: text("question_key").notNull(),
+    questionVersionId: uuid("question_version_id").notNull(),
+    // The invoice's processing revision the answer was made for.
+    invoiceRevision: integer("invoice_revision").notNull(),
+    judgment: jsonb("judgment").$type<Record<string, unknown>>().notNull(),
+    previous: jsonb("previous").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("question_answers_run_invoice_key").on(table.runId, table.invoiceId),
+    index("question_answers_team_invoice_idx").on(
+      table.teamId,
+      table.invoiceId,
+    ),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "question_answers_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [inbox.id],
+      name: "question_answers_invoice_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.runId],
+      foreignColumns: [questionRuns.id],
+      name: "question_answers_run_id_fkey",
+    }).onDelete("cascade"),
   ],
 );
 

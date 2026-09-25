@@ -5,6 +5,7 @@ import type {
   InvoiceStageTimings,
   JudgmentHistoryScope,
   PreviousInvoice,
+  RetainedSourceText,
 } from "./typesafe/invoice";
 import type { InvoiceValidation } from "./validation";
 
@@ -43,6 +44,8 @@ export type GetInvoiceResponse = {
   extraction: InvoiceExtraction;
   validation: InvoiceValidation;
   judgments: InvoiceJudgment[];
+  /** The document's text as read, retained for question previews and reruns. */
+  sourceText: RetainedSourceText;
   timings: InvoiceStageTimings;
 };
 

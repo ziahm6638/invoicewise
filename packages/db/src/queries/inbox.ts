@@ -1,5 +1,6 @@
 import type { Database, PrimaryDatabase } from "@db/client";
 import {
+  documentTexts,
   inboundEmails,
   inbox,
   inboxAccounts,
@@ -538,6 +539,15 @@ export async function deleteInbox(
       ),
     )
     .returning();
+
+  // The document's retained text goes with the document, at once.
+  if (deleted.length > 0) {
+    await db
+      .delete(documentTexts)
+      .where(
+        and(eq(documentTexts.inboxId, id), eq(documentTexts.teamId, teamId)),
+      );
+  }
 
   if (result.filePath?.length) {
     const bindingIssue = documentBindingIssue({
