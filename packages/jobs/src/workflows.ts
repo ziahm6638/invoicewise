@@ -1163,8 +1163,6 @@ export const WorkflowHandlerLive = Layer.effect(
             matchInvoice(db, {
               teamId: payload.teamId,
               invoiceId: payload.invoiceId,
-              trigger: payload.trigger,
-              requestedBy: payload.requestedBy ?? null,
               finalAttempt: job.attempts >= job.maxAttempts,
             }),
           "Unable to match invoice to authorization sources",

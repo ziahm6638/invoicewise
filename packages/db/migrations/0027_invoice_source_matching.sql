@@ -16,7 +16,7 @@ CREATE TABLE "invoice_source_matches" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "invoice_source_matches_status_check" CHECK ("status" IN ('matched', 'unmatched', 'ambiguous', 'insufficient_evidence')),
 	CONSTRAINT "invoice_source_matches_origin_check" CHECK ("origin" IN ('automatic', 'manual')),
-	CONSTRAINT "invoice_source_matches_action_check" CHECK ("action" IN ('automatic', 'rematch', 'confirm', 'correct', 'unlink'))
+	CONSTRAINT "invoice_source_matches_action_check" CHECK ("action" IN ('automatic', 'confirm', 'correct', 'unlink'))
 );
 --> statement-breakpoint
 ALTER TABLE "invoice_source_matches" ADD CONSTRAINT "invoice_source_matches_team_id_fkey" FOREIGN KEY ("team_id") REFERENCES "public"."teams"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

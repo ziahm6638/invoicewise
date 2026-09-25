@@ -616,13 +616,6 @@ suite("workspace permissions (integration)", () => {
           (row: { invoiceId: string }) => row.invoiceId,
         ),
       ).toEqual([inboxId]);
-      // A member may not replace the admin's decision by rematching; an admin may.
-      await expect(
-        member.sourceMatches.rematch({ inboxId }),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
-      await expect(
-        admin.sourceMatches.rematch({ inboxId }),
-      ).resolves.toMatchObject({ jobId: expect.any(String) });
       // A stale decision cannot be overwritten, and unlinking needs a reason.
       await expect(
         admin.sourceMatches.unlink({

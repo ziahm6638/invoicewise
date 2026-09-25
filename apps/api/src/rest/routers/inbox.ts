@@ -1,4 +1,4 @@
-import { invoiceHttp } from "@api/effect/invoice-http";
+import { invoiceHttp, invoiceReadRequest } from "@api/effect/invoice-http";
 import type { Context } from "@api/rest/types";
 import {
   deleteInboxResponseSchema,
@@ -24,11 +24,8 @@ const effectErrorSchema = z.object({
   error: z.string(),
 });
 
-const forwardToEffect = (request: Request, teamId: string) => {
-  const headers = new Headers(request.headers);
-  headers.set("x-invoicewise-team-id", teamId);
-  return invoiceHttp.handler(new Request(request, { headers }));
-};
+const forwardToEffect = (request: Request, teamId: string, scopes: string[]) =>
+  invoiceHttp.handler(invoiceReadRequest(request, { teamId, scopes }));
 
 app.openapi(
   createRoute({
@@ -62,7 +59,11 @@ app.openapi(
     middleware: [withRequiredScope("inbox.read")],
   }),
   async (c) => {
-    return (await forwardToEffect(c.req.raw, c.get("teamId"))) as never;
+    return (await forwardToEffect(
+      c.req.raw,
+      c.get("teamId"),
+      c.get("scopes"),
+    )) as never;
   },
 );
 
@@ -104,7 +105,11 @@ app.openapi(
     middleware: [withRequiredScope("inbox.read")],
   }),
   async (c) => {
-    return (await forwardToEffect(c.req.raw, c.get("teamId"))) as never;
+    return (await forwardToEffect(
+      c.req.raw,
+      c.get("teamId"),
+      c.get("scopes"),
+    )) as never;
   },
 );
 
@@ -160,7 +165,11 @@ app.openapi(
     middleware: [withRequiredScope("inbox.read")],
   }),
   async (c) => {
-    return (await forwardToEffect(c.req.raw, c.get("teamId"))) as never;
+    return (await forwardToEffect(
+      c.req.raw,
+      c.get("teamId"),
+      c.get("scopes"),
+    )) as never;
   },
 );
 

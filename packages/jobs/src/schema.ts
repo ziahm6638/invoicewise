@@ -92,9 +92,6 @@ export type BuildDataExportPayload = typeof BuildDataExportPayload.Type;
 export const MatchInvoicePayload = Schema.Struct({
   teamId: Schema.String,
   invoiceId: Schema.String,
-  /** `processing` keeps a person's decision; `rematch` was asked for explicitly. */
-  trigger: Schema.Literal("processing", "rematch"),
-  requestedBy: Schema.optional(Schema.String),
 });
 export type MatchInvoicePayload = typeof MatchInvoicePayload.Type;
 

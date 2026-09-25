@@ -39,7 +39,8 @@ totals with their currencies, duplicate and credit-note identity, and
 Invoice reads and MCP `get_invoice`/`list_invoices` also carry `sourceMatch`:
 the current decision about which jobs, purchase orders and contracts the
 invoice bills, with confidence, allocations and the evidence for every
-candidate, or null before matching. It is decided after processing, so the
+candidate, or null before matching (a credential without `sources.read` gets
+only the status and the linked source IDs). It is decided after processing, so the
 `invoice.processed` payload does not include it; subscribe to
 `invoice.matched`. See [matching](authorization-matching.md).
 

@@ -10,7 +10,7 @@
  * reprocessing, a reference to another supplier's PO rejected, an invoice
  * with no source left unmatched, and the neighbour's source never considered.
  * It also covers an invoice split across two sources, one source billed by
- * several invoices, unlinking and rematching with the history kept, stale
+ * several invoices, unlinking with the history kept, stale
  * edits refused, a provider outage, idempotent reruns, the immutability
  * trigger and the `invoice.matched` webhook intent.
  *
@@ -52,7 +52,6 @@ import {
   confirmInvoiceMatch,
   linkInvoiceSources,
   matchInvoice,
-  requestInvoiceRematch,
   unlinkInvoiceSources,
 } from "./source-matching";
 import { required } from "./verify-support";
@@ -224,7 +223,6 @@ async function main() {
     matchInvoice(db, {
       teamId,
       invoiceId,
-      trigger: "processing",
       judge,
       finalAttempt,
     });
@@ -828,7 +826,7 @@ async function main() {
       summary(named),
     );
 
-    // 10. Unlink with a reason, then rematch automatically; history kept.
+    // 10. Unlink with a reason; reprocessing keeps it and the history.
     await rejects(
       () =>
         unlinkInvoiceSources(db, {
@@ -850,48 +848,17 @@ async function main() {
       (await match(teamA, exact)).outcome === "kept_override",
       "processing does not undo an unlink",
     );
-    await rejects(
-      () =>
-        requestInvoiceRematch(db, {
-          teamId: teamA,
-          inboxId: exact,
-          actorId: actor,
-          mayReplaceDecision: false,
-        }),
-      "forbidden",
-    );
-    const rematch = await requestInvoiceRematch(db, {
-      teamId: teamA,
-      inboxId: exact,
-      actorId: actor,
-      mayReplaceDecision: true,
-    });
-    const [rematchJob] = await db
-      .select({ payload: workflowJobs.payload })
-      .from(workflowJobs)
-      .where(eq(workflowJobs.id, rematch.jobId));
-    assert(
-      (rematchJob?.payload as { trigger?: string }).trigger === "rematch",
-      "a rematch is queued",
-    );
-    await matchInvoice(db, {
-      teamId: teamA,
-      invoiceId: exact,
-      trigger: "rematch",
-      requestedBy: actor,
-      judge,
-    });
     const exactHistory = await listSourceMatchHistory(db, {
       teamId: teamA,
       inboxId: exact,
     });
     assert(
       exactHistory.map((row) => `${row.status}:${row.action}`).join() ===
-        "matched:rematch,unmatched:unlink,matched:automatic" &&
-        exactHistory[1]?.reason ===
+        "unmatched:unlink,matched:automatic" &&
+        exactHistory[0]?.reason ===
           "Billed under the framework contract instead" &&
-        exactHistory[1]?.actorName === "Matching verifier",
-      "unlink and rematch are recorded, with who and why",
+        exactHistory[0]?.actorName === "Matching verifier",
+      "the unlink is recorded, with who and why, above the automatic match",
       exactHistory,
     );
 

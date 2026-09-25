@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
-import { makeInvoiceHttpHandler } from "./invoice-http";
+import { invoiceReadRequest, makeInvoiceHttpHandler } from "./invoice-http";
 import {
   InvoiceReadLayer,
   InvoiceRepository,
@@ -201,6 +201,7 @@ const request = (path: string, init?: RequestInit) =>
       ...init,
       headers: {
         "x-invoicewise-team-id": "team-123",
+        "x-invoicewise-source-details": "full",
         ...init?.headers,
       },
     }),
@@ -345,5 +346,44 @@ describe("Effect invoice read HTTP slice", () => {
       accounting_ready: "false",
     });
     expect(row).toContain("but the gross total is 125.50.");
+  });
+
+  test("shows source-match details only to a credential with sources.read", async () => {
+    const read = (path: string, scopes: string[]) =>
+      handler(
+        invoiceReadRequest(
+          new Request(`http://localhost${path}`, {
+            headers: { "x-invoicewise-source-details": "full" },
+          }),
+          { teamId: "team-123", scopes },
+        ),
+      );
+    const summary = {
+      status: "matched",
+      needsConfirmation: false,
+      sourceIds: [invoice.sourceMatch.links[0]!.sourceId],
+    };
+
+    for (const path of [`/invoices/${invoice.id}`, `/inbox/${invoice.id}`]) {
+      const inboxOnly = (await (
+        await read(path, ["inbox.read"])
+      ).json()) as Record<string, unknown>;
+      expect(inboxOnly.sourceMatch).toEqual(summary);
+      expect(inboxOnly.supplierChecks).toEqual(invoice.supplierChecks);
+
+      const withSources = (await (
+        await read(path, ["inbox.read", "sources.read"])
+      ).json()) as Record<string, unknown>;
+      expect(withSources.sourceMatch).toEqual(invoice.sourceMatch);
+    }
+
+    const inboxOnlyPage = (await (
+      await read("/invoices", ["inbox.read"])
+    ).json()) as { data: Record<string, unknown>[] };
+    expect(inboxOnlyPage.data[0]!.sourceMatch).toEqual(summary);
+    const withSourcesPage = (await (
+      await read("/invoices", ["inbox.read", "sources.read"])
+    ).json()) as { data: Record<string, unknown>[] };
+    expect(withSourcesPage.data[0]!.sourceMatch).toEqual(invoice.sourceMatch);
   });
 });

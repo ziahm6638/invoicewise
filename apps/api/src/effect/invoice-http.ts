@@ -97,10 +97,18 @@ const InvoiceReadHandlers = HttpApiBuilder.group(
       const invoices = yield* InvoiceRead;
       return handlers
         .handle("list", ({ headers, urlParams }) =>
-          invoices.list(headers["x-invoicewise-team-id"], urlParams),
+          invoices.list(
+            headers["x-invoicewise-team-id"],
+            urlParams,
+            headers["x-invoicewise-source-details"],
+          ),
         )
         .handle("findById", ({ headers, path }) =>
-          invoices.findById(path.id, headers["x-invoicewise-team-id"]),
+          invoices.findById(
+            path.id,
+            headers["x-invoicewise-team-id"],
+            headers["x-invoicewise-source-details"],
+          ),
         )
         .handle("attachmentUrl", ({ headers, path, urlParams }) =>
           invoices.attachmentUrl(
@@ -110,13 +118,21 @@ const InvoiceReadHandlers = HttpApiBuilder.group(
           ),
         )
         .handle("listInvoices", ({ headers, urlParams }) =>
-          invoices.list(headers["x-invoicewise-team-id"], urlParams),
+          invoices.list(
+            headers["x-invoicewise-team-id"],
+            urlParams,
+            headers["x-invoicewise-source-details"],
+          ),
         )
         .handle("exportInvoices", ({ headers }) =>
           invoices.exportCsv(headers["x-invoicewise-team-id"]),
         )
         .handle("invoiceDetail", ({ headers, path }) =>
-          invoices.detail(path.id, headers["x-invoicewise-team-id"]),
+          invoices.detail(
+            path.id,
+            headers["x-invoicewise-team-id"],
+            headers["x-invoicewise-source-details"],
+          ),
         )
         .handle("invoiceDeliveryStatus", ({ headers, path }) =>
           invoices.deliveryStatus(path.id, headers["x-invoicewise-team-id"]),
@@ -136,3 +152,21 @@ export function makeInvoiceHttpHandler(
 }
 
 export const invoiceHttp = makeInvoiceHttpHandler(InvoiceReadLive);
+
+/**
+ * The request the invoice read slice answers for an authenticated caller: its
+ * workspace, and full source-match details only when its credential holds
+ * `sources.read` (client-sent values of either header are replaced).
+ */
+export const invoiceReadRequest = (
+  request: Request,
+  caller: { teamId: string; scopes: readonly string[] | undefined },
+) => {
+  const headers = new Headers(request.headers);
+  headers.set("x-invoicewise-team-id", caller.teamId);
+  headers.set(
+    "x-invoicewise-source-details",
+    caller.scopes?.includes("sources.read") ? "full" : "summary",
+  );
+  return new Request(request, { headers });
+};

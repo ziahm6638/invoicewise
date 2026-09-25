@@ -40,7 +40,6 @@ const METHOD: Record<string, string> = {
 
 const ACTION: Record<string, string> = {
   automatic: "Matched automatically",
-  rematch: "Matched again on request",
   confirm: "Confirmed",
   correct: "Linked by an admin",
   unlink: "Unlinked",
@@ -349,7 +348,7 @@ export function SourceMatchView({
                 {decision.links.length > 0
                   ? ` · ${decision.links.map((link) => link.reference).join(", ")}`
                   : ""}
-                {decision.origin === "manual" || decision.action === "rematch"
+                {decision.origin === "manual"
                   ? ` · ${decision.actorName ?? "a former member"}`
                   : ""}
                 {" · "}

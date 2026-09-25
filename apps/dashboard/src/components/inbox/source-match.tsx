@@ -126,25 +126,7 @@ export function SourceMatch({
       onError: fail("The invoice could not be unlinked"),
     }),
   );
-  const rematch = useMutation(
-    trpc.sourceMatches.rematch.mutationOptions({
-      onSuccess: () => {
-        toast({
-          duration: 3500,
-          variant: "success",
-          title: "Matching again",
-          description: "The result appears here in a moment.",
-        });
-        setTimeout(refresh, 3000);
-      },
-      onError: fail("Matching could not be started"),
-    }),
-  );
-  const busy =
-    confirm.isPending ||
-    link.isPending ||
-    unlink.isPending ||
-    rematch.isPending;
+  const busy = confirm.isPending || link.isPending || unlink.isPending;
 
   if (isLoading) return <Skeleton className="mt-3 h-24 w-full" />;
   if (!data) return null;
@@ -227,16 +209,6 @@ export function SourceMatch({
           }}
         >
           No source applies
-        </Button>
-      )}
-      {data.processed && (data.canDecide || current?.origin !== "manual") && (
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => rematch.mutate({ inboxId })}
-        >
-          Match again
         </Button>
       )}
     </div>

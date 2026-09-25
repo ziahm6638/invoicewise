@@ -56,5 +56,3 @@ export const unlinkInvoiceSourcesSchema = z.object({
   expectedMatchId,
   reason: reason.min(1, "Give a reason"),
 });
-
-export const rematchInvoiceSchema = z.object({ inboxId: z.string().uuid() });

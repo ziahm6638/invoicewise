@@ -18,9 +18,7 @@ TypeSafe is the only model involved, and only as described under
 Saving a processed revision queues a `match-invoice` job in the same
 transaction (one per revision), so a completed invoice always has its match
 intent. The job runs after processing: an invoice's accounting and webhook
-deliveries are not held back by matching. It also runs when a member asks for
-**Match again** (for example after the right purchase order was imported).
-The job counts against the TypeSafe daily call budget like processing does.
+deliveries are not held back by matching. The job counts against the TypeSafe daily call budget like processing does.
 
 ## How a source is chosen
 
@@ -146,11 +144,10 @@ history.
 | `confirm` | owner, admin | confirms a matched invoice as it stands (typically a proposal) |
 | `correct` | owner, admin | links the chosen sources (at the version in effect on the invoice date, or a named one) with allocations; a reason is required when it replaces a matched link |
 | `unlink` | owner, admin | records that no source applies; a reason is required |
-| `rematch` | member, admin | queues a fresh automatic match; replacing an owner's or admin's decision needs owner or admin |
 
 A processing retry or reprocessed revision **keeps** an owner's or admin's
-decision: only an explicit rematch replaces it, and the replaced decision stays
-in the history. A change is refused with a conflict when the decision it was
+decision; only another owner's or admin's decision replaces it, and the
+replaced decision stays in the history. A change is refused with a conflict when the decision it was
 made against (`expectedMatchId`) has since been replaced. A cancelled source or
 one in another currency cannot be linked; a source recorded for another
 supplier can, and its conflicting evidence is kept on the decision.
@@ -160,14 +157,17 @@ supplier can, and its conflicting evidence is kept on the decision.
 - **Dashboard.** The invoice's **Authorization** panel: status, the linked
   sources and versions with their allocations, every candidate with its
   evidence, the decisions, and (for owners and admins) **Confirm match**,
-  **Change sources**, **No source applies** and **Match again**. An ambiguous
+  **Change sources** and **No source applies**. An ambiguous
   match offers **Choose** on each candidate. A source's page lists its
   **Matched invoices**.
 - **REST and MCP.** `GET /invoices`, `GET /invoices/:id` and the MCP
   `get_invoice` and `list_invoices` tools return `sourceMatch`: the current
   decision (the fields above plus `id`, `sequence`, `origin`, `action`,
-  `reason`, `decidedAt`), or null before matching. Existing fields are
-  unchanged. `GET /authorization-sources/:id/invoices` (scopes `sources.read`
+  `reason`, `decidedAt`), or null before matching. A credential without
+  `sources.read` gets only `{ "status", "needsConfirmation", "sourceIds" }`:
+  never the sources' references, types, titles or versions, the evidence,
+  links or allocations. Dashboard sessions follow the member's role. Existing
+  fields are unchanged. `GET /authorization-sources/:id/invoices` (scopes `sources.read`
   and `inbox.read`) lists the invoices currently matched to a source.
 - **Webhooks.** `invoice.matched` is sent for every new decision, automatic or
   manual, to endpoints subscribed to it (existing endpoints keep the events
@@ -191,12 +191,13 @@ reference to another supplier's PO rejected; an invoice with no source
 unmatched; and a neighbouring workspace's source never considered or
 linkable. It also covers an invoice split across two sources, one source
 billed by several invoices, amendments not changing a recorded match,
-unlink and rematch with the history kept, stale edits refused, a TypeSafe
+unlink with the history kept, stale edits refused, a TypeSafe
 outage, idempotent reruns, the immutability trigger and the `invoice.matched`
 intent. The rules' fixtures are in
 `packages/documents/src/source-matching.test.ts`; role and workspace isolation
 are in `apps/api/src/trpc/routers/team.permissions.integration.test.ts` and
-`apps/api/src/permissions.http.integration.test.ts`.
+`apps/api/src/permissions.http.integration.test.ts`; the `sources.read`
+summary is in `apps/api/src/effect/invoice-read.test.ts`.
 
 ## For variance (#58)
 

@@ -12,7 +12,6 @@
  * The rules are in `packages/documents/src/source-matching.ts`;
  * `docs/authorization-matching.md` publishes them.
  */
-import { randomUUID } from "node:crypto";
 import type { Database } from "@invoicewise/db/client";
 import {
   type MatchSourceVersionRow,
@@ -273,8 +272,6 @@ const linksOf = (result: {
 export const matchWorkflowKey = {
   processing: (teamId: string, invoiceId: string, revision: number) =>
     `${teamId}:${invoiceId}:r${revision}`,
-  rematch: (teamId: string, invoiceId: string) =>
-    `${teamId}:${invoiceId}:rematch:${randomUUID()}`,
 };
 
 /**
@@ -292,7 +289,6 @@ export async function scheduleInvoiceMatch(
     payload: {
       teamId: input.teamId,
       invoiceId: input.invoiceId,
-      trigger: "processing",
     },
     idempotencyKey: matchWorkflowKey.processing(
       input.teamId,
@@ -310,18 +306,14 @@ export type MatchInvoiceOutcome =
   | { outcome: "recorded"; matchId: string; status: string; webhooks: number };
 
 /**
- * Matches one invoice and records the decision. A processing run keeps a
- * person's decision; an explicit rematch records a fresh automatic one (the
- * earlier decisions stay in the history). Re-running with an unchanged
- * result records nothing.
+ * Matches one invoice and records the decision. A person's decision is kept;
+ * re-running with an unchanged result records nothing.
  */
 export async function matchInvoice(
   db: Database,
   input: {
     teamId: string;
     invoiceId: string;
-    trigger: "processing" | "rematch";
-    requestedBy?: string | null;
     judge?: SourceJudge;
     finalAttempt?: boolean;
     now?: Date;
@@ -342,7 +334,7 @@ export async function matchInvoice(
         matchId: invoice.sourceMatchId,
       })
     : null;
-  if (input.trigger === "processing" && current?.origin === "manual") {
+  if (current?.origin === "manual") {
     return { outcome: "kept_override", matchId: current.id };
   }
 
@@ -401,7 +393,7 @@ export async function matchInvoice(
           matchId: locked.sourceMatchId,
         })
       : null;
-    if (input.trigger === "processing" && latest?.origin === "manual") {
+    if (latest?.origin === "manual") {
       return { outcome: "kept_override", matchId: latest.id } as const;
     }
     if (
@@ -420,14 +412,14 @@ export async function matchInvoice(
       inboxId: input.invoiceId,
       status: result.status,
       origin: "automatic",
-      action: input.trigger === "rematch" ? "rematch" : "automatic",
+      action: "automatic",
       method: result.method,
       result: { ...result, ...(latest ? { previousMatchId: latest.id } : {}) },
       reason: null,
       processingRevision: locked.processingRevision,
       rulesVersion: SOURCE_MATCHING_VERSION,
       fingerprint,
-      actorId: input.trigger === "rematch" ? (input.requestedBy ?? null) : null,
+      actorId: null,
       links: linksOf(result),
     });
     const webhooks = await announce(executor, {
@@ -857,54 +849,4 @@ export async function unlinkInvoiceSources(
       result,
     });
   });
-}
-
-/**
- * Queues a fresh automatic match. Replacing a person's decision (it stays in
- * the history) needs `mayReplaceDecision`: only an owner or admin may.
- */
-export async function requestInvoiceRematch(
-  db: Database,
-  input: {
-    teamId: string;
-    inboxId: string;
-    actorId: string;
-    mayReplaceDecision: boolean;
-  },
-) {
-  const invoice = await getInvoiceForMatching(db, {
-    teamId: input.teamId,
-    inboxId: input.inboxId,
-  });
-  if (!invoice) throw new SourceMatchError("Invoice not found", "not_found");
-  if (!invoice.extraction || invoice.status === "processing") {
-    throw new SourceMatchError(
-      "The invoice has not been processed yet.",
-      "conflict",
-    );
-  }
-  if (!input.mayReplaceDecision && invoice.sourceMatchId) {
-    const current = await getSourceMatch(db, {
-      teamId: input.teamId,
-      matchId: invoice.sourceMatchId,
-    });
-    if (current?.origin === "manual") {
-      throw new SourceMatchError(
-        "An owner or admin decided this match; only an owner or admin can replace it.",
-        "forbidden",
-      );
-    }
-  }
-  const { job } = await enqueueWorkflowJob(db, {
-    name: "match-invoice",
-    teamId: input.teamId,
-    payload: {
-      teamId: input.teamId,
-      invoiceId: input.inboxId,
-      trigger: "rematch",
-      requestedBy: input.actorId,
-    },
-    idempotencyKey: matchWorkflowKey.rematch(input.teamId, input.inboxId),
-  });
-  return { jobId: job.id };
 }

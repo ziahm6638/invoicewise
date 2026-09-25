@@ -20,7 +20,7 @@ expected to reach the same decision for the same actor.
 | Correct supplier identity (reassign an invoice, merge suppliers, undo) | yes | yes | no |
 | Read authorization sources (jobs, purchase orders, contracts), their versions and documents | yes | yes | yes |
 | Manage authorization sources: create, import, amend, close, cancel, link a supplier, attach documents ([authorization sources](authorization-sources.md)) | yes | yes | no |
-| Read an invoice's match to authorization sources and ask for automatic matching again ([matching](authorization-matching.md)) | yes | yes | yes, but not over an owner's or admin's decision |
+| Read an invoice's match to authorization sources ([matching](authorization-matching.md)) | yes | yes | yes |
 | Confirm, correct or unlink an invoice's match to authorization sources | yes | yes | no |
 | Manage integrations: API keys, OAuth apps, accounting, mailboxes, webhooks (endpoints, secret rotation, test events, per-endpoint redelivery), replacing the workspace's receiving address | yes | yes | no |
 | Manage billing and subscription | yes | no | no |

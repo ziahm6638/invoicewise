@@ -2,7 +2,6 @@ import {
   confirmSourceMatchSchema,
   invoiceSourceMatchSchema,
   linkInvoiceSourcesSchema,
-  rematchInvoiceSchema,
   sourceInvoicesSchema,
   unlinkInvoiceSourcesSchema,
 } from "@api/schemas/source-matches";
@@ -23,7 +22,6 @@ import {
   confirmInvoiceMatch,
   linkInvoiceSources,
   presentSourceMatch,
-  requestInvoiceRematch,
   unlinkInvoiceSources,
 } from "@invoicewise/jobs/source-matching";
 import { TRPCError } from "@trpc/server";
@@ -51,8 +49,8 @@ const deciding = async <T>(work: () => Promise<T>) => {
 
 /**
  * Which authorization sources an invoice bills. Every member reads the
- * decisions and may ask for automatic matching again; only owners and admins
- * confirm, correct or unlink a match (see docs/permissions.md).
+ * decisions; only owners and admins confirm, correct or unlink a match (see
+ * docs/permissions.md).
  */
 export const sourceMatchesRouter = createTRPCRouter({
   /** The invoice's current decision and every earlier one, newest first. */
@@ -135,23 +133,6 @@ export const sourceMatchesRouter = createTRPCRouter({
           teamId: teamId!,
           actorId: session.user.id,
           ...input,
-        }),
-      ),
-    ),
-
-  /**
-   * Queues automatic matching again, e.g. after the right source was
-   * recorded. Replacing an owner's or admin's decision needs that role.
-   */
-  rematch: workspaceProcedure
-    .input(rematchInvoiceSchema)
-    .mutation(({ ctx: { db, teamId, teamRole, session }, input }) =>
-      deciding(() =>
-        requestInvoiceRematch(db, {
-          teamId: teamId!,
-          actorId: session.user.id,
-          inboxId: input.inboxId,
-          mayReplaceDecision: roleAtLeast(teamRole, "admin"),
         }),
       ),
     ),
