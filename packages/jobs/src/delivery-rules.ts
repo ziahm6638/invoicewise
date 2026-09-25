@@ -66,16 +66,20 @@ export async function loadDeliveryPolicy(db: Database, teamId: string) {
   };
 }
 
-/** The workspace's questions as a condition may refer to them. */
+/**
+ * The workspace's questions as a condition may refer to them. A disabled
+ * question is not asked, so requiring it holds every invoice.
+ */
 export async function policyQuestions(
   db: Database,
   teamId: string,
-): Promise<PolicyQuestion[]> {
+): Promise<(PolicyQuestion & { enabled: boolean })[]> {
   return (await getUserQuestions(db, teamId)).map((question) => ({
     key: question.questionKey,
     label: question.label,
     type: question.type,
     options: question.options,
+    enabled: question.enabled,
   }));
 }
 

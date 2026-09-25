@@ -464,6 +464,14 @@ export function DeliveryRules() {
                     />
                     <Label htmlFor={id} className="text-sm font-normal">
                       {question.label}
+                      {!question.enabled && (
+                        <span className="text-muted-foreground">
+                          {" "}
+                          (disabled
+                          {checked ? ": holds every invoice until enabled" : ""}
+                          )
+                        </span>
+                      )}
                     </Label>
                   </li>
                 );
@@ -475,10 +483,30 @@ export function DeliveryRules() {
               (key) => !questions.some((question) => question.key === key),
             )
             .map((key) => (
-              <p key={key} className="mt-2 text-xs text-destructive">
-                "{key}" is required but no longer exists, so every invoice is
-                held. Untick it by saving the rules again.
-              </p>
+              <div
+                key={key}
+                className="mt-2 flex items-center justify-between gap-4 text-xs text-destructive"
+              >
+                <span>
+                  "{key}" is required but was deleted, so every invoice is held
+                  until it is removed here.
+                </span>
+                {canEdit && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      update({
+                        requiredQuestions: draft.requiredQuestions.filter(
+                          (other) => other !== key,
+                        ),
+                      })
+                    }
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
             ))}
         </Section>
 
