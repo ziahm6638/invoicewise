@@ -114,10 +114,11 @@ sends the corrected invoice to the **same** bill (`updateProviderBill`):
 - **QuickBooks**: the bill is read for its `SyncToken`, then a sparse update
   of the same `Id`.
 
-The request carries `invoicewise-update:<correction id>` as its idempotency
-key, so a retry after an ambiguous timeout replays the update. A retryable
-failure is retried by the runner and, once exhausted, is a failed delivery
-an admin can retry; a refusal, a different provider connected since, or a
+The request carries `invoicewise-update:<correction id>:<attempt>` as its
+idempotency key, so the runner's retries after an ambiguous timeout replay the
+update. A retryable failure is retried by the runner and, once exhausted, is a
+failed delivery an admin can retry; each such retry bumps the attempt, so the
+provider applies the same values afresh instead of replaying the failure; a refusal, a different provider connected since, or a
 corrected invoice that could no longer be posted fails for good with the
 reason. The update never creates a bill.
 

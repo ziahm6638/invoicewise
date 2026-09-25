@@ -2772,6 +2772,9 @@ export const invoiceCorrections = pgTable(
     }),
     updateError: text("update_error"),
     updateRetryable: boolean("update_retryable"),
+    // Bumped by each explicit retry, so a retry is a new provider request
+    // while the runner's own attempts share one idempotency key.
+    updateAttempt: integer("update_attempt").default(0).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()

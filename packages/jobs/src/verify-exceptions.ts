@@ -907,6 +907,62 @@ async function main() {
       { final: final.delivery, finalHistory, bill },
     );
 
+    // A later correction decides the bill: it supersedes an earlier update
+    // that failed, and a question rerun queued for the previous revision.
+    timeOutAfterUpdate = true;
+    await correctInvoice(db, {
+      invoiceId: invalid,
+      teamId,
+      expectedRevision: final.processingRevision,
+      ...admin,
+      reason: "Payment reference added",
+      changes: { paymentReference: "REF-2" },
+      accountingOutcome: "update_bill",
+    });
+    await drain(db);
+    timeOutAfterUpdate = false;
+    const failedUpdate = await read(invalid);
+    await requestQuestionRerun(db, {
+      invoiceId: invalid,
+      teamId,
+      expectedRevision: failedUpdate.processingRevision,
+    });
+    await correctInvoice(db, {
+      invoiceId: invalid,
+      teamId,
+      expectedRevision: failedUpdate.processingRevision,
+      ...member,
+      reason: "Reference belongs on the remittance, not the bill",
+      changes: { paymentReference: "REF-3" },
+      accountingOutcome: "keep_bill",
+    });
+    const rerunSuperseded = await read(invalid);
+    const callsBeforeStaleRetry = providerCalls.length;
+    const staleRetry = await retryInvoiceDelivery(db, {
+      invoiceId: invalid,
+      teamId,
+      teamRole: "admin",
+    });
+    await drain(db);
+    const superseded = await read(invalid);
+    check(
+      "a later correction supersedes a failed bill update and a queued question rerun",
+      failedUpdate.delivery?.state === "failed" &&
+        rerunSuperseded.judgmentsRerunStatus === null &&
+        staleRetry?.billUpdate === "not_needed" &&
+        providerCalls.length === callsBeforeStaleRetry &&
+        superseded.delivery?.state === "delivered" &&
+        superseded.judgmentsRerunStatus === null &&
+        (await listed("delivered")).includes(invalid) &&
+        !(await listed("delivery_failed")).includes(invalid),
+      {
+        failedUpdate: failedUpdate.delivery,
+        rerun: rerunSuperseded.judgmentsRerunStatus,
+        staleRetry,
+        superseded: superseded.delivery,
+      },
+    );
+
     // Pagination through an exception filter visits every match once.
     const pages: string[] = [];
     let cursor: string | undefined;

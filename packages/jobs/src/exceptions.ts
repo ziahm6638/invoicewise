@@ -309,6 +309,10 @@ export async function correctInvoice(db: Database, input: CorrectInvoiceInput) {
         validation: validation as unknown as Record<string, unknown>,
         extractionOriginal: invoice.extractionOriginal ?? invoice.extraction,
         ...invoiceColumnsFromExtraction(applied.extraction),
+        // A question rerun asked for the previous revision is superseded.
+        judgmentsRerunStatus: null,
+        judgmentsRerunError: null,
+        judgmentsRerunRevision: null,
         // Nothing reached the provider under the old number, so the next
         // post takes its key (and claim) from the corrected one.
         ...(identityChanged && !posted
@@ -467,8 +471,8 @@ export async function rerunInvoiceJudgments(
   storage: RerunStorage,
   input: { invoiceId: string; teamId: string; revision: number },
 ) {
-  const superseded = async () => {
-    await clearJudgmentsRerun(db, {
+  const superseded = async (executor: Database = db) => {
+    await clearJudgmentsRerun(executor, {
       id: input.invoiceId,
       teamId: input.teamId,
       revision: input.revision,
@@ -544,7 +548,7 @@ export async function rerunInvoiceJudgments(
       invoice.judgmentsRerunStatus !== "queued" ||
       invoice.judgmentsRerunRevision !== input.revision
     ) {
-      return { invoiceId: input.invoiceId, superseded: true as const };
+      return superseded(executor);
     }
     const revised = await reviseInvoice(executor, {
       id: input.invoiceId,
@@ -557,9 +561,7 @@ export async function rerunInvoiceJudgments(
         judgmentsRerunRevision: null,
       },
     });
-    if (!revised) {
-      return { invoiceId: input.invoiceId, superseded: true as const };
-    }
+    if (!revised) return superseded(executor);
     const scheduled = await scheduleInvoiceDeliveries(executor, revised, {
       accounting: false,
       data: { judgmentsRerun: true },

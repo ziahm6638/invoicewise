@@ -391,7 +391,11 @@ What happens to the bill:
   invoice could not be posted (validation blockers) or would move the bill to
   a number another document's bill holds; a changed number also claims the
   new number, keeping the old claim, so neither can become a second bill. A
-  new correction waits until a queued update settles. See
+  new correction waits until a queued update settles, and the newest
+  correction decides the bill: a later correction supersedes an earlier
+  update that failed, which then no longer reads as a failed delivery or is
+  retried. A correction also supersedes a question rerun queued for the
+  previous revision. See
   [Accounting integrations](accounting-integrations.md#updating-a-bill-after-a-correction).
 
 The detail page's **History** lists the corrections newest first and links

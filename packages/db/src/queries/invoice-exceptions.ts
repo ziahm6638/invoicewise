@@ -224,7 +224,11 @@ export async function getPendingBillUpdate(
   return row;
 }
 
-/** The newest correction that asked for the bill to be updated. */
+/**
+ * The bill update the newest correction asked for, if it asked for one. The
+ * newest correction decides the bill, so a later correction that kept or
+ * updated the bill supersedes an earlier update that failed.
+ */
 export async function getLatestBillUpdate(
   db: Pick<Database, "select">,
   params: { invoiceId: string; teamId: string },
@@ -236,12 +240,11 @@ export async function getLatestBillUpdate(
       and(
         eq(invoiceCorrections.invoiceId, params.invoiceId),
         eq(invoiceCorrections.teamId, params.teamId),
-        isNotNull(invoiceCorrections.updateStatus),
       ),
     )
     .orderBy(desc(invoiceCorrections.version))
     .limit(1);
-  return row;
+  return row?.updateStatus ? row : undefined;
 }
 
 export async function getBillUpdate(
@@ -276,7 +279,12 @@ export async function requeueBillUpdate(
 ) {
   const [row] = await db
     .update(invoiceCorrections)
-    .set({ updateStatus: "queued", updateError: null, updateRetryable: null })
+    .set({
+      updateStatus: "queued",
+      updateError: null,
+      updateRetryable: null,
+      updateAttempt: sql`${invoiceCorrections.updateAttempt} + 1`,
+    })
     .where(
       and(
         eq(invoiceCorrections.id, params.correctionId),

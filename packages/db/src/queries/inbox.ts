@@ -93,20 +93,21 @@ const invoiceDeliverySummary = () =>
       end
       where ${inbox.accountingPostStatus} is not null
       union all
-      -- The latest in-place update of a posted bill after a correction: an
-      -- update still queued is not delivered, and a failed one needs retrying.
+      -- The in-place update of a posted bill the newest correction asked
+      -- for: an update still queued is not delivered, and a failed one needs
+      -- retrying. A later correction supersedes an earlier update.
       select * from (
         select case c.update_status
           when 'updated' then 'succeeded'
           else c.update_status
-        end
+        end as status
         from invoice_corrections c
         where c.invoice_id = ${inbox.id}
           and c.team_id = ${inbox.teamId}
-          and c.update_status is not null
         order by c.version desc
         limit 1
       ) latest_update
+      where latest_update.status is not null
     ) d
   )`;
 
@@ -158,6 +159,12 @@ const extractionFailed = () =>
     and (${inbox.processingError} is not null or ${inbox.extraction} is null))
     or ${processingStalledSql()}`;
 
+/** The delivery badge, which processing and failed extraction take precedence over. */
+const deliveryStateIsShown = (state: InvoiceDeliveryState) =>
+  sql`(coalesce(${inbox.status}::text, '') not in ('new', 'processing', 'analyzing')
+    and not coalesce(${extractionFailed()}, false)
+    and ${deliveryStateIs(state)})`;
+
 const validationIs = (status: "invalid" | "needs_review") =>
   sql`(${inbox.processingError} is null and ${inbox.extraction} is not null
     and ${inbox.status} not in ('new', 'processing', 'analyzing')
@@ -174,11 +181,11 @@ const stateCondition = (state: InvoiceStateFilter): SQL => {
     case "needs_review":
       return validationIs("needs_review");
     case "delivering":
-      return deliveryStateIs("pending");
+      return deliveryStateIsShown("pending");
     case "delivery_failed":
-      return deliveryStateIs("failed");
+      return deliveryStateIsShown("failed");
     case "delivered":
-      return deliveryStateIs("delivered");
+      return deliveryStateIsShown("delivered");
     case "corrected":
       return sql`${correctionCount()} > 0`;
     case "needs_attention":
