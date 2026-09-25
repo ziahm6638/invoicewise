@@ -301,6 +301,32 @@ suite("workspace permissions (integration)", () => {
     });
 
     test("only an admin corrects supplier identity, and only in their workspace", async () => {
+      // The snapshot processing records; reads return it as stored.
+      const storedChecks = {
+        version: 1,
+        checkedAt: "2026-09-01T09:00:00.000Z",
+        supplier: {
+          status: "new",
+          supplierId: null,
+          name: "Harbour Lane Plumbing Ltd",
+          method: null,
+          message: "A new supplier.",
+        },
+        known: {
+          outcome: "first_invoice",
+          message:
+            "This is the first document from Harbour Lane Plumbing Ltd in this workspace.",
+          earlierInvoices: 0,
+          evidence: [],
+        },
+        duplicate: { outcome: "none", message: "No duplicate.", evidence: [] },
+        bankDetails: {
+          outcome: "not_present",
+          message: "No bank details.",
+          current: null,
+          evidence: [],
+        },
+      };
       const [invoice] = await primaryDb
         .insert(schema.inbox)
         .values({
@@ -317,6 +343,7 @@ suite("workspace permissions (integration)", () => {
             currency: "GBP",
             grossAmount: 120,
           },
+          supplierChecks: storedChecks,
         })
         .returning({ id: schema.inbox.id });
       const inboxId = invoice!.id;
@@ -338,9 +365,7 @@ suite("workspace permissions (integration)", () => {
       // A member reads the evidence.
       const read = await member.suppliers.forInvoice({ inboxId });
       expect(read?.canCorrect).toBe(false);
-      expect(read?.checks).toMatchObject({
-        known: { outcome: "first_invoice" },
-      });
+      expect(read?.checks).toEqual(storedChecks);
 
       // Another workspace neither reads nor corrects it.
       const otherOwner = caller(ctx(ids.ownerB, ids.teamB));
