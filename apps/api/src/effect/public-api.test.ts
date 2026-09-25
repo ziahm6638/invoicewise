@@ -304,6 +304,20 @@ describe("public API v1", () => {
     ).toBe("invalid_cursor");
   });
 
+  test("refuses an impossible calendar date as invalid_request", async () => {
+    for (const query of ["createdFrom=2026-02-31", "createdTo=2026-13-01"]) {
+      const response = await normalizeResponse(
+        await request(`/v1/invoices?${query}`),
+      );
+      expect(response.status).toBe(400);
+      expect(
+        ((await response.json()) as { error: { code: string } }).error.code,
+      ).toBe("invalid_request");
+    }
+    const valid = await request("/v1/invoices?createdFrom=2024-02-29");
+    expect(valid.status).toBe(200);
+  });
+
   test("an unknown invoice is not found", async () => {
     const missing = await request(
       "/v1/invoices/00000000-0000-4000-8000-000000000000",

@@ -412,6 +412,12 @@ const IsoDate = Schema.String.pipe(
   Schema.pattern(/^\d{4}-\d{2}-\d{2}$/, {
     message: () => "Expected a date as YYYY-MM-DD",
   }),
+  Schema.filter(
+    (value) =>
+      !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) &&
+      new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value,
+    { message: () => "Expected a real calendar date" },
+  ),
 );
 
 const listFilterFields = {

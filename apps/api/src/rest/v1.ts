@@ -5,6 +5,7 @@ import {
 } from "@api/effect/public-api-http";
 import type { Context } from "@api/rest/types";
 import type { Scope } from "@api/utils/scopes";
+import { logger } from "@invoicewise/logger";
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
 import { rateLimiter } from "hono-rate-limiter";
@@ -101,6 +102,10 @@ v1.onError((error) => {
     if (error.status === 401) return unauthorized(error.message);
     if (error.status === 403) return v1Error("forbidden", error.message, 403);
   }
+  logger.error(
+    { err: error.message, stack: error.stack },
+    "public API: request failed",
+  );
   return v1Error("internal_error", "The request failed", 500);
 });
 

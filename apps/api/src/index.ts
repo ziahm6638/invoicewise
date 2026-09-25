@@ -42,7 +42,6 @@ app.use(
       "x-user-timezone",
       "x-user-country",
       "Idempotency-Key",
-      "Mcp-Protocol-Version",
     ],
     exposeHeaders: [
       "Content-Length",
