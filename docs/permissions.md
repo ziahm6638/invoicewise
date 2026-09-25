@@ -83,6 +83,15 @@ when the caller has no active workspace. Releasing or dismissing a held
 invoice is refused to a member inside `releaseHeldDelivery` and
 `dismissHeldDelivery`, so tRPC and REST give the same answer.
 
+**Versioned API.** `/v1` (`apps/api/src/rest/v1.ts`) accepts only an
+explicit bearer credential (API key or OAuth token, never a session cookie),
+runs the same `withAuth` resolution, requires `inbox.read` for reads (which
+is all the MCP tools do) and `inbox.write` for submissions and retries, and hands the
+Effect handlers the caller's workspace and live role through headers it
+overwrites on every request. Delivery retries pass that role on, so a
+member's key reports the accounting re-post as `admin_required`
+([API](api.md#retries)).
+
 **API keys and OAuth grants.** Granting API access is the "manage
 integrations" capability: creating a key, consenting to an OAuth application
 (on either the tRPC or the REST consent endpoint) and refreshing an OAuth token

@@ -9,7 +9,10 @@
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "test:watch": "bun test --watch"
+    "test:watch": "bun test --watch",
+    "contract:v1": "bun run src/scripts/write-openapi-v1.ts",
+    "smoke:public-api": "bun run src/public-api-smoke.ts",
+    "verify:public-api": "bun run src/verify-public-api.ts"
   },
   "exports": {
     "./auth": "./src/auth.ts",
