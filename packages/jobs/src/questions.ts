@@ -530,8 +530,12 @@ export const STALLED_QUESTION_RUN_ERROR =
  * its key, a failed one marks the run failed. Run by the runner's
  * reconciler.
  */
-export async function reconcileQuestionRuns(db: Database, limit = 100) {
-  const stalled = await listStalledQuestionRuns(db, limit);
+export async function reconcileQuestionRuns(
+  db: Database,
+  limit = 100,
+  minAgeSeconds = 60,
+) {
+  const stalled = await listStalledQuestionRuns(db, limit, minAgeSeconds);
   let rescheduled = 0;
   let failed = 0;
   for (const run of stalled) {

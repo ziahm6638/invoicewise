@@ -299,8 +299,14 @@ export async function finishQuestionRun(
 export async function listStalledQuestionRuns(
   db: Pick<Database, "execute">,
   limit = 100,
+  /** Leaves just-created runs alone while their job is being claimed. */
+  minAgeSeconds = 60,
 ) {
-  const rows = await db.execute(sql`
+  const result = await db.execute<{
+    runId: string;
+    teamId: string;
+    jobStatus: string | null;
+  }>(sql`
     select r.id as "runId", r.team_id as "teamId",
            j.status as "jobStatus"
       from question_runs r
@@ -309,14 +315,10 @@ export async function listStalledQuestionRuns(
        and j.idempotency_key = 'question-run:' || r.id::text
      where r.status in ('queued', 'running')
        and (j.id is null or j.status in ('failed', 'succeeded'))
-       and r.created_at < now() - interval '1 minute'
+       and r.created_at < now() - make_interval(secs => ${minAgeSeconds})
      limit ${limit}
   `);
-  return rows as unknown as {
-    runId: string;
-    teamId: string;
-    jobStatus: string | null;
-  }[];
+  return result.rows;
 }
 
 // --- Answers ----------------------------------------------------------------------

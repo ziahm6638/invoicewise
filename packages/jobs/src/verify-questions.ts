@@ -50,7 +50,11 @@ import {
 import {
   QuestionRequestError,
   QuestionRunInProgressError,
+  RERUN_QUESTION_WORKFLOW,
+  STALLED_QUESTION_RUN_ERROR,
   previewQuestion,
+  questionRunKey,
+  reconcileQuestionRuns,
   requestQuestionRerun,
   runQuestionRerun,
 } from "./questions";
@@ -499,6 +503,55 @@ async function main() {
       afterReplay.deliveries,
     );
 
+    // --- Reconciliation: a lost job is queued again under its key, and a
+    // job that failed on its last attempt settles the run as failed.
+    const jobFor = async () => {
+      const [job] = await db
+        .select({ id: workflowJobs.id, status: workflowJobs.status })
+        .from(workflowJobs)
+        .where(
+          and(
+            eq(workflowJobs.name, RERUN_QUESTION_WORKFLOW),
+            eq(workflowJobs.idempotencyKey, questionRunKey(run.id)),
+          ),
+        );
+      return job;
+    };
+    const runRow = async () => {
+      const [row] = await db
+        .select()
+        .from(questionRuns)
+        .where(eq(questionRuns.id, run.id));
+      return row!;
+    };
+    await db
+      .update(questionRuns)
+      .set({ status: "running", completedAt: null })
+      .where(eq(questionRuns.id, run.id));
+    await db
+      .delete(workflowJobs)
+      .where(eq(workflowJobs.id, (await jobFor())!.id));
+    await reconcileQuestionRuns(db, 100, 0);
+    const requeued = await jobFor();
+    assert(
+      requeued?.status === "queued" && (await runRow()).status === "running",
+      "A run whose job was lost is queued again",
+      requeued,
+    );
+    await db
+      .update(workflowJobs)
+      .set({ status: "failed" })
+      .where(eq(workflowJobs.id, requeued!.id));
+    await reconcileQuestionRuns(db, 100, 0);
+    const settled = await runRow();
+    assert(
+      settled.status === "failed" &&
+        settled.error === STALLED_QUESTION_RUN_ERROR &&
+        (await stateOf(first)).answer?.runId === run.id,
+      "A run whose job failed is settled failed, keeping recorded answers",
+      settled,
+    );
+
     // --- An answer made for a revision since reprocessed is not recorded.
     const stale = await db.transaction((tx) =>
       recordQuestionAnswer(tx as unknown as typeof db, {
@@ -520,14 +573,11 @@ async function main() {
       "A deleted invoice's text is removed at once",
     );
 
-    const [recordedRun] = await db
-      .select()
-      .from(questionRuns)
-      .where(eq(questionRuns.id, run.id));
     console.log(
       JSON.stringify({
         ok: true,
-        runStatus: recordedRun?.status,
+        lostRunRequeued: true,
+        failedRunSettled: true,
         answersPreserved: true,
         previewStoredNothing: true,
         duplicateDeliveries: 0,
