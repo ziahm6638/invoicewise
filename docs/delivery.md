@@ -334,7 +334,7 @@ transition and the other is refused as a conflict (tRPC `CONFLICT`):
 
 | Action | tRPC | What it does | Downstream |
 | --- | --- | --- | --- |
-| Re-extract | `inbox.retry` (`id`, `revision`) | Reads the stored document again; concurrent clicks share one processing job | New revision; webhooks for the current endpoints; accounting as after any processing (a posted bill is never posted again or changed). Replaces corrections; the history keeps them, and a failed or cancelled bill update they asked for is recorded as superseded and never sent or retried. Refused while a bill update is being sent |
+| Re-extract | `inbox.retry` (`id`, `revision`) | Reads the stored document again; concurrent clicks share one processing job | New revision; webhooks for the current endpoints; accounting as after any processing (a posted bill is never posted again or changed). Replaces corrections; the history keeps them, and a failed or cancelled bill update they asked for is recorded as superseded when the re-extraction is requested, and is never sent or retried (Retry delivery leaves bill updates alone while the document is read). Refused while a bill update is being sent |
 | Rerun questions | `inbox.rerunQuestions` | Answers the workspace's questions again for the stored (possibly corrected) extraction, with the supplier-scoped history; one `rerun-judgments` job per revision | New revision with the new answers; `invoice.processed` and `invoice.judgments.attached` for the current endpoints; no accounting |
 | Retry delivery | `inbox.retryDelivery` | Re-drives failed or cancelled destinations of the current revision, including a failed bill update | Same delivery rows and event IDs; accounting needs an admin |
 

@@ -450,11 +450,14 @@ export async function retryInvoiceDelivery(
       invoiceId: invoice.id,
       revision,
       webhooks: { requeued, skipped },
-      billUpdate: await requeueFailedBillUpdate(executor, {
-        invoiceId: invoice.id,
-        teamId: input.teamId,
-        permitted,
-      }),
+      billUpdate:
+        invoice.status === "processing"
+          ? "not_needed"
+          : await requeueFailedBillUpdate(executor, {
+              invoiceId: invoice.id,
+              teamId: input.teamId,
+              permitted,
+            }),
       accounting: await requeueAccountingIntent(executor, {
         invoiceId: invoice.id,
         teamId: input.teamId,

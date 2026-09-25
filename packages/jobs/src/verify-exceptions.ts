@@ -1050,13 +1050,42 @@ async function main() {
     );
 
     // A re-extraction starts a new reading: the cancelled update of the
-    // replaced correction is recorded as superseded, stops deciding the
-    // delivery state and is never sent, and the bill keeps its provider ID.
+    // replaced correction is recorded as superseded when it is requested,
+    // stops deciding the delivery state and is never sent (not even by a
+    // retry while the document is read again), and the bill keeps its
+    // provider ID.
     await retryIntakeProcessing(database.primaryDb, {
       teamId,
       inboxId: invalid,
       expectedRevision: cancelledUpdate.processingRevision,
     });
+    const [requestedEntry] = await listInvoiceCorrections(db, {
+      invoiceId: invalid,
+      teamId,
+    });
+    const retryWhileReading = await retryInvoiceDelivery(db, {
+      invoiceId: invalid,
+      teamId,
+      teamRole: "admin",
+    });
+    const billJobsWhileReading = await jobsFor(
+      "update-accounting-bill",
+      invalid,
+    );
+    check(
+      "a retry while the document is read again never re-sends the replaced correction's bill update",
+      requestedEntry?.id === cancelledEntry?.id &&
+        requestedEntry?.updateStatus === "superseded" &&
+        retryWhileReading?.billUpdate === "not_needed" &&
+        !billJobsWhileReading.some(
+          (status) => status === "queued" || status === "running",
+        ),
+      {
+        update: requestedEntry?.updateStatus,
+        retryWhileReading,
+        billJobsWhileReading,
+      },
+    );
     await saveProcessedDocument(db, {
       id: invalid,
       teamId,
