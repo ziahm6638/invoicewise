@@ -315,6 +315,53 @@ export async function recordDataExportFailure(
   return row;
 }
 
+/** Shown to the owner when an export's build stopped without recording why. */
+export const STALLED_DATA_EXPORT_ERROR =
+  "The export stopped before it finished and was not completed. Request a new export.";
+
+/**
+ * Settles exports that can no longer finish: still `queued` or `running`
+ * while no `build-data-export` job for them is queued or running, because the
+ * job failed without the handler recording an outcome (a lease that expired
+ * after the final attempt, a crashed worker), ended some other way, or no
+ * longer exists. They become `failed`, so the owner
+ * sees the failure and can request a new export, and the retention job
+ * removes any archive the build recorded. Called by the runner's periodic
+ * reconciler; the condition is re-checked in the update, so an export whose
+ * job is live is never touched.
+ */
+export async function failStalledDataExports(db: Db, limit = 100) {
+  const now = new Date().toISOString();
+  const stalled = sql`not exists (
+    select 1 from ${workflowJobs}
+    where ${workflowJobs.name} = ${BUILD_DATA_EXPORT_WORKFLOW}
+      and ${workflowJobs.idempotencyKey} = ${dataExports.id}::text
+      and ${workflowJobs.status} in ('queued', 'running')
+  )`;
+  const candidates = db
+    .select({ id: dataExports.id })
+    .from(dataExports)
+    .where(and(inArray(dataExports.status, ["queued", "running"]), stalled))
+    .limit(limit);
+
+  return db
+    .update(dataExports)
+    .set({
+      status: "failed",
+      error: STALLED_DATA_EXPORT_ERROR,
+      completedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        inArray(dataExports.id, candidates),
+        inArray(dataExports.status, ["queued", "running"]),
+        stalled,
+      ),
+    )
+    .returning({ id: dataExports.id, teamId: dataExports.teamId });
+}
+
 /**
  * Exports whose archive must go: ready ones past their expiry, and any
  * finished request that still names an object.

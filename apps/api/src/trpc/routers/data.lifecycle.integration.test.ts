@@ -51,6 +51,8 @@ suite("data lifecycle (integration)", () => {
   let zip: typeof import("@invoicewise/jobs/zip");
   let policyModule: typeof import("@invoicewise/jobs/retention-policy");
   let exportRoute: typeof import("@api/storage/export-route");
+  let runner: typeof import("@invoicewise/jobs/runner");
+  let effect: typeof import("effect");
   let caller: (ctx: any) => Record<string, any>;
   let storageRoot: string;
   let exportTempDir: string;
@@ -78,6 +80,8 @@ suite("data lifecycle (integration)", () => {
     zip = await import("@invoicewise/jobs/zip");
     policyModule = await import("@invoicewise/jobs/retention-policy");
     exportRoute = await import("@api/storage/export-route");
+    runner = await import("@invoicewise/jobs/runner");
+    effect = await import("effect");
     const { appRouter } = await import("@api/trpc/routers/_app");
     const { createCallerFactory } = await import("@api/trpc/init");
 
@@ -371,6 +375,8 @@ suite("data lifecycle (integration)", () => {
     expect(sha256(archive)).toBe(row!.sha256!);
     const entries = zip.readStoredZip(archive);
     const manifest = JSON.parse(entries.get("manifest.json")!.toString());
+    // The archive states exactly the expiry the link and retention enforce.
+    expect(Date.parse(manifest.expiresAt)).toBe(Date.parse(row!.expiresAt!));
 
     // Manifest completeness: every listed file is present with its hash,
     // every accepted invoice is listed once, and every stored original is
@@ -483,6 +489,105 @@ suite("data lifecycle (integration)", () => {
         })
       ).status,
     ).toBe(401);
+  });
+
+  test("the manifest and the request share one expiry however long the build takes", async () => {
+    const { owner, teamId } = await seedWorkspaces("expiry");
+    await seedInvoice(teamId, { supplier: "Slow Build Supplier" });
+    const request = await caller(ctx(owner, teamId)).data.requestExport();
+
+    // Every clock read is an hour later than the one before, as if each
+    // stage of the build took an hour.
+    let clock = Date.parse("2026-09-25T00:00:00.000Z");
+    await dataExport.buildDataExport(
+      {
+        db,
+        policy: policy(),
+        tempDir: exportTempDir,
+        storage,
+        now: () => {
+          clock += 3_600_000;
+          return new Date(clock);
+        },
+      },
+      { exportId: request.id, teamId },
+    );
+
+    const row = await queries.getDataExport(db, { id: request.id, teamId });
+    const archive = await storage.download({
+      bucket: "vault",
+      path: row!.filePath!,
+    });
+    const manifest = JSON.parse(
+      zip
+        .readStoredZip(new Uint8Array(await archive.arrayBuffer()))
+        .get("manifest.json")!
+        .toString(),
+    );
+    expect(row?.status).toBe("ready");
+    expect(manifest.expiresAt).toBe(new Date(row!.expiresAt!).toISOString());
+    expect(
+      Date.parse(manifest.expiresAt) - Date.parse(manifest.generatedAt),
+    ).toBeGreaterThanOrEqual(24 * 3_600_000);
+  });
+
+  test("the runner's reconciler settles an export whose job died on its final attempt, so a new export can start", async () => {
+    const { owner, teamId, neighbourOwner, neighbourTeam } =
+      await seedWorkspaces("stalled");
+    const api = caller(ctx(owner, teamId));
+    const stalled = await api.data.requestExport();
+    const live = await caller(
+      ctx(neighbourOwner, neighbourTeam),
+    ).data.requestExport();
+
+    // The worker claimed the build, then died on its final attempt: the
+    // queue fails the job when its lease expires (claimWorkflowJobs) without
+    // running the handler, so the export row is left `running`.
+    await queries.beginDataExport(db, { id: stalled.id, teamId });
+    await primaryDb
+      .update(schema.workflowJobs)
+      .set({
+        status: "failed",
+        attempts: 3,
+        finishedAt: new Date().toISOString(),
+        lastError: "Workflow lease expired after its final attempt",
+      })
+      .where(orm.eq(schema.workflowJobs.idempotencyKey, stalled.id));
+    await expect(api.data.requestExport()).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+
+    // One pass of the runner's periodic reconciler.
+    const outcome = await effect.Effect.runPromise(
+      effect.Effect.flatMap(
+        runner.DeliveryReconciler,
+        (reconciler) => reconciler.run,
+      ).pipe(
+        effect.Effect.provide(runner.DeliveryReconcilerLive),
+        effect.Effect.provide(
+          effect.Layer.succeed(runner.WorkflowDatabase, { db }),
+        ),
+      ),
+    );
+    expect(outcome.exportsFailed).toBeGreaterThanOrEqual(1);
+
+    // The owner sees the failure and can start again; the export next door,
+    // whose job is still queued, is untouched.
+    const settled = await queries.getDataExport(db, { id: stalled.id, teamId });
+    expect(settled).toMatchObject({
+      status: "failed",
+      error: queries.STALLED_DATA_EXPORT_ERROR,
+    });
+    expect(settled?.completedAt).toBeString();
+    await expect(
+      queries.getDataExport(db, { id: live.id, teamId: neighbourTeam }),
+    ).resolves.toMatchObject({ status: "queued", error: null });
+    await expect(api.data.requestExport()).resolves.toMatchObject({
+      status: "queued",
+    });
+
+    // A second pass changes nothing.
+    await expect(queries.failStalledDataExports(db)).resolves.toEqual([]);
   });
 
   test("the retention sweep resumes after an interruption and leaves unrelated data untouched", async () => {

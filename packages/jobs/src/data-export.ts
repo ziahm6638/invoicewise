@@ -615,6 +615,12 @@ export async function buildDataExport(
       auditEvents: records.audit.length,
     };
 
+    // One expiry for the manifest and the request: the download route and
+    // the retention job enforce exactly what the archive says.
+    const expiresAt = new Date(
+      now().getTime() + deps.policy.exportLinkHours * 3_600_000,
+    );
+
     const manifest = {
       format: "invoicewise-workspace-export",
       formatVersion: EXPORT_FORMAT_VERSION,
@@ -623,9 +629,7 @@ export async function buildDataExport(
       requestedBy: request.requestedBy,
       requestedAt: request.createdAt,
       generatedAt: generatedAt.toISOString(),
-      expiresAt: new Date(
-        generatedAt.getTime() + deps.policy.exportLinkHours * 3_600_000,
-      ).toISOString(),
+      expiresAt: expiresAt.toISOString(),
       counts: summary,
       identifiers: {
         invoice: "InvoiceWise invoice id (UUID), stable across exports",
@@ -690,9 +694,7 @@ export async function buildDataExport(
       size: archive.size,
       sha256: archive.sha256,
       summary,
-      expiresAt: new Date(
-        now().getTime() + deps.policy.exportLinkHours * 3_600_000,
-      ),
+      expiresAt,
     });
 
     if (!completed) {

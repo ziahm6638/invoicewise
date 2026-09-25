@@ -129,6 +129,15 @@ shown on the page, which polls while a build runs:
 - An interrupted build is retried by the queue and starts the archive again
   from the beginning, writing to the same path, so a retried build always
   produces a complete archive.
+- A build whose job ends without recording an outcome (a worker that dies on
+  the final attempt, whose lease then expires) cannot leave the request stuck:
+  the runner's periodic reconciler (`WORKFLOW_RECONCILE_MS`, default 60s,
+  shared with delivery reconciliation) marks any `queued` or `running` export
+  with no queued or running build job `failed`, logging
+  `data_export_reconciled`, so the owner sees the failure and can request a
+  new export.
+- The manifest's `expiresAt` is the same instant as the request's expiry, which
+  the download route and the retention job enforce.
 - If the request or its workspace is removed while the build runs, the build
   removes the archive it stored instead of publishing it.
 - Download links are minted per click by the owner (`data.exportDownloadUrl`),

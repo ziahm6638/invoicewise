@@ -3,6 +3,7 @@ import {
   claimWorkflowJobs,
   completeWorkflowJob,
   countProviderCallsSince,
+  failStalledDataExports,
   failWorkflowJob,
   heartbeatWorkflowJob,
   recordProviderUsage,
@@ -22,6 +23,9 @@ import {
   WorkflowInfrastructureLive,
   enqueueNextRetention,
 } from "./workflows";
+
+/** The database the runner and its reconciler work against. */
+export { WorkflowDatabase } from "./workflows";
 
 export class WorkflowQueueError extends Schema.TaggedError<WorkflowQueueError>()(
   "WorkflowQueueError",
@@ -183,9 +187,10 @@ export const WorkflowRepositoryLive = Layer.effect(
 );
 
 /**
- * Periodic safety net for the processing-to-delivery handoff: settles
- * delivery intents whose job vanished or failed without the handler recording
- * an outcome (for example a lease that expired after the final attempt).
+ * Periodic safety net for work whose job can end without its handler
+ * recording an outcome (for example a lease that expired after the final
+ * attempt): it settles delivery intents whose job vanished or failed, and
+ * workspace exports left `queued` or `running` with no live build job.
  */
 export class DeliveryReconciler extends Context.Tag(
   "invoicewise/DeliveryReconciler",
@@ -194,7 +199,7 @@ export class DeliveryReconciler extends Context.Tag(
   {
     readonly intervalMs: number;
     readonly run: Effect.Effect<
-      { rescheduled: number; failed: number },
+      { rescheduled: number; failed: number; exportsFailed: number },
       WorkflowQueueError
     >;
   }
@@ -209,10 +214,15 @@ export const DeliveryReconcilerLive = Layer.effect(
     );
     return {
       intervalMs: Math.max(1000, intervalMs),
-      run: queueAttempt(
-        () => reconcileDeliveries(db, {}, publishDeliveryFailureById),
-        "Unable to reconcile deliveries",
-      ),
+      run: queueAttempt(async () => {
+        const deliveries = await reconcileDeliveries(
+          db,
+          {},
+          publishDeliveryFailureById,
+        );
+        const exports = await failStalledDataExports(db);
+        return { ...deliveries, exportsFailed: exports.length };
+      }, "Unable to reconcile deliveries"),
     };
   }),
 );
@@ -444,6 +454,16 @@ const reconcileForever = Effect.gen(function* () {
   const reconciler = yield* DeliveryReconciler;
   yield* Effect.forever(
     reconciler.run.pipe(
+      Effect.tap(({ exportsFailed }) =>
+        exportsFailed > 0
+          ? Effect.logWarning("data_export_reconciled").pipe(
+              Effect.annotateLogs({
+                event: "data_export_reconciled",
+                failed: exportsFailed,
+              }),
+            )
+          : Effect.void,
+      ),
       Effect.tap(({ rescheduled, failed }) =>
         rescheduled + failed > 0
           ? Effect.logWarning("delivery_reconciled").pipe(
