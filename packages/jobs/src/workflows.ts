@@ -8,6 +8,7 @@ import {
   getInboxAccountInfo,
   getTeamById,
   getUserById,
+  recordDataExportFailure,
   recordDeletionFailure,
   recordInboxProcessingFailure,
   updateInboxAccount,
@@ -46,6 +47,7 @@ import { nanoid } from "nanoid";
 import { type CreateContactOptions, Resend } from "resend";
 import { postAccountingDraft } from "./accounting";
 import { workflowKey } from "./client";
+import { DataExportError, buildDataExport } from "./data-export";
 import {
   DeletionCleanupError,
   revokeDeletionConnection,
@@ -60,6 +62,17 @@ import {
 import { isTransientIntakeFailure } from "./intake-failure";
 import { processDocumentAttachment } from "./process-document";
 import {
+  RetentionSweepError,
+  nextRetentionSlot,
+  runRetentionSweep,
+} from "./retention";
+import {
+  type RetentionPolicy,
+  resolveRetentionPolicy,
+} from "./retention-policy";
+import {
+  type ApplyRetentionPayload,
+  type BuildDataExportPayload,
   type DeliverWebhookPayload,
   type InitialInboxSetupPayload,
   type InviteTeamMembersPayload,
@@ -911,6 +924,131 @@ const makePurgeDeletedData = (
     return outcome;
   });
 
+const makeBuildDataExport = (
+  db: Database,
+  storage: ReturnType<typeof createStorageClient>,
+  policy: RetentionPolicy,
+) =>
+  Effect.fn("buildDataExportWorkflow")(function* (
+    job: WorkflowJob,
+    payload: BuildDataExportPayload,
+  ) {
+    yield* ensureTeam(job, payload.teamId);
+    return yield* Effect.tryPromise({
+      try: () => buildDataExport({ db, storage, policy }, payload),
+      catch: (error) =>
+        new WorkflowExecutionError({
+          reason: error instanceof Error ? error.message : "Export failed",
+          retryable: !(error instanceof DataExportError && !error.retryable),
+          userMessage:
+            error instanceof DataExportError
+              ? error.userMessage
+              : "The export could not be prepared. Try again shortly.",
+        }),
+    }).pipe(
+      // The request shows the owner why the build stopped, and is marked
+      // failed once the job gives up; the retention job then removes any
+      // archive the failed build stored.
+      Effect.tapError((error) =>
+        attempt(
+          () =>
+            recordDataExportFailure(db, {
+              id: payload.exportId,
+              teamId: payload.teamId,
+              error:
+                error.userMessage ??
+                "The export could not be prepared. Try again shortly.",
+              final: !error.retryable || job.attempts >= job.maxAttempts,
+            }),
+          "Unable to record export failure",
+        ).pipe(Effect.ignore),
+      ),
+      Effect.tapError((error) =>
+        Effect.logError("data_export_failed").pipe(
+          Effect.annotateLogs({
+            event: "data_export_failed",
+            exportId: payload.exportId,
+            attempt: job.attempts,
+            error: error.reason,
+          }),
+        ),
+      ),
+    );
+  });
+
+/** Queues the retention run for the hourly slot after `now`. */
+export const enqueueNextRetention = (db: Database, now = new Date()) => {
+  const slot = nextRetentionSlot(now);
+  return enqueueWorkflowJob(db, {
+    name: "apply-retention",
+    payload: { slot: slot.toISOString() },
+    runAt: slot,
+    idempotencyKey: workflowKey.retention(slot.toISOString()),
+  });
+};
+
+const makeApplyRetention = (
+  db: Database,
+  storage: ReturnType<typeof createStorageClient>,
+  policy: RetentionPolicy,
+) =>
+  Effect.fn("applyRetentionWorkflow")(function* (
+    job: WorkflowJob,
+    _payload: ApplyRetentionPayload,
+  ) {
+    const outcome = yield* Effect.tryPromise({
+      try: async () => {
+        const result = await runRetentionSweep({ db, storage, policy });
+        if (result.failures.length > 0) throw new RetentionSweepError(result);
+        return result;
+      },
+      catch: (error) =>
+        new WorkflowExecutionError({
+          reason:
+            error instanceof Error ? error.message : "Retention sweep failed",
+          retryable: true,
+        }),
+    }).pipe(
+      Effect.tapError((error) =>
+        Effect.logError("retention_sweep_failed").pipe(
+          Effect.annotateLogs({
+            event: "retention_sweep_failed",
+            attempt: job.attempts,
+            error: error.reason,
+          }),
+        ),
+      ),
+      // The schedule is a chain like the inbox sync: the next slot is queued
+      // whether this run succeeded or gave up, so one failure cannot stop
+      // retention for good. Its key is the slot, so it never duplicates.
+      Effect.ensuring(
+        attempt(
+          () => enqueueNextRetention(db),
+          "Unable to schedule the next retention run",
+        ).pipe(
+          Effect.catchAll((error) =>
+            Effect.logError("retention_schedule_failed").pipe(
+              Effect.annotateLogs({
+                event: "retention_schedule_failed",
+                error: error.reason,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    yield* Effect.logInfo("retention_sweep_completed").pipe(
+      Effect.annotateLogs({
+        event: "retention_sweep_completed",
+        counts: outcome.counts,
+        refused: outcome.refused.length,
+      }),
+    );
+
+    return { counts: outcome.counts, refused: outcome.refused };
+  });
+
 export const WorkflowHandlerLive = Layer.effect(
   WorkflowHandler,
   Effect.gen(function* () {
@@ -923,6 +1061,19 @@ export const WorkflowHandlerLive = Layer.effect(
     const inviteTeamMembers = makeInviteTeamMembers(mailer);
     const onboardTeam = makeOnboardTeam(db, mailer);
     const purgeDeletedData = makePurgeDeletedData(db, storage);
+    const retentionPolicy = yield* Effect.try({
+      try: () => resolveRetentionPolicy(process.env),
+      catch: (error) =>
+        new Error(
+          error instanceof Error ? error.message : "Invalid retention policy",
+        ),
+    }).pipe(Effect.orDie);
+    const buildDataExportJob = makeBuildDataExport(
+      db,
+      storage,
+      retentionPolicy,
+    );
+    const applyRetention = makeApplyRetention(db, storage, retentionPolicy);
     const webhookRepository = makeWebhookDeliveryRepository(db);
     const postAccountingDraftJob = (
       job: WorkflowJob,
@@ -986,6 +1137,10 @@ export const WorkflowHandlerLive = Layer.effect(
               return yield* postAccountingDraftJob(job, request.payload);
             case "purge-deleted-data":
               return yield* purgeDeletedData(job, request.payload);
+            case "build-data-export":
+              return yield* buildDataExportJob(job, request.payload);
+            case "apply-retention":
+              return yield* applyRetention(job, request.payload);
           }
         }) as Effect.Effect<Record<string, unknown>, WorkflowExecutionError>,
     };

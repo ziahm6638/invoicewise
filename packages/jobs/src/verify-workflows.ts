@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { createDatabaseClient } from "@invoicewise/db/client";
 import {
+  createDataExport,
   createInbox,
   createUserQuestion,
+  getDataExport,
   deleteUserQuestion,
   getInboxByFilePath,
   getInboxIntakeBinding,
@@ -14,13 +16,19 @@ import {
   updateInboxWithProcessedData,
   updateUserQuestion,
 } from "@invoicewise/db/queries";
-import { inbox, teams, users, workflowJobs } from "@invoicewise/db/schema";
+import {
+  dataExports,
+  inbox,
+  teams,
+  users,
+  workflowJobs,
+} from "@invoicewise/db/schema";
 import { createStorageClientFromEnv } from "@invoicewise/db/storage";
 import {
   type InvoiceExtraction,
   validateInvoice,
 } from "@invoicewise/documents";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, ne, or } from "drizzle-orm";
 import { Effect, Logger } from "effect";
 import { enqueueWorkflow, workflowKey } from "./client";
 import { acceptIntakeUpload } from "./intake";
@@ -28,6 +36,7 @@ import { WorkflowRuntimeLive, runWorkflowBatch } from "./runner";
 import { loadJudgmentHistory } from "./suppliers";
 import { required, startTypeSafeStub } from "./verify-support";
 import { TEMPORARY_PROCESSING_FAILURE } from "./workflows";
+import { readStoredZip } from "./zip";
 
 const priorExtraction: InvoiceExtraction = {
   documentType: "invoice",
@@ -531,6 +540,121 @@ async function verifyDuplicateCandidates(
   return { duplicateOfEarlierOnly: true };
 }
 
+/**
+ * The workspace export and the retention run go through the real runner: the
+ * export of the processed workspace carries every original byte for byte with
+ * its extraction and judgments, and a retention run succeeds and queues the
+ * next hourly slot.
+ */
+async function verifyExportAndRetention(
+  database: ReturnType<typeof createDatabaseClient>,
+  storage: ReturnType<typeof createStorageClientFromEnv>,
+  teamId: string,
+  userId: string,
+) {
+  const request = await createDataExport(database.db, {
+    teamId,
+    requestedBy: userId,
+  });
+  await drain();
+  const row = await getDataExport(database.db, { id: request.id, teamId });
+  if (row?.status !== "ready" || !row.filePath?.length) {
+    throw new Error(
+      `Export did not become ready: ${JSON.stringify({
+        status: row?.status,
+        error: row?.error,
+      })}`,
+    );
+  }
+
+  const archive = new Uint8Array(
+    await (
+      await storage.download({ bucket: "vault", path: row.filePath })
+    ).arrayBuffer(),
+  );
+  if (createHash("sha256").update(archive).digest("hex") !== row.sha256) {
+    throw new Error("Stored export archive does not match its checksum");
+  }
+  const entries = readStoredZip(archive);
+  const manifest = JSON.parse(entries.get("manifest.json")?.toString() ?? "{}");
+  const exported = JSON.parse(entries.get("invoices.json")?.toString() ?? "[]");
+  // Accepted documents and legacy (pre-intake) records are invoices.
+  const accepted = await database.db
+    .select({ id: inbox.id, filePath: inbox.filePath })
+    .from(inbox)
+    .where(
+      and(
+        eq(inbox.teamId, teamId),
+        ne(inbox.status, "deleted"),
+        or(isNull(inbox.intakeState), eq(inbox.intakeState, "accepted")),
+      ),
+    );
+
+  for (const invoice of accepted) {
+    const document = manifest.documents?.find(
+      (entry: { invoiceId: string }) => entry.invoiceId === invoice.id,
+    );
+    const original = await storage
+      .download({ bucket: "vault", path: invoice.filePath! })
+      .then(async (blob) => Buffer.from(await blob.arrayBuffer()))
+      .catch(() => null);
+    if (!document || document.status !== (original ? "included" : "missing")) {
+      throw new Error(`Export misreports the document of ${invoice.id}`);
+    }
+    if (original && !entries.get(document.path)?.equals(original)) {
+      throw new Error(`Exported document of ${invoice.id} differs`);
+    }
+  }
+  // The processed invoice carries its extraction, supplier and judgments.
+  const processed = exported.find(
+    (invoice: {
+      extraction?: { supplierName?: string };
+      judgmentIds?: string[];
+    }) =>
+      invoice.extraction?.supplierName === expectedExtraction.supplierName &&
+      (invoice.judgmentIds?.length ?? 0) > 0,
+  );
+  if (exported.length !== accepted.length || !processed?.supplierId) {
+    throw new Error("Exported invoices do not match the processed workspace");
+  }
+
+  const slot = new Date().toISOString();
+  const retention = await enqueueWorkflow(database.db, {
+    name: "apply-retention",
+    payload: { slot },
+    idempotencyKey: workflowKey.retention(`verify-${slot}`),
+  });
+  await drain();
+  const run = await getWorkflowJob(database.db, { id: retention.id });
+  const [next] = await database.db
+    .select({ id: workflowJobs.id })
+    .from(workflowJobs)
+    .where(
+      and(
+        eq(workflowJobs.name, "apply-retention"),
+        eq(workflowJobs.status, "queued"),
+      ),
+    )
+    .limit(1);
+  if (run?.status !== "succeeded" || !next) {
+    throw new Error(
+      `Retention run did not succeed and reschedule: ${JSON.stringify({
+        status: run?.status,
+        error: run?.lastError,
+      })}`,
+    );
+  }
+
+  await storage.remove({ bucket: "vault", path: row.filePath });
+  await database.db.delete(dataExports).where(eq(dataExports.id, row.id));
+
+  return {
+    exportedInvoices: exported.length,
+    exportedDocuments: manifest.counts?.documents,
+    retentionRescheduled: true,
+  };
+}
+
 async function main() {
   process.env.WORKFLOW_RETRY_BASE_MS = "50";
   process.env.WORKFLOW_RETRY_MAX_MS = "50";
@@ -788,12 +912,19 @@ async function main() {
       database,
       teamId,
     );
+    const lifecycle = await verifyExportAndRetention(
+      database,
+      storage,
+      teamId,
+      userId,
+    );
 
     console.log(
       JSON.stringify({
         event: "workflow_verification_succeeded",
         inputMatrix,
         duplicateCandidates,
+        lifecycle,
         workflowId: completed.id,
         attempts: completed.attempts,
         persistedInvoiceId: persisted.id,

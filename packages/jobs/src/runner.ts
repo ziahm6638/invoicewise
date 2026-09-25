@@ -20,6 +20,7 @@ import {
   WorkflowHandler,
   WorkflowHandlerLive,
   WorkflowInfrastructureLive,
+  enqueueNextRetention,
 } from "./workflows";
 
 export class WorkflowQueueError extends Schema.TaggedError<WorkflowQueueError>()(
@@ -69,6 +70,14 @@ export class WorkflowRepository extends Context.Tag(
       workerId: string,
       error: string,
     ) => Effect.Effect<void, WorkflowQueueError>;
+    /**
+     * Makes sure recurring maintenance (the hourly retention run) is queued.
+     * Idempotent: every runner calls it at start.
+     */
+    readonly scheduleMaintenance?: () => Effect.Effect<
+      void,
+      WorkflowQueueError
+    >;
   }
 >() {}
 
@@ -163,6 +172,11 @@ export const WorkflowRepositoryLive = Layer.effect(
         ownedUpdate(
           () => failWorkflowJob(db, { id, workerId, error }),
           "Unable to fail workflow",
+        ),
+      scheduleMaintenance: () =>
+        queueAttempt(
+          () => enqueueNextRetention(db).then(() => undefined),
+          "Unable to schedule retention",
         ),
     };
   }),
@@ -456,6 +470,19 @@ const reconcileForever = Effect.gen(function* () {
 
 export const runWorkflows = Effect.gen(function* () {
   const settings = yield* WorkflowRunnerSettings;
+  const repository = yield* WorkflowRepository;
+  if (repository.scheduleMaintenance) {
+    yield* repository.scheduleMaintenance().pipe(
+      Effect.catchAll((error) =>
+        Effect.logError("workflow_maintenance_schedule_failed").pipe(
+          Effect.annotateLogs({
+            event: "workflow_maintenance_schedule_failed",
+            error: error.reason,
+          }),
+        ),
+      ),
+    );
+  }
   // Supervised by this fiber: it stops when the runner stops.
   yield* Effect.fork(reconcileForever);
   yield* Effect.logInfo("workflow_runner_started").pipe(

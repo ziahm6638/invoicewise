@@ -3,6 +3,7 @@ import { createTRPCRouter } from "../init";
 import { accountingRouter } from "./accounting";
 import { apiKeysRouter } from "./api-keys";
 import { billingRouter } from "./billing";
+import { dataRouter } from "./data";
 import { inboxRouter } from "./inbox";
 import { inboxAccountsRouter } from "./inbox-accounts";
 import { oauthApplicationsRouter } from "./oauth-applications";
@@ -17,6 +18,7 @@ export const appRouter = createTRPCRouter({
   inboxAccounts: inboxAccountsRouter,
   oauthApplications: oauthApplicationsRouter,
   billing: billingRouter,
+  data: dataRouter,
   team: teamRouter,
   user: userRouter,
   apiKeys: apiKeysRouter,

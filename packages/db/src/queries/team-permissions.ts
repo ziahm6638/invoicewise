@@ -64,6 +64,10 @@ export const canDeleteWorkspace = (role: TeamRole | null | undefined) =>
 export const canTransferOwnership = (role: TeamRole | null | undefined) =>
   roleAtLeast(role, "owner");
 
+/** A full export carries every member's data and the workspace's documents. */
+export const canExportData = (role: TeamRole | null | undefined) =>
+  roleAtLeast(role, "owner");
+
 /**
  * The capability set the dashboard renders from. This is the server's decision
  * surfaced to the UI; it is never the enforcement point.
@@ -76,6 +80,7 @@ export const getTeamCapabilities = (role: TeamRole | null | undefined) => ({
   manageBilling: canManageBilling(role),
   deleteWorkspace: canDeleteWorkspace(role),
   transferOwnership: canTransferOwnership(role),
+  exportData: canExportData(role),
 });
 
 /**

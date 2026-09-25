@@ -96,7 +96,7 @@ export function DeleteTeam() {
                 connection ends immediately, and the workspace's data is removed
                 from InvoiceWise; stored files and provider connections follow
                 shortly after. Backups taken before now keep a copy until they
-                expire, about two weeks later.
+                expire, up to about a month later.
               </AlertDialogDescription>
             </AlertDialogHeader>
 

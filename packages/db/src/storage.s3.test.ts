@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
-import { createStorageClientFromEnv } from "./storage";
+import { S3_UPLOAD_PART_BYTES, createStorageClientFromEnv } from "./storage";
 
 const integrationTest = process.env.STORAGE_S3_INTEGRATION ? test : test.skip;
 
@@ -146,6 +147,40 @@ describe("S3-compatible storage", () => {
         ).toBe("x");
       } finally {
         await storage.removePrefix({ bucket: "vault", prefix: [run] });
+      }
+    },
+  );
+  integrationTest(
+    "streams an archive file into a private object and back out",
+    async () => {
+      const storage = createStorageClientFromEnv();
+      const dir = await mkdtemp(join(tmpdir(), "invoicewise-s3-stream-"));
+      const source = join(dir, "export.zip");
+      // Larger than one part, so the multipart path runs; the last part is
+      // short.
+      const bytes = Buffer.alloc(S3_UPLOAD_PART_BYTES * 2 + 12_345);
+      for (let index = 0; index < bytes.byteLength; index += 4096) {
+        bytes[index] = index % 251;
+      }
+      await writeFile(source, bytes);
+      const input = {
+        bucket: "vault",
+        path: ["storage-test", crypto.randomUUID(), "exports", "export.zip"],
+      };
+
+      try {
+        await storage.uploadFile({ ...input, sourcePath: source });
+        const opened = await storage.openRead(input);
+        expect(opened.size).toBe(bytes.byteLength);
+        const read = Buffer.from(
+          await new Response(opened.stream).arrayBuffer(),
+        );
+        expect(createHash("sha256").update(read).digest("hex")).toBe(
+          createHash("sha256").update(bytes).digest("hex"),
+        );
+      } finally {
+        await storage.remove(input).catch(() => undefined);
+        await rm(dir, { recursive: true, force: true });
       }
     },
   );

@@ -139,6 +139,13 @@ export const deletionStatusEnum = pgEnum("deletion_status", [
   "completed",
   "failed",
 ]);
+export const dataExportStatusEnum = pgEnum("data_export_status", [
+  "queued",
+  "running",
+  "ready",
+  "failed",
+  "expired",
+]);
 export const accountingPostStatusEnum = pgEnum("accounting_post_status", [
   "posted",
   "already_posted",
@@ -1620,6 +1627,75 @@ export const deletionRequests = pgTable(
   (table) => [
     unique("deletion_requests_subject_key").on(table.subject, table.subjectId),
     index("deletion_requests_status_idx").on(table.status),
+  ],
+);
+
+/** Counts recorded on a finished export, shown to the owner. */
+export type DataExportSummary = {
+  invoices: number;
+  documents: number;
+  missingDocuments: number;
+  suppliers: number;
+  judgments: number;
+  auditEvents: number;
+};
+
+/**
+ * An owner's request for a portable copy of the workspace.
+ *
+ * The archive is built by the `build-data-export` workflow into the
+ * workspace's private storage prefix and removed when the request expires, so
+ * the row outlives its archive but never the workspace: deleting the
+ * workspace removes the row, its queued work and (through the workspace
+ * purge) the archive.
+ */
+export const dataExports = pgTable(
+  "data_exports",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    teamId: uuid("team_id").notNull(),
+    requestedBy: uuid("requested_by"),
+    status: dataExportStatusEnum().default("queued").notNull(),
+    /** Documents written so far and in total while the archive is built. */
+    progress: jsonb()
+      .$type<{ documentsWritten: number; documentsTotal: number }>()
+      .default(sql`'{"documentsWritten":0,"documentsTotal":0}'::jsonb`)
+      .notNull(),
+    summary: jsonb().$type<DataExportSummary>(),
+    filePath: text("file_path").array(),
+    fileName: text("file_name"),
+    size: bigint({ mode: "number" }),
+    sha256: text(),
+    attempts: integer().default(0).notNull(),
+    /** Safe to show the owner; internal detail stays in the logs. */
+    error: text(),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }),
+    expiredAt: timestamp("expired_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("data_exports_team_id_idx").on(table.teamId, table.createdAt),
+    index("data_exports_status_idx").on(table.status),
+    foreignKey({
+      columns: [table.teamId],
+      foreignColumns: [teams.id],
+      name: "data_exports_team_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.requestedBy],
+      foreignColumns: [users.id],
+      name: "data_exports_requested_by_fkey",
+    }).onDelete("set null"),
   ],
 );
 

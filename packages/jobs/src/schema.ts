@@ -70,6 +70,18 @@ export const PurgeDeletedDataPayload = Schema.Struct({
 });
 export type PurgeDeletedDataPayload = typeof PurgeDeletedDataPayload.Type;
 
+export const BuildDataExportPayload = Schema.Struct({
+  exportId: Schema.String,
+  teamId: Schema.String,
+});
+export type BuildDataExportPayload = typeof BuildDataExportPayload.Type;
+
+export const ApplyRetentionPayload = Schema.Struct({
+  /** The hourly slot this run belongs to; the next slot is queued after it. */
+  slot: Schema.String,
+});
+export type ApplyRetentionPayload = typeof ApplyRetentionPayload.Type;
+
 export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("process-attachment"),
@@ -102,6 +114,14 @@ export const WorkflowRequest = Schema.Union(
   Schema.Struct({
     name: Schema.Literal("purge-deleted-data"),
     payload: PurgeDeletedDataPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("build-data-export"),
+    payload: BuildDataExportPayload,
+  }),
+  Schema.Struct({
+    name: Schema.Literal("apply-retention"),
+    payload: ApplyRetentionPayload,
   }),
 );
 export type WorkflowRequest = typeof WorkflowRequest.Type;

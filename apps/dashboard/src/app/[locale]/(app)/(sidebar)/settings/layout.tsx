@@ -17,6 +17,7 @@ export default async function Layout({
   const items = [
     { path: "/settings", label: "General" },
     { path: "/settings/email", label: "Email" },
+    { path: "/settings/data", label: "Data" },
     ...(permissions?.manageBilling
       ? [{ path: "/settings/billing", label: "Billing" }]
       : []),

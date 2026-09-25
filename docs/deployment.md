@@ -211,9 +211,12 @@ on hp-slice. It dumps both production databases (`invoicewise` from
 `invoicewise-db`, `nango` from `invoicewise-nango-db`) in custom format to
 `/var/backups/invoicewise` on the root NVMe disk, apart from the `/mnt/ssd`
 disk that holds the live data. Each dump is checked with `pg_restore --list`,
-checksummed (`.sha256`) and kept 14 days. The script and units live in
+checksummed (`.sha256`) and kept 30 days, the operating backup retention in
+[data lifecycle](data-lifecycle.md#retention-schedule) (`RETAIN_DAYS`, from
+`INVOICEWISE_BACKUP_RETAIN_DAYS`, default 30). The script and units live in
 `ops/backup/`; install or update them with `ops/backup/install.sh`, which also
-runs one backup. Document files in `/mnt/ssd/invoicewise/storage` are not in
+runs one backup. A retention change in the repository takes effect on the host
+only once `install.sh` has run. Document files in `/mnt/ssd/invoicewise/storage` are not in
 these dumps.
 
 ```bash
@@ -254,6 +257,10 @@ infisical run --env prod -- kamal app logs -r api        # API and workflow logs
 infisical run --env prod -- kamal app logs -r web        # dashboard logs
 infisical run --env prod -- kamal accessory logs db
 ```
+
+Container logs rotate by size (`logging` in `config/deploy.yml`, 5 × 50 MB per
+container). The logging options apply to a container when it is next created,
+so the first deploy after a change picks them up.
 
 ## Tunnel and DNS
 

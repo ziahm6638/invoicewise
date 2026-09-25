@@ -51,8 +51,8 @@ same text. In one transaction it:
    Gmail/Outlook mailboxes);
 3. deletes the team row. Everything that names the workspace cascades with it:
    memberships, invitations, API keys, OAuth tokens, mailbox and accounting
-   connection records, invoices, questions, webhooks and **queued or retrying
-   workflow jobs**;
+   connection records, invoices, questions, webhooks, data export requests and
+   **queued or retrying workflow jobs** (including export builds);
 4. records a `deletion_requests` row and queues its `purge-deleted-data` job.
 
 With the team row gone, a late writer cannot recreate data: a job that was
@@ -75,7 +75,7 @@ it:
    is the revocation. Each success is recorded before the next starts, and a
    revoked mailbox's captured token is dropped.
 2. **Purge private objects** under `vault/<subject id>/` (invoice files, logos,
-   avatars), in the local or S3/R2 backend. This waits until `quiesce_until`:
+   avatars, data export archives), in the local or S3/R2 backend. This waits until `quiesce_until`:
    ten minutes after the deletion and after the lease of any job that was
    running for the workspace, so an in-flight writer cannot leave an object
    behind the purge. An early run schedules itself for that time instead of
@@ -107,16 +107,19 @@ within minutes.
 It does not rewrite backups, and nobody should promise instant removal from
 them. In production (see [deployment](deployment.md#backups)) the nightly
 `invoicewise-backup` dumps of the `invoicewise` and `nango` databases are kept
-14 days, so a deleted account's or workspace's rows, and the encrypted
-credentials of its Nango connections, remain in dumps taken before the deletion
-until those dumps age out: at most about 15 days after the deletion. Document
-files are not in these dumps, so the object purge is final. Any other copy an
+for the operating backup period (30 days; see
+[data lifecycle](data-lifecycle.md#retention-schedule)), so a deleted account's
+or workspace's rows, and the encrypted credentials of its Nango connections,
+remain in dumps taken before the deletion until those dumps age out: at most
+about 31 days after the deletion. Document files and export archives are not in
+these dumps, so the object purge is final. Any other copy an
 operator keeps (disk snapshots, copies of the dumps) follows its own retention.
 
 A restore brings deleted subjects back. After restoring a dump, re-delete every
 account and workspace whose deletion was requested after the dump was taken;
 save the live `deletion_requests` rows before restoring, because they list
-them.
+them. A completed request is kept for the backup period after it completes and
+then removed by the retention job, so every dump still on disk is covered.
 
 ## Known limits
 

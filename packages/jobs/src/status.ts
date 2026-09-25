@@ -1,6 +1,7 @@
 import { BunRuntime } from "@effect/platform-bun";
 import {
   listDeletionRequests,
+  listRecentDataExports,
   listWorkflowJobs,
 } from "@invoicewise/db/queries";
 import { Effect } from "effect";
@@ -46,6 +47,37 @@ Effect.gen(function* () {
         storagePurged: !!request.storagePurgedAt,
         purgeAfter: request.quiesceUntil,
         error: request.lastError,
+      })),
+    );
+  }
+
+  // Exports in progress or failed, and any finished export that still holds
+  // an archive past its expiry (the hourly retention run removes those; see
+  // docs/data-lifecycle.md).
+  const exports = yield* Effect.promise(() => listRecentDataExports(db));
+  const attention = exports.filter(
+    (item) =>
+      item.status === "queued" ||
+      item.status === "running" ||
+      item.status === "failed" ||
+      (item.hasArchive &&
+        (item.status !== "ready" ||
+          (!!item.expiresAt && new Date(item.expiresAt).getTime() < now))),
+  );
+  console.log(
+    `data exports: ${attention.length} in progress, failed or awaiting removal of ${exports.length} recent`,
+  );
+  if (attention.length > 0) {
+    console.table(
+      attention.map((item) => ({
+        id: item.id,
+        workspace: item.teamId,
+        status: item.status,
+        attempts: item.attempts,
+        documents: `${item.progress.documentsWritten}/${item.progress.documentsTotal}`,
+        expiresAt: item.expiresAt,
+        archiveStored: item.hasArchive,
+        error: item.error,
       })),
     );
   }

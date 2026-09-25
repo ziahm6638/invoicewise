@@ -87,6 +87,14 @@ builder:
   # Build on hp-slice itself (amd64) instead of emulating on an arm64 laptop.
   remote: ssh://root@100.90.24.83
 
+# Container logs rotate by size so they cannot grow without bound; the 30-day
+# log retention target in docs/data-lifecycle.md is not yet enforced by time.
+logging:
+  driver: json-file
+  options:
+    max-size: 50m
+    max-file: 5
+
 volumes:
   # Local document storage shared by the dashboard (uploads) and the API
   # (signed downloads, workflow processing).

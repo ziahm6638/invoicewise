@@ -1,14 +1,29 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { link, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import {
+  copyFile,
+  link,
+  mkdir,
+  open,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, resolve, sep } from "node:path";
+import { Readable } from "node:stream";
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from "@aws-sdk/client-s3";
 
 type StoragePath = { bucket: string; path: string | string[] };
@@ -50,6 +65,20 @@ type RemovePrefixInput = {
    */
   prefix: string | string[];
   signal?: AbortSignal;
+};
+
+type UploadFileInput = StoragePath & {
+  /** Local file streamed to storage, so its bytes are never held in memory. */
+  sourcePath: string;
+  contentType?: string;
+  signal?: AbortSignal;
+};
+
+/** A stored object opened for streaming, with its size. */
+export type StoredObjectStream = {
+  stream: ReadableStream<Uint8Array>;
+  size: number;
+  contentType: string;
 };
 
 type RemoveInput = StoragePath & {
@@ -166,6 +195,29 @@ function createLocalBackend(
       ) as ArrayBuffer;
       return new Blob([contents], { type: contentType(absolutePath) });
     },
+    async uploadFile(input: UploadFileInput) {
+      const { absolutePath, path } = resolveStoragePath(input);
+      input.signal?.throwIfAborted();
+      await mkdir(dirname(absolutePath), { recursive: true });
+      input.signal?.throwIfAborted();
+      await copyFile(input.sourcePath, absolutePath);
+      input.signal?.throwIfAborted();
+      return { path };
+    },
+    async openRead(
+      input: StoragePath & { signal?: AbortSignal },
+    ): Promise<StoredObjectStream> {
+      const { absolutePath } = resolveStoragePath(input);
+      input.signal?.throwIfAborted();
+      const { size } = await stat(absolutePath);
+      return {
+        stream: Readable.toWeb(
+          createReadStream(absolutePath),
+        ) as unknown as ReadableStream<Uint8Array>,
+        size,
+        contentType: contentType(absolutePath),
+      };
+    },
     async remove(input: RemoveInput) {
       const { absolutePath } = resolveStoragePath(input);
       input.signal?.throwIfAborted();
@@ -203,6 +255,12 @@ const isConditionalConflict = (error: unknown) =>
   s3Status(error) === 409 || s3Name(error) === "ConditionalRequestConflict";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Part size for streaming a local file to S3: at most one part is in memory.
+ * S3 and R2 require every part but the last to be at least 5 MiB.
+ */
+export const S3_UPLOAD_PART_BYTES = 8 * 1024 * 1024;
 
 function createS3Backend(
   config: Extract<StorageClientConfig, { backend: "s3" }>,
@@ -282,6 +340,106 @@ function createS3Backend(
       return new Blob([contents], {
         type: response.ContentType ?? contentType(normalizePath(input.path)),
       });
+    },
+    async uploadFile(input: UploadFileInput) {
+      const path = normalizePath(input.path);
+      const Key = key(input);
+      const ContentType = input.contentType ?? contentType(path);
+      const { size } = await stat(input.sourcePath);
+
+      if (size <= S3_UPLOAD_PART_BYTES) {
+        await client.send(
+          new PutObjectCommand({
+            Bucket: config.bucket,
+            Key,
+            Body: await readFile(input.sourcePath),
+            ContentType,
+          }),
+          { abortSignal: input.signal },
+        );
+        return { path };
+      }
+
+      // Larger files go up in parts read one at a time, so memory stays at
+      // one part however large the file is. A failed upload is aborted so no
+      // orphaned parts are billed.
+      const { UploadId } = await client.send(
+        new CreateMultipartUploadCommand({
+          Bucket: config.bucket,
+          Key,
+          ContentType,
+        }),
+        { abortSignal: input.signal },
+      );
+      if (!UploadId)
+        throw new Error("Storage did not start a multipart upload");
+
+      const handle = await open(input.sourcePath, "r");
+      try {
+        const parts: { ETag: string | undefined; PartNumber: number }[] = [];
+        for (
+          let offset = 0, PartNumber = 1;
+          offset < size;
+          offset += S3_UPLOAD_PART_BYTES, PartNumber++
+        ) {
+          const length = Math.min(S3_UPLOAD_PART_BYTES, size - offset);
+          const Body = Buffer.alloc(length);
+          const { bytesRead } = await handle.read(Body, 0, length, offset);
+          if (bytesRead !== length) {
+            throw new Error("Source file changed while it was uploaded");
+          }
+          const { ETag } = await client.send(
+            new UploadPartCommand({
+              Bucket: config.bucket,
+              Key,
+              UploadId,
+              PartNumber,
+              Body,
+            }),
+            { abortSignal: input.signal },
+          );
+          parts.push({ ETag, PartNumber });
+        }
+        await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: config.bucket,
+            Key,
+            UploadId,
+            MultipartUpload: { Parts: parts },
+          }),
+          { abortSignal: input.signal },
+        );
+        return { path };
+      } catch (error) {
+        await client
+          .send(
+            new AbortMultipartUploadCommand({
+              Bucket: config.bucket,
+              Key,
+              UploadId,
+            }),
+          )
+          .catch(() => undefined);
+        throw error;
+      } finally {
+        await handle.close();
+      }
+    },
+    async openRead(
+      input: StoragePath & { signal?: AbortSignal },
+    ): Promise<StoredObjectStream> {
+      const response = await client.send(
+        new GetObjectCommand({ Bucket: config.bucket, Key: key(input) }),
+        { abortSignal: input.signal },
+      );
+      if (!response.Body) throw new Error("Storage object has no body");
+      return {
+        stream:
+          response.Body.transformToWebStream() as unknown as ReadableStream<Uint8Array>,
+        size: response.ContentLength ?? 0,
+        contentType:
+          response.ContentType ?? contentType(normalizePath(input.path)),
+      };
     },
     async remove(input: RemoveInput) {
       await client.send(
@@ -430,7 +588,70 @@ export function createStorageClient(config: StorageClientConfig) {
     );
   };
 
-  return { ...backend, signedUrl, verifySignedUrl };
+  /**
+   * A capability for one workspace data export. It is bound to the export
+   * request, not to a path: the serving route re-reads the request, so an
+   * expired, failed or deleted export stops serving at once.
+   */
+  const signedExportUrl = ({
+    exportId,
+    expireIn,
+  }: {
+    exportId: string;
+    expireIn: number;
+  }) => {
+    if (!exportId) throw new Error("Signed export URLs require an export id");
+    if (!Number.isFinite(expireIn) || expireIn <= 0) {
+      throw new Error("Signed export URLs require a positive expiry");
+    }
+    if (expireIn > MAX_SIGNED_URL_TTL_SECONDS) {
+      throw new Error(
+        `Signed export URLs may not outlive ${MAX_SIGNED_URL_TTL_SECONDS} seconds`,
+      );
+    }
+    const expires = Math.floor(Date.now() / 1000) + expireIn;
+    const url = new URL(
+      `/exports/${encodeURIComponent(exportId)}/download`,
+      config.publicUrl,
+    );
+    url.searchParams.set("expires", String(expires));
+    url.searchParams.set(
+      "signature",
+      signature(`export:${exportId}:${expires}`),
+    );
+    return url.toString();
+  };
+
+  const verifySignedExportUrl = ({
+    exportId,
+    expires,
+    providedSignature,
+  }: {
+    exportId: string;
+    expires: number;
+    providedSignature: string;
+  }) => {
+    if (!exportId) return false;
+    if (!Number.isFinite(expires) || expires < Math.floor(Date.now() / 1000)) {
+      return false;
+    }
+    const expectedBuffer = Buffer.from(
+      signature(`export:${exportId}:${expires}`),
+    );
+    const providedBuffer = Buffer.from(providedSignature);
+    return (
+      expectedBuffer.length === providedBuffer.length &&
+      timingSafeEqual(expectedBuffer, providedBuffer)
+    );
+  };
+
+  return {
+    ...backend,
+    signedUrl,
+    verifySignedUrl,
+    signedExportUrl,
+    verifySignedExportUrl,
+  };
 }
 
 const required = (env: NodeJS.ProcessEnv, name: string) => {
@@ -494,6 +715,14 @@ export const download = (
   input: Parameters<ReturnType<typeof createStorageClient>["download"]>[0],
 ) => defaultStorageClient().download(input);
 
+export const uploadFile = (
+  input: Parameters<ReturnType<typeof createStorageClient>["uploadFile"]>[0],
+) => defaultStorageClient().uploadFile(input);
+
+export const openRead = (
+  input: Parameters<ReturnType<typeof createStorageClient>["openRead"]>[0],
+) => defaultStorageClient().openRead(input);
+
 export const remove = (
   input: Parameters<ReturnType<typeof createStorageClient>["remove"]>[0],
 ) => defaultStorageClient().remove(input);
@@ -511,3 +740,15 @@ export const verifySignedUrl = (
     ReturnType<typeof createStorageClient>["verifySignedUrl"]
   >[0],
 ) => defaultStorageClient().verifySignedUrl(input);
+
+export const signedExportUrl = (
+  input: Parameters<
+    ReturnType<typeof createStorageClient>["signedExportUrl"]
+  >[0],
+) => defaultStorageClient().signedExportUrl(input);
+
+export const verifySignedExportUrl = (
+  input: Parameters<
+    ReturnType<typeof createStorageClient>["verifySignedExportUrl"]
+  >[0],
+) => defaultStorageClient().verifySignedExportUrl(input);

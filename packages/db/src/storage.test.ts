@@ -83,6 +83,58 @@ describe("local storage", () => {
     expect(storage.download({ bucket: "vault", path })).rejects.toThrow();
   });
 
+  test("streams a local file in and out without buffering it", async () => {
+    const source = join(root, "source.zip");
+    await Bun.write(source, "archive-bytes");
+    const path = ["team-id", "exports", "export-id", "export.zip"];
+
+    await storage.uploadFile({ bucket: "vault", path, sourcePath: source });
+    const opened = await storage.openRead({ bucket: "vault", path });
+
+    expect(opened.size).toBe(13);
+    expect(opened.contentType).toBe("application/zip");
+    expect(await new Response(opened.stream).text()).toBe("archive-bytes");
+  });
+
+  test("signs export links bound to one export, briefly", () => {
+    const exportId = "33333333-3333-4333-8333-333333333333";
+    const url = new URL(storage.signedExportUrl({ exportId, expireIn: 60 }));
+    const expires = Number(url.searchParams.get("expires"));
+    const providedSignature = url.searchParams.get("signature") ?? "";
+
+    expect(url.pathname).toBe(`/exports/${exportId}/download`);
+    expect(
+      storage.verifySignedExportUrl({ exportId, expires, providedSignature }),
+    ).toBe(true);
+    // Bound to the export: another id, or a later expiry, does not verify.
+    expect(
+      storage.verifySignedExportUrl({
+        exportId: "44444444-4444-4444-8444-444444444444",
+        expires,
+        providedSignature,
+      }),
+    ).toBe(false);
+    expect(
+      storage.verifySignedExportUrl({
+        exportId,
+        expires: expires + 1,
+        providedSignature,
+      }),
+    ).toBe(false);
+    // An expired link never verifies.
+    expect(
+      storage.verifySignedExportUrl({
+        exportId,
+        expires: Math.floor(Date.now() / 1000) - 1,
+        providedSignature,
+      }),
+    ).toBe(false);
+    // No export link may outlive the signed-URL limit.
+    expect(() =>
+      storage.signedExportUrl({ exportId, expireIn: 901 }),
+    ).toThrow();
+  });
+
   test("requires an inbox binding and a bounded expiry for signed URLs", async () => {
     const path = ["team-id", "inbox", "invoice.pdf"];
 
