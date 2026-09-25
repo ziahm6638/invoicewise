@@ -11,7 +11,8 @@
     "verify": "bun run src/verify-workflows.ts",
     "verify:accounting": "bun run src/verify-accounting.ts",
     "prove:accounting-sandbox": "bun run src/prove-accounting-sandbox.ts",
-    "verify:handoff": "bun run src/verify-handoff.ts"
+    "verify:handoff": "bun run src/verify-handoff.ts",
+    "verify:suppliers": "bun run src/verify-suppliers.ts"
   },
   "exports": {
     ".": "./src/client.ts",
@@ -20,6 +21,7 @@
     "./runner": "./src/runner.ts",
     "./schema": "./src/schema.ts",
     "./accounting": "./src/accounting.ts",
+    "./suppliers": "./src/suppliers.ts",
     "./deletion": "./src/deletion.ts",
     "./delivery": "./src/delivery.ts",
     "./webhooks": "./src/webhooks.ts"

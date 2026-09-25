@@ -13,7 +13,12 @@ the server.
   index over `reserved` and `accepted` records. Re-uploading the accepted bytes
   returns the same inbox id without writing a second object or queueing a second
   processing job. Initial processing is keyed by the canonical inbox id, so a
-  concurrent replay cannot create a second job.
+  concurrent replay cannot create a second job. Each accepted replay is kept
+  as a re-delivery of that document (`inbox_redeliveries`: when, file name,
+  provider reference, mailbox), shown under the invoice's supplier history;
+  replaying the same provider reference is not counted twice, and a mailbox
+  sync treats a re-delivered reference as handled. A re-delivery is never
+  processed, posted or sent to webhooks again.
 - Different bytes never replace an existing object: writes use `uploadIfAbsent`
   (local: write a temp file, then publish it with an atomic link; S3:
   `If-None-Match: *`, where a 409 conditional conflict is retried and a 412
@@ -428,7 +433,12 @@ it validates whether it prints its amounts negative or positive, and its
 canonical totals are stored negative. An invoice with a negative total is an
 error. A document's identity is `type:supplier:number`, where the supplier is
 its VAT number (else its normalised name) and the number ignores spacing,
-punctuation and case. The first live copy received (by `created_at`, then
+punctuation and case. When both documents were resolved to workspace
+suppliers, the resolved supplier (after merges) decides instead, so a
+corrected or merged supplier is followed and two same-named businesses stay
+apart (see [Supplier identity and history](#supplier-identity-and-history)).
+A copy whose total differs from the earlier one is still a `duplicate` for
+delivery, described as a revision. The first live copy received (by `created_at`, then
 id; deleted and still-reserved documents never count) is the original, and
 every later copy is its duplicate (`identity.duplicateOf`), whatever order
 the copies are processed in: saving a document validates again, in the same
@@ -490,6 +500,68 @@ accuracy on the same corpus.
 | `eur-invoice-with-sterling-equivalent` — EUR totals, GBP shown for information | valid, nothing converted | ready |
 | `discount-invoice` — row discount % and document discount | valid | ready |
 | `line-rounded-vat` — VAT rounded per line, 2p above invoice-level | valid (within 5p) | ready |
+
+## Supplier identity and history
+
+Every processed document is resolved to a workspace-local supplier
+(`suppliers`; `inbox.supplier_id`, with how it was decided in
+`inbox.supplier_resolution`). Plain code decides, no model
+(`packages/documents/src/supplier.ts`), under the same workspace lock as
+duplicate validation. Identifiers are compared normalised: VAT numbers and
+company numbers without spacing, punctuation or case (UK company numbers
+padded to eight digits), names without punctuation, case or legal suffixes
+(`Ltd`, `Limited`, `PLC`, …).
+
+1. A VAT or company number a supplier holds resolves to it. If the invoice's
+   numbers belong to different suppliers, or the supplier holds a different
+   number of the same kind, it stays **unresolved** (conflicting identifiers).
+2. A VAT or company number no supplier holds makes a **new** supplier, unless
+   exactly one supplier has the name and no registration number yet; that
+   supplier then gains the number.
+3. A name alone resolves only when exactly one supplier carries it. When two
+   suppliers share the name (for example two businesses with different VAT
+   numbers), a name-only invoice stays **unresolved** rather than being
+   attributed to either.
+
+Bank details never decide identity, because they are what the history checks
+watch. Documents processed before this existed are given a supplier, oldest
+first, the next time the workspace processes an invoice.
+
+**History retrieval.** An invoice is compared only with its own supplier's
+earlier documents in its own workspace, however far back, through bounded
+indexed queries (`SUPPLIER_HISTORY_LIMITS`): the 20 most recent, up to 10
+with the same number or the number it credits, up to 10 with the same date
+and total, the 5 most recent with bank details and the first 3 with these
+exact bank details. Default judgments receive the same supplier-scoped
+history (never another supplier's) and record which documents they saw
+(`historyIds`); with no identified supplier they answer "not applicable".
+
+**Checks** (`inbox.supplier_checks`, `SUPPLIER_CHECKS_VERSION`), each with a
+message and the earlier documents it cites:
+
+| Check | Outcomes |
+| --- | --- |
+| `known` | `known` (with the count of earlier documents and the first), `first_invoice`, `insufficient_evidence` (supplier not identified) |
+| `duplicate` | `likely_duplicate` (same type and number with the same date and total, or the same date and total under another number), `revision` (same number, different date or total), `credit_note` (linked to the invoice it credits, not a duplicate), `none`, `insufficient_evidence` |
+| `bankDetails` | `consistent` or `changed` against the supplier's most recent bank details (a GB IBAN and its sort code and account compare as one account), `not_present`, `insufficient_evidence` (supplier not identified, or no earlier bank details to compare) |
+
+An identical file received again is not a separate document (see
+[Identity](#identity)). Stored results keep the supplier, the rules version,
+the time they ran and every earlier document they used, so they stay
+explainable after later invoices arrive; only processing and a correction
+record them. Bank details appear in
+results only as their kind and last four characters, and validation messages
+mask an IBAN the same way, so neither logs nor notifications carry them.
+
+**Corrections.** An owner or admin can assign an invoice to another supplier
+(or a new one), and merge one supplier into another (its records point at the
+kept supplier and keep their own identifiers). Each change is a
+`supplier_events` row with who made it and what it replaced, and can be
+undone exactly unless a later change built on it. Later invoices, and the
+invoice corrected, are checked against the chosen supplier; other stored
+results stay as recorded. A manual assignment survives
+reprocessing. The dashboard shows all of this in the invoice's **Supplier
+history**; REST and MCP return `supplierId` and `supplierChecks`.
 
 ## Reads, signatures and deletion
 
@@ -569,6 +641,17 @@ separate host, that origin must be reachable with CORS or the preview should use
   pixel, malformed and password-protected bounds, busy-process termination
   (with a ready handshake), memory-budget termination and the real-document
   timeout.
+- `packages/documents/src/supplier.test.ts` — supplier resolution (VAT,
+  company number, merged suppliers, same-name suppliers, ambiguous names,
+  conflicting identifiers) and history checks (first invoice, duplicate,
+  revision, same date and total, credit notes, changed and masked bank
+  details, unresolved suppliers).
+- `packages/jobs/src/verify-suppliers.ts` — end to end against Postgres in
+  `bun run verify`: two same-named suppliers send repeated, revised and new
+  invoices, a credit note and a bank change behind 60 others; results find
+  evidence beyond the latest 50, cite only their own supplier and workspace,
+  stay unchanged by later invoices; merges and reassignments are audited and
+  undone; an identical re-delivery is recorded without a second job.
 - `packages/documents/src/validation.test.ts` — rounding and tolerances,
   tax basis, zero and missing tax, currency pairs and mismatches, credit
   notes printed either way, duplicate identity, credit links, required

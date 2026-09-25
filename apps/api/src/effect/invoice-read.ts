@@ -40,6 +40,14 @@ export const InvoiceItem = Schema.Struct({
    * null until processed.
    */
   validation: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  /** The workspace supplier the invoice resolved to, before any merge; null when unresolved. */
+  supplierId: Schema.optional(Schema.NullOr(Schema.String)),
+  /**
+   * Supplier-history checks (`known`, `duplicate`, `bankDetails`) with the
+   * earlier documents each cites, the supplier resolution and the rules
+   * `version`; bank details appear only masked. Null until processed.
+   */
+  supplierChecks: Schema.optional(Schema.NullOr(Schema.Unknown)),
   /** Why extraction failed, when it did; null while processing or once processed. */
   processingError: Schema.optional(Schema.NullOr(Schema.String)),
   transaction: Schema.NullOr(Transaction),

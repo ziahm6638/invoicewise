@@ -170,7 +170,8 @@ export const documentNumberKey = (value: unknown) =>
     ? value.toUpperCase().replace(/[^A-Z0-9]/g, "")
     : "";
 
-const vatKey = (value: unknown) =>
+/** A VAT number compared without spacing, punctuation or case. */
+export const vatKey = (value: unknown) =>
   typeof value === "string"
     ? value.toUpperCase().replace(/[^A-Z0-9]/g, "")
     : "";
@@ -198,6 +199,22 @@ const sameSupplier = (
   a: Pick<Identity, "vat" | "name">,
   b: Pick<Identity, "vat" | "name">,
 ) => (a.vat && b.vat ? a.vat === b.vat : a.name !== "" && a.name === b.name);
+
+/**
+ * Whether an earlier document is from this document's supplier. When both
+ * were resolved to a workspace supplier the resolved identity decides, so a
+ * merge or correction is followed and two same-named businesses stay apart;
+ * otherwise the printed VAT number, else the normalised name, does.
+ */
+const fromSupplierOf = (
+  supplier: Pick<Identity, "vat" | "name">,
+  supplierId: string | null | undefined,
+  previous: PreviousInvoice,
+  other: Pick<Identity, "vat" | "name">,
+) =>
+  supplierId && previous.supplierId
+    ? supplierId === previous.supplierId
+    : sameSupplier(supplier, other);
 
 /**
  * The key accounting delivery posts one bill under: the document type and
@@ -380,6 +397,10 @@ const AMOUNT_FIELDS = [
 export function validateInvoice(
   input: unknown,
   previousInvoices: readonly PreviousInvoice[] = [],
+  options: {
+    /** The workspace supplier this document was resolved to, when it was. */
+    supplierId?: string | null;
+  } = {},
 ): InvoiceValidation {
   const x = normalize(input);
   const checks: ValidationCheck[] = [];
@@ -858,7 +879,7 @@ export function validateInvoice(
   if (x.bankDetails.iban && !ibanChecksumValid(x.bankDetails.iban)) {
     warn(
       "iban_checksum",
-      `The IBAN ${x.bankDetails.iban} fails its checksum; confirm the bank details with the supplier.`,
+      `The IBAN ending ${x.bankDetails.iban.replace(/[^A-Za-z0-9]/g, "").slice(-4)} fails its checksum; confirm the bank details with the supplier.`,
       "iban",
     );
   }
@@ -901,14 +922,21 @@ export function validateInvoice(
         other &&
         other.type === identity.type &&
         other.number === identity.number &&
-        sameSupplier(identity, other)
+        fromSupplierOf(identity, options.supplierId, previous, other)
       );
     });
     if (duplicate) {
       duplicateOf = duplicate.id;
+      const earlierGross = normalize(duplicate.extraction).grossAmount;
+      const revised =
+        gross !== null &&
+        earlierGross !== null &&
+        gross !== amount(earlierGross);
       error(
         "duplicate",
-        `${credit ? "Credit note" : "Invoice"} ${x.invoiceNumber} from ${x.supplierName ?? x.supplierVatNumber} has already been received.`,
+        revised
+          ? `${credit ? "Credit note" : "Invoice"} ${x.invoiceNumber} from ${x.supplierName ?? x.supplierVatNumber} was already received with a total of ${format(amount(earlierGross)!)}; this copy is a revision and is not sent as a second bill.`
+          : `${credit ? "Credit note" : "Invoice"} ${x.invoiceNumber} from ${x.supplierName ?? x.supplierVatNumber} has already been received.`,
         "invoiceNumber",
       );
     }
@@ -932,7 +960,7 @@ export function validateInvoice(
           other &&
           other.type === "invoice" &&
           other.number === original &&
-          sameSupplier(supplier, other)
+          fromSupplierOf(supplier, options.supplierId, previous, other)
         );
       });
       if (!match) {

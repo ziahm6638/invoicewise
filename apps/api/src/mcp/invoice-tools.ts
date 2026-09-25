@@ -37,7 +37,7 @@ export const ListInvoices = Tool.make("list_invoices", {
 
 export const GetInvoice = Tool.make("get_invoice", {
   description:
-    "Get one invoice with its extraction, validation (deterministic checks and accounting readiness), line items, judgments, and signed document link.",
+    "Get one invoice with its extraction, validation (deterministic checks and accounting readiness), supplier-history checks (known supplier, duplicate or revision, bank-detail changes, with the earlier invoices they cite), line items, judgments, and signed document link.",
   parameters: { id: Schema.String },
   success: InvoiceDetail,
   failure: InvoiceMcpError,

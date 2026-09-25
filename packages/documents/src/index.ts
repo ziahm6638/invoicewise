@@ -7,3 +7,4 @@ export * from "./isolated";
 export * from "./utils";
 export { InvoiceProcessingError } from "./processors/invoice/invoice-processor";
 export * from "./validation";
+export * from "./supplier";

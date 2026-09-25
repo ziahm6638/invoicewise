@@ -7,6 +7,7 @@ import { inboxRouter } from "./inbox";
 import { inboxAccountsRouter } from "./inbox-accounts";
 import { oauthApplicationsRouter } from "./oauth-applications";
 import { questionsRouter } from "./questions";
+import { suppliersRouter } from "./suppliers";
 import { teamRouter } from "./team";
 import { userRouter } from "./user";
 
@@ -20,6 +21,7 @@ export const appRouter = createTRPCRouter({
   user: userRouter,
   apiKeys: apiKeysRouter,
   questions: questionsRouter,
+  suppliers: suppliersRouter,
 });
 
 // export type definition of API
